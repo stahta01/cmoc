@@ -1,4 +1,4 @@
-/*  $Id: FunctionCallExpr.cpp,v 1.35 2016/07/26 01:55:12 sarrazip Exp $
+/*  $Id: FunctionCallExpr.cpp,v 1.37 2016/10/08 18:15:06 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -192,7 +192,8 @@ FunctionCallExpr::checkAndSetTypes()
                         {
                             // Warn unless arg is struct/union because checkForStructsPassedByValue() already gave error.
                             if (argTree->getTypeDesc()->type != CLASS_TYPE)
-                                argTree->warnmsg("passing non-pointer/array as parameter %u of function %s(), which is %s",
+                                argTree->warnmsg("passing non-pointer/array (%s) as parameter %u of function %s(), which is %s",
+                                                 argTree->getTypeDesc()->toString().c_str(),
                                                  fpIndex, fd->getId().c_str(), paramTree->getTypeDesc()->toString().c_str());
                         }
                         else if (result >= 0x8000 && argTree->getTypeDesc()->isSigned)
@@ -415,9 +416,8 @@ FunctionCallExpr::emitCode(ASMText &out, bool lValue) const
 
         string functionLabel = TranslationUnit::instance().getFunctionLabel(functionId);
         if (functionLabel.empty())
-            errormsgEx(getLineNo(), "call to undefined function %s()", functionId.c_str());
-        else
-            out.ins("LBSR", functionLabel);
+            return false;  // error expected to have been reported by FunctionChecker
+        out.ins("LBSR", functionLabel);
     }
     else if (ie != NULL && funcPtrVarDecl != NULL)  // if called address is in a variable, e.g., pf()
     {

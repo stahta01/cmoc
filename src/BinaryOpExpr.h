@@ -1,4 +1,4 @@
-/*  $Id: BinaryOpExpr.h,v 1.13 2016/09/15 03:43:57 sarrazip Exp $
+/*  $Id: BinaryOpExpr.h,v 1.14 2016/10/05 22:18:24 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -107,7 +107,7 @@ private:
 
     CodeStatus emitBitwiseOperation(ASMText &out, bool lValue, Op op) const;
     template <typename BinaryFunctor>
-    bool emitBinOpIfConstants(ASMText &out, BinaryFunctor &f) const;
+    bool emitBinOpIfConstants(ASMText &out, BinaryFunctor f) const;
     static void emitAddIntegerToPointer(ASMText &out, const Tree *subExpr0, bool doSub);
     CodeStatus emitAdd(ASMText &out, bool lValue, bool doSub) const;
     CodeStatus emitMulDivMod(ASMText &out, bool lValue) const;

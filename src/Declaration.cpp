@@ -1,4 +1,4 @@
-/*  $Id: Declaration.cpp,v 1.37 2016/09/01 02:24:01 sarrazip Exp $
+/*  $Id: Declaration.cpp,v 1.38 2016/10/05 02:28:23 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -118,6 +118,9 @@ Declaration::getArrayDimensions() const
 void
 Declaration::setFrameDisplacement(int16_t disp)
 {
+    if (disp >= 0 && disp < 4)  // Caution: This 4 implicitly assumed 16-bit return address and 16-bit saved frame pointer.
+        errormsgEx(getLineNo(), "invalid frame displacement %d for variable %s", disp, variableId.c_str());
+
     frameDisplacement = disp;
 }
 
@@ -125,15 +128,7 @@ Declaration::setFrameDisplacement(int16_t disp)
 int16_t
 Declaration::getFrameDisplacement(int16_t offset) const
 {
-    if (frameDisplacement == 0)
-        errormsgEx(getLineNo(), "unallocated variable: %s", variableId.c_str());
-    int16_t dist = frameDisplacement + offset;
-
-    // This assert would prevent deliberate accesses outside of arrays,
-    // e.g., byte a[7]; a[7] = 0;
-    //assert(dist < 0 || dist >= 4);
-
-    return dist;
+    return frameDisplacement + offset;
 }
 
 
@@ -150,6 +145,10 @@ Declaration::getFrameDisplacementArg(int16_t offset) const
         const char *reg = (TranslationUnit::instance().getTargetPlatform() == OS9 ? "Y" : "PCR");
         return label + "+" + wordToString(offset) + "," + reg;
     }
+
+    if (frameDisplacement == 0)
+        errormsgEx(getLineNo(), "unallocated variable: %s", variableId.c_str());
+
     return intToString(getFrameDisplacement(offset)) + ",U";
 }
 

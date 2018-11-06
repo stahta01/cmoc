@@ -1,4 +1,4 @@
-/*  $Id: ObjectMemberExpr.cpp,v 1.9 2016/07/24 23:03:07 sarrazip Exp $
+/*  $Id: ObjectMemberExpr.cpp,v 1.10 2016/10/11 01:23:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -206,4 +206,26 @@ const std::string &
 ObjectMemberExpr::getMemberName() const
 {
     return memberName;
+}
+
+
+const ClassDef::ClassMember *
+ObjectMemberExpr::getClassMember() const
+{
+    const ClassDef *cl = getClass();
+    if (cl == NULL)
+    {
+        errormsg("reference to member `%s' of undefined class `%s'",
+                 getMemberName().c_str(), getClassName().c_str());
+        assert(!getClassName().empty());
+        return NULL;
+    }
+    const ClassDef::ClassMember *mi = cl->getDataMember(getMemberName());
+    if (mi == NULL)
+    {
+        errormsg("struct %s has no member named %s",
+                 cl->getName().c_str(), getMemberName().c_str());
+        return NULL;
+    }
+    return mi;
 }

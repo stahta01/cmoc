@@ -1,4 +1,4 @@
-/*  $Id: ObjectMemberExpr.h,v 1.7 2016/09/15 03:34:57 sarrazip Exp $
+/*  $Id: ObjectMemberExpr.h,v 1.8 2016/10/11 01:23:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -59,6 +59,10 @@ public:
     const ClassDef *getClass() const;
 
     const std::string &getMemberName() const;
+
+    // Issues an error message if the class or member does not exist.
+    //
+    const ClassDef::ClassMember *getClassMember() const;
 
     virtual bool isLValue() const { return true; }
 

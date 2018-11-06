@@ -1,4 +1,4 @@
-/*  $Id: ClassDef.cpp,v 1.6 2015/08/09 06:17:41 sarrazip Exp $
+/*  $Id: ClassDef.cpp,v 1.7 2016/10/08 18:15:05 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -21,6 +21,7 @@
 
 #include "FunctionDef.h"
 #include "TranslationUnit.h"
+#include "DeclarationSpecifierList.h"
 
 using namespace std;
 
@@ -134,6 +135,39 @@ ClassDef::clearMembers()
 }
 
 
+std::vector<ClassDef::ClassMember *> *
+ClassDef::createClassMembers(DeclarationSpecifierList *dsl,
+                             std::vector<Declarator *> *memberDeclarators)
+{
+    assert(dsl);
+    assert(memberDeclarators);
+
+    // Return a tree sequence of ClassMembers defined by struct_declarator_list.
+    std::vector<ClassMember *> *members = new std::vector<ClassMember *>();
+    for (std::vector<Declarator *>::iterator it = memberDeclarators->begin(); it != memberDeclarators->end(); ++it)
+    {
+        Declarator *declarator = *it;
+
+        const TypeDesc *td = declarator->processPointerLevel(dsl->getTypeDesc());
+
+        if (declarator->isArray())
+        {
+            // Note: This code is similar to code in Declarator::createFormalParameter(). Duplication should be removed.
+            vector<uint16_t> arrayDimensions;
+            if (!declarator->computeArrayDimensions(arrayDimensions, true))  // arrayDimensions will be empty if non-array
+                return NULL;
+        }
+
+        ClassMember *member = new ClassDef::ClassMember(td, declarator);  // Declarator now owned by 'member'
+        members->push_back(member);
+    }
+
+    delete dsl;
+    delete memberDeclarators;  // destroy the vector<Declarator *>, but not the Declarators
+    return members;
+}
+
+
 ///////////////////////////////////////////////////////////////////////////////
 
 
@@ -176,8 +210,11 @@ ClassDef::ClassMember::getNumArrayElements() const
 {
     assert(declarator != NULL);
 
-    uint16_t numElements = declarator->getArraySize();
-    return int16_t(numElements > 0 ? numElements : 1);
+    uint16_t numElements = 1;
+    if (declarator->isArray())
+        numElements = declarator->getNumArrayElements();
+    size_t numElementsInType = getTypeDesc()->getNumArrayElements();
+    return int16_t(numElements > 0 ? numElements * numElementsInType : 1);
 }
 
 
@@ -186,6 +223,7 @@ ClassDef::ClassMember::getSizeInBytes() const
 {
     assert(declarator != NULL);
 
+    // If array, then get the final array type (e.g., the "int" in "int[2][3]").
     const TypeDesc *td = getTypeDesc();
     while (td->type == ARRAY_TYPE)
     {
@@ -193,7 +231,7 @@ ClassDef::ClassMember::getSizeInBytes() const
         assert(td);
     }
 
-   return TranslationUnit::instance().getTypeSize(*td) * getNumArrayElements();
+    return TranslationUnit::instance().getTypeSize(*td) * getNumArrayElements();
 }
 
 
@@ -203,7 +241,7 @@ ClassDef::ClassMember::getArrayDimensions() const
     assert(declarator != NULL);
 
     vector<uint16_t> arrayDimensions;
-    if (!declarator->computeArraySize(arrayDimensions))
+    if (!declarator->computeArrayDimensions(arrayDimensions))
         assert(false);
     return arrayDimensions;
 }
@@ -213,7 +251,7 @@ bool
 ClassDef::ClassMember::isArray() const
 {
     assert(declarator != NULL);
-    return declarator->getArraySize() > 0;
+    return getTypeDesc()->isArray() || declarator->getNumArrayElements() > 0;
 }
 
 

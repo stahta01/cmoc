@@ -1,4 +1,4 @@
-/*  $Id: BinaryOpExpr.cpp,v 1.64 2016/09/15 03:43:57 sarrazip Exp $
+/*  $Id: BinaryOpExpr.cpp,v 1.66 2016/10/11 01:23:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -475,6 +475,8 @@ BinaryOpExpr::emitAdd(ASMText &out, bool lValue, bool doSub) const
                 {
                 case VOID_TYPE:
                 case BYTE_TYPE:
+                case ARRAY_TYPE:
+                case POINTER_TYPE:
                     break;
                 case WORD_TYPE:
                     // subtracting two word pointers: result is number of words
@@ -527,7 +529,7 @@ BinaryOpExpr::emitAdd(ASMText &out, bool lValue, bool doSub) const
 //
 template <typename BinaryFunctor>
 bool
-BinaryOpExpr::emitBinOpIfConstants(ASMText &out, BinaryFunctor &f) const
+BinaryOpExpr::emitBinOpIfConstants(ASMText &out, BinaryFunctor f) const
 {
     if (subExpr0->isSigned() || subExpr1->isSigned())
         return false;

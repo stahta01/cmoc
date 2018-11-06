@@ -1,4 +1,4 @@
-/*  $Id: UnaryOpExpr.cpp,v 1.24 2016/09/15 03:34:57 sarrazip Exp $
+/*  $Id: UnaryOpExpr.cpp,v 1.25 2016/10/11 01:23:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -294,6 +294,7 @@ UnaryOpExpr::getSizeOfValue(uint16_t &size) const
         //
         size_t numDimsInSizeof = 0;
         const VariableExpr *ve = NULL;
+        const ObjectMemberExpr *ome = NULL;
         const Tree *left = NULL;
         do
         {
@@ -301,8 +302,9 @@ UnaryOpExpr::getSizeOfValue(uint16_t &size) const
             left = bin->getLeft();
             assert(left != NULL);
             ve = left->asVariableExpr();
-            if (ve != NULL)
-                break;  // reached the variable
+            ome = dynamic_cast<const ObjectMemberExpr *>(left);
+            if (ve != NULL || ome != NULL)
+                break;
         } while ((bin = isArrayRef(left)) != NULL);
 
         if (ve != NULL)  // if reached a variable
@@ -329,10 +331,39 @@ UnaryOpExpr::getSizeOfValue(uint16_t &size) const
             // we take the size of the final array element.
             //
             size = ve->getFinalArrayElementTypeSize();  // initialize product with size in bytes of final array element
-            for (std::vector<uint16_t>::const_iterator it = arrayDims.begin() + numDimsInSizeof;  // skip first dimension(s)
-                                                       it != arrayDims.end(); ++it)
+            for (size_t index = numDimsInSizeof; index < arrayDims.size(); ++index)
             {
-                uint16_t dim = *it;
+                uint16_t dim = arrayDims[index]; //*it;
+                if (size > 0xFFFF / dim)  // test if size * dim is too large, without overflowing in the test itself
+                {
+                    errormsg("sizeof() value not representable in 16 bits");
+                    return false;
+                }
+                size *= dim;
+            }
+            return true;
+        }
+
+        if (ome != NULL)  // if reached a struct member access
+        {
+            const ClassDef::ClassMember *member = ome->getClassMember();
+            if (!member)
+                return true;  // error message issued
+
+            vector<uint16_t> dims = member->getArrayDimensions();
+
+            vector<uint16_t> dimsDueToType;
+            ome->getTypeDesc()->appendDimensions(dimsDueToType);
+
+            size = ome->getFinalArrayElementTypeSize();
+
+            size_t index = 0;
+            for ( ; index < dimsDueToType.size(); ++index)
+                size *= dimsDueToType[index];
+
+            for (index = numDimsInSizeof; index < dims.size(); ++index)
+            {
+                uint16_t dim = dims[index];
                 if (size > 0xFFFF / dim)  // test if size * dim is too large, without overflowing in the test itself
                 {
                     errormsg("sizeof() value not representable in 16 bits");

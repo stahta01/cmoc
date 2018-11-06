@@ -1,8 +1,8 @@
-# $Id: configure.ac,v 1.69 2016/09/13 00:28:37 sarrazip Exp $
+# $Id: configure.ac,v 1.70 2016/09/18 01:51:44 sarrazip Exp $
 
 AC_PREREQ(2.54)
 
-AC_INIT(cmoc, 0.1.32)
+AC_INIT(cmoc, 0.1.32a)
 AC_CONFIG_SRCDIR(src/lexer.ll)
 AM_INIT_AUTOMAKE
 

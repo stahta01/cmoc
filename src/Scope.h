@@ -1,4 +1,4 @@
-/*  $Id: Scope.h,v 1.4 2016/09/15 03:34:57 sarrazip Exp $
+/*  $Id: Scope.h,v 1.5 2016/09/18 06:10:52 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -27,7 +27,7 @@ class Declaration;
 class ClassDef;
 
 
-class Scope : public Tree
+class Scope
 {
 public:
 

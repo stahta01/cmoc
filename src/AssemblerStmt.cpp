@@ -1,4 +1,4 @@
-/*  $Id: AssemblerStmt.cpp,v 1.14 2016/09/11 18:46:27 sarrazip Exp $
+/*  $Id: AssemblerStmt.cpp,v 1.15 2016/10/05 02:28:23 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -219,11 +219,16 @@ AssemblerStmt::parseVariableNameAndOffset(const string &tokenText, string &varia
 // recognizedVarNames: If not null, the set accumulates the names of declared
 //                     C variables that were referred to in 'text'.
 //                     (Does not accumulate enumerated names.)
+// requireAllocatedVariables: Require the variables used by the assembly code
+//                            to have received a valid frame displacement.
+//                            Must only be set to true when the returned text
+//                            will not be used in the final emitted code.
 //
 string
 AssemblerStmt::resolveVariableReferences(const string &text,
                                          const Scope &scope,
-                                         set<string> *recognizedVarNames)
+                                         set<string> *recognizedVarNames,
+                                         bool requireAllocatedVariables)
 {
     string result;
 
@@ -270,7 +275,8 @@ AssemblerStmt::resolveVariableReferences(const string &text,
                 }
                 else if (variableDecl != NULL)
                 {
-                    result += variableDecl->getFrameDisplacementArg(offset);
+                    if (requireAllocatedVariables)
+                        result += variableDecl->getFrameDisplacementArg(offset);
 
                     if (recognizedVarNames != NULL)
                         recognizedVarNames->insert(unescapedVariableName);
@@ -376,7 +382,7 @@ AssemblerStmt::checkSemantics(Functor &f)
         set<string> recognizedVarNames;
         const Scope *scope = (scopeOfAsmOnlyFunction ? scopeOfAsmOnlyFunction : parentFunctionDef->getScope());
         assert(scope);
-        (void) resolveVariableReferences(removeComments(asmText), *scope, &recognizedVarNames);
+        (void) resolveVariableReferences(removeComments(asmText), *scope, &recognizedVarNames, false);
 
         // An assembly-only function is not allowed to refer to local C variables because such a function
         // has no stack frame. (It is allowed to call functions however.)
@@ -415,7 +421,7 @@ AssemblerStmt::emitCode(ASMText &out, bool lValue) const
     {
         const Scope *cs = TranslationUnit::instance().getCurrentScope();
         assert(cs);
-        string resolvedAsmText = resolveVariableReferences(removeComments(asmText), *cs, NULL);
+        string resolvedAsmText = resolveVariableReferences(removeComments(asmText), *cs, NULL, true);
         out.emitInlineAssembly(resolvedAsmText);
         return true;
     }

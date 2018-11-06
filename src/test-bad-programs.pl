@@ -86,9 +86,21 @@ program => q!
         int a;
         return 0;
     }
+    void f0(int n)
+    {
+        int n = 42;  // fails b/c C views function param as part of function scope, not separate scope
+    }
+    void f1(int n)
+    {
+        {
+            int n = 42;  // OK b/c inner braces create separate scope
+        }
+    }
     !,
-expected => [ qq!,check-prog.c:3: error: global variable `foo' already declared at global scope at ,check-prog.c:2!,
-              qq!,check-prog.c:7: __error__: variable `a' already declared in this scope at ,check-prog.c:6! ]
+expected => [ qq!,check-prog.c:3: __error__: global variable `foo' already declared at global scope at ,check-prog.c:2!,
+              qq!,check-prog.c:7: __error__: variable `a' already declared in this scope at ,check-prog.c:6!,
+              qq!,check-prog.c:12: __error__: variable `n' already declared in this scope at ,check-prog.c:10!,
+            ]
 },
 
 
@@ -1078,7 +1090,7 @@ program => q!
     }
     !,
 expected => [
-    qq!,check-prog.c:6: __warning__: passing non-pointer/array as parameter 1 of function f(), which is int *!,
+    qq!,check-prog.c:6: __warning__: passing non-pointer/array (int) as parameter 1 of function f(), which is int *!,
     ]
 },
 
@@ -1544,6 +1556,28 @@ expected => [
 },
 
 
+{
+title => q{Various array errors},
+program => q!
+    int main()
+    {
+        int a0[];
+        int a1[5][];
+        int a3["foo"];
+        int n = 5;
+        int a4[n];
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:4: __error__: array a0: no size of first dimension, no initialization expression!,
+    qq!,check-prog.c:5: __error__: array a1: dimension other than first one is unspecified!,
+    qq!,check-prog.c:6: __error__: pointer or array expression used for size of array 'a3'!,
+    qq!,check-prog.c:8: __error__: invalid size expression for dimension 1 array 'a4'!,
+    ]
+},
+
+
 #{
 #title => q{Sample test},
 #program => q!
@@ -1778,14 +1812,6 @@ sub runTestNumber
     }
 
     return 1;
-}
-
-
-sub indexi
-{
-    my ($haystack, $needle) = @_;
-    
-    return index(lc($haystack), lc($needle));
 }
 
 

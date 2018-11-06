@@ -1,4 +1,4 @@
-/*  $Id: FunctionDef.cpp,v 1.29 2016/08/26 00:43:05 sarrazip Exp $
+/*  $Id: FunctionDef.cpp,v 1.32 2016/10/08 18:15:06 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -172,6 +172,7 @@ FunctionDef::FunctionDef(const DeclarationSpecifierList &dsl,
     scope(NULL),
     minDisplacement(9999),  // positive value means allocateLocalVariables() not called yet
     bodyStmts(NULL),
+    formalParamDeclarations(),
     isISR(dsl.isInterruptServiceFunction()),
     asmOnly(dsl.isAssemblyOnly()),
     called(false)
@@ -180,24 +181,19 @@ FunctionDef::FunctionDef(const DeclarationSpecifierList &dsl,
 }
 
 
+template <typename T>
+inline void deletePtr(T *ptr)
+{
+    delete ptr;
+}
+
+
 /*virtual*/
 FunctionDef::~FunctionDef()
 {
     delete formalParamList;
 
-    // 'scope' can be null if there were errors in the syntax phase.
-    // In such a case, main() does not call TranslationUnit::checkSemantics(),
-    // which is the method that would create Scope objects in each FunctionDef.
-    //
-    if (scope != NULL)
-    {
-        // Tell 'scope' to call delete
-        // on each Declaration object that 'scope' points to.
-        // The Scope object does not own the Declaration objects,
-        // hence the special method to force 'scope' to destroy them here.
-        //
-        scope->destroyDeclarations();
-    }
+    for_each(formalParamDeclarations.begin(), formalParamDeclarations.end(), deletePtr<Declaration>);
 
     delete bodyStmts;
 }
@@ -236,9 +232,12 @@ FunctionDef::declareFormalParams()
 
         Declaration *decl = new Declaration(fpId, fp->getTypeDesc(), fp->getArrayDimensions(), false, false);
         decl->copyLineNo(*fp);
-        if (!scope->declareVariable(decl))  // 'scope' keeps copy of 'decl' pointer
+        if (!scope->declareVariable(decl))  // 'scope' keeps copy of 'decl' pointer but does not take ownership
             errormsg("function %s() has more than one formal parameter named '%s'",
                                                 functionId.c_str(), fpId.c_str());
+
+        // Keep a copy of 'decl' so that ~FunctionDef() destroys them.
+        formalParamDeclarations.push_back(decl);
 
         if (fp->getType() == BYTE_TYPE)
             paramFrameDisplacement++;
@@ -427,8 +426,9 @@ FunctionDef::checkSemantics(Functor &f)
 
     if (bodyStmts)
     {
-        /*  Create a Scope for the function's main compound statement as well as
-            for each compound statement anywhere in the function's body.
+        /*  Create a Scope for each compound statement anywhere in the function's body.
+            The function's main braces do not get their own scope. They are part of
+            the function's scope.
         */
         ScopeCreator sc(TranslationUnit::instance(), scope);
         bodyStmts->iterate(sc);
@@ -489,18 +489,9 @@ FunctionDef::allocateLocalVariables()
     if (bodyStmts == NULL)
         return;  // no body: nothing to do
 
-    Scope *bodyScope = bodyStmts->getScope();
-    assert(bodyScope != NULL);
-    assert(bodyScope->getParent() == scope);
+    assert(bodyStmts->getScope() == NULL);  // function's top-level braced scope is 'scope'
 
-    // Generate frame displacements for the function's local variables.
-    // allocateLocalVariables() is called on 'bodyScope' and not on 'scope'
-    // because the Declaration objects that are direct children of 'scope'
-    // are the function's parameters, and their frame displacements were
-    // allocated by declareFormalParams().  The function's local variables are
-    // represented by Declaration objects that are contained in 'bodyScope'.
-
-    minDisplacement = bodyScope->allocateLocalVariables(0, true);
+    minDisplacement = scope->allocateLocalVariables(0, true);
 
     assert(minDisplacement <= 0);
 }

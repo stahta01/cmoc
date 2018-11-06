@@ -1,4 +1,4 @@
-/*  $Id: ScopeCreator.h,v 1.4 2016/07/26 02:06:26 sarrazip Exp $
+/*  $Id: ScopeCreator.h,v 1.5 2016/10/05 02:28:24 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -52,7 +52,11 @@ public:
 
 private:
 
+    bool privateOpen(Tree *t);
+    bool privateClose(Tree *t);
+
     TranslationUnit &translationUnit;
+    std::vector<Tree *> ancestors;  // [0] is top ancestor
 
 };
 

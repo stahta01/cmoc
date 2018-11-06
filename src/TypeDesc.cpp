@@ -1,4 +1,4 @@
-/*  $Id: TypeDesc.cpp,v 1.9 2016/08/27 04:14:28 sarrazip Exp $
+/*  $Id: TypeDesc.cpp,v 1.11 2016/10/11 01:23:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -67,6 +67,13 @@ TypeDesc::toString() const
     stringstream ss;
     ss << *this;
     return ss.str();
+}
+
+
+bool
+TypeDesc::isArray() const
+{
+    return type == ARRAY_TYPE;
 }
 
 
@@ -166,11 +173,37 @@ TypeDesc::appendDimensions(vector<uint16_t> &arrayDimensions) const
     const TypeDesc *td = this;
     while (td->type == ARRAY_TYPE)
     {
-        assert(td->numArrayElements != uint16_t(-1));
-        arrayDimensions.push_back(td->numArrayElements);
+        if (td->numArrayElements != uint16_t(-1))
+            arrayDimensions.push_back(td->numArrayElements);
         td = td->pointedTypeDesc;
         assert(td);
     }
+}
+
+
+// This type may contain an array size, e.g., typedef int Array[5].
+// It also may not contain any type: in a "char b[5]" declaration,
+// the 5 is part of a Declarator, not part of the TypeDesc, which
+// only represents "char".
+// The type may also represent both cases: an "Array v[3]" declaration
+// will yield a TypeDesc that is "array of array of char", where
+// - the first "array" has numArrayElements == uint16_t(-1) because that
+//   size must be provided by a Declarator (which will contain 3);
+// - the second "array" has numArrayElements == 5 as per the typedef.
+//
+size_t
+TypeDesc::getNumArrayElements() const
+{
+    size_t numElements = 1;
+    const TypeDesc *td = this;
+    while (td->type == ARRAY_TYPE)
+    {
+        if (td->numArrayElements != uint16_t(-1))
+            numElements *= td->numArrayElements;
+        td = td->pointedTypeDesc;
+        assert(td);
+    }
+    return numElements;
 }
 
 

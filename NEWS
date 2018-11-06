@@ -1,3 +1,31 @@
+2016-??-??: Version 0.1.33 released
+
+    Fixed bugs with array typedefs.
+
+    Fixed a bug where a top-level function-local variable was allowed
+    to be defined with the same name as a function parameter.
+    For example: void f(int n) { int n; }
+    The compiler now puts that top level and the function parameters
+    in the same scope.
+
+    Fixed a bug with an optimization of boolean expressions
+    evaluated for their numerical value.
+
+    Fixed a potential bug with va_arg() (stdarg.h) by avoiding the
+    use of the Y register, to comply with the CMOC register convention.
+
+    The PROGRAM name in main.cpp can now be defined as a preprocessor
+    identifier. By default, PROGRAM is a C++ global variable ("cmoc").
+
+    New command-line option --allow-undef-func makes the compiler
+    tolerate calls to undefined functions. The assembly pass will fail.
+    Should be used with the -c option.
+
+    Fixed some portability problems to help compile under Visual C++.
+
+    The writecocofile command now declares an error if extra arguments
+    are given on the command line.
+
 2016-09-17: Version 0.1.32 released
 
     Fixed bugs with the /=, %=, <<= and >>= operators.

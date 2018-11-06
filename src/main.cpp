@@ -1,4 +1,4 @@
-/*  $Id: main.cpp,v 1.45 2016/06/18 04:16:17 sarrazip Exp $
+/*  $Id: main.cpp,v 1.49 2016/10/05 22:18:24 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -28,7 +28,6 @@
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <unistd.h>
 #include <string.h>
 
 #if defined(__MINGW32__)
@@ -46,7 +45,9 @@ extern int numErrors;
 extern int numWarnings;
 
 
+#ifndef PROGRAM  // Allow the compilation to define the program name as a macro.
 static const char *PROGRAM = "cmoc";
+#endif
 
 // Argument for the ORG directive.
 // The default is 512 bytes past the default start of a Basic program
@@ -87,33 +88,34 @@ displayHelp()
 "\n";
 
     cout <<
-        "--help|-h        Display this help page and exit.\n"
-        "--version|-v     Display this program's version number and exit.\n"
-        "--verbose|-V     Display more informationg about the compiling process.\n"
-        "--preproc|-E     Copy preprocessor output to standard output,\n"
-        "                 instead of compiling.\n"
-        "--compile|-c     Compile only, do not assemble.\n"
-        "--asm-cmd        Create a .cmd file with the assembly command.\n"
-        "--org=X          Use X (in hex) as the first address at which to generate\n"
-        "                 the code; default: "
-                          << hex << codeAddress << dec << ".\n"
-        "--limit=X        Fail if program_end exceeds address X (in hex)\n"
-        "--coco           Compile a CoCo Disk Basic .bin file (default).\n"
-        "--os9            Compile an OS-9 executable. (Requires lwasm.)\n"
-        "--usim           Compile for the USIM 6809 simulator (executable is .hex file).\n"
-        "--dos            Compile CoCo DECB Track 34 boot loader (implies --coco).\n"
-        "--vectrex        Compile for the Vectrex video game console.\n"
-        "--srec           Executable in Motorola SREC format (Disk Basic only).\n"
-        "--a09=X          Use assembler specified by path X instead of installed a09.\n"
-        "-Idir            Add directory <dir> to the compiler's include directories\n"
-        "                 (also applies to assembler).\n"
-        "-Dxxx=yyy        Equivalent to #define xxx yyy\n"
-        "--check-null     Insert run-time checks for null pointers. See manual.\n"
-        "--check-stack    Insert run-time checks for stack overflow. See manual.\n"
-        "--emit-uncalled  Emit functions even if they are not called by C code.\n"
-        "-O0|-O1|-O2      Optimization level (default is 2).\n"
-        "--no-peephole    Deprecated: equivalent to -O0.\n"
-        "-Werror          Treat warnings as errors.\n"
+        "--help|-h           Display this help page and exit.\n"
+        "--version|-v        Display this program's version number and exit.\n"
+        "--verbose|-V        Display more informationg about the compiling process.\n"
+        "--preproc|-E        Copy preprocessor output to standard output,\n"
+        "                    instead of compiling.\n"
+        "--compile|-c        Compile only, do not assemble.\n"
+        "--asm-cmd           Create a .cmd file with the assembly command.\n"
+        "--org=X             Use X (in hex) as the first address at which to generate\n"
+        "                    the code; default: "
+                             << hex << codeAddress << dec << ".\n"
+        "--limit=X           Fail if program_end exceeds address X (in hex)\n"
+        "--coco              Compile a CoCo Disk Basic .bin file (default).\n"
+        "--os9               Compile an OS-9 executable. (Requires lwasm.)\n"
+        "--usim              Compile for USIM 6809 simulator (executable is .hex file).\n"
+        "--dos               Compile CoCo DECB Track 34 boot loader (implies --coco).\n"
+        "--vectrex           Compile for the Vectrex video game console.\n"
+        "--srec              Executable in Motorola SREC format (Disk Basic only).\n"
+        "--a09=X             Use assembler specified by path X instead of installed a09.\n"
+        "-Idir               Add directory <dir> to the compiler's include directories\n"
+        "                    (also applies to assembler).\n"
+        "-Dxxx=yyy           Equivalent to #define xxx yyy\n"
+        "--check-null        Insert run-time checks for null pointers. See manual.\n"
+        "--check-stack       Insert run-time checks for stack overflow. See manual.\n"
+        "--emit-uncalled     Emit functions even if they are not called by C code.\n"
+        "--allow-undef-func  Allow calls to undefined functions.\n"
+        "-O0|-O1|-O2         Optimization level (default is 2).\n"
+        "--no-peephole       Deprecated: equivalent to -O0.\n"
+        "-Werror             Treat warnings as errors.\n"
         "\n";
 
     cout << "System #include directory: " << pkgdatadir << "\n\n";
@@ -204,6 +206,7 @@ main(int argc, char *argv[])
     bool assumeTrack34 = false;  // true = CoCo DECB Track 34 (relevant only with COCO_BASIC)
     bool generateSREC = false;  // generate a Motorola SREC executable
     bool emitUncalledFunctions = false;
+    bool callToUndefinedFunctionAllowed = false;
     bool wholeFunctionOptimization = false;
     size_t optimizationLevel = 2;
     string assemblerFilename = pkgdatadir + string("/") + "a09";
@@ -391,6 +394,11 @@ main(int argc, char *argv[])
             emitUncalledFunctions = true;
             continue;
         }
+        if (curopt == "--allow-undef-func")
+        {
+            callToUndefinedFunctionAllowed = true;
+            continue;
+        }
         if (strncmp(curopt.c_str(), "-O", 2) == 0)
         {
             string level(curopt, 2, string::npos);
@@ -556,11 +564,17 @@ main(int argc, char *argv[])
         Parse the source file and generate the assembly code if no errors were detected.
         Otherwise, stop.
     */
-    TranslationUnit tu(targetPlatform);
+    TranslationUnit tu(targetPlatform, callToUndefinedFunctionAllowed);
     if (verbose)
         cout << "Compiling..." << endl;
     assert(yyin != NULL);
     yyparse();
+
+    /*  Now that yyparse() has been called, free the memory, to keep valgrind from
+        reporting a leak.
+    */
+    extern string sourceFilename;
+    sourceFilename.clear();
 
     tu.processPragmas(codeAddress, codeAddressSetBySwitch,
                       limitAddress, limitAddressSetBySwitch, dataAddress);

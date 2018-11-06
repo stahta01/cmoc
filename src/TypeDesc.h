@@ -1,4 +1,4 @@
-/*  $Id: TypeDesc.h,v 1.7 2016/08/27 04:14:28 sarrazip Exp $
+/*  $Id: TypeDesc.h,v 1.8 2016/10/08 18:15:06 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -83,6 +83,8 @@ public:
 
     std::string toString() const;
 
+    bool isArray() const;
+
     bool isPtrOrArray() const;
 
     bool isIntegral() const;
@@ -104,6 +106,10 @@ public:
     size_t getPointerLevel() const;
 
     void appendDimensions(std::vector<uint16_t> &arrayDimensions) const;
+
+    // Returns a number of elements, not a number of bytes.
+    //
+    size_t getNumArrayElements() const;
 
 private:
 

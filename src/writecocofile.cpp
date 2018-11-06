@@ -1,4 +1,4 @@
-/*  $Id: writecocofile.cpp,v 1.16 2016/07/01 19:41:59 sarrazip Exp $
+/*  $Id: writecocofile.cpp,v 1.18 2016/10/11 01:01:36 sarrazip Exp $
 
     writecocofile.cpp - A tool to write native files to a CoCo DECB disk image.
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -582,7 +582,7 @@ CoCoDisk::killFile(const string &filename, const string &extension)
 int
 CoCoDisk::commit(ostream &file) const
 {
-    file.seekp(getContentOffset());
+    file.seekp(ostream::pos_type(getContentOffset()));
     file.write((char *) contents, numTracks * BYTES_PER_TRACK);
     return !file ? -1 : 0;
 }
@@ -1200,17 +1200,30 @@ main(int argc, char *argv[])
     {
         case WRITE_FILE:
         case KILL_FILE:
-            if (optind >= argc)
+            if (optind + 1 != argc)  // if missing filename or extra argument
             {
+                cout << PROGRAM << ": error: " << (optind == argc ? "missing filename" : "extra argument(s)") << "\n";
                 displayHelp();
                 return EXIT_FAILURE;
             }
             return killAndWriteFile(dskFilename, argv[optind], format, mode == KILL_FILE);
 
         case LIST_DIRECTORY:
+            if (optind != argc)  // if extra argument
+            {
+                cout << PROGRAM << ": error: " << "extra argument(s)" << "\n";
+                displayHelp();
+                return EXIT_FAILURE;
+            }
             return listDirectory(dskFilename);
 
         case READ_FILE:
+            if (optind + 1 != argc)  // if missing filename or extra argument
+            {
+                cout << PROGRAM << ": error: " << (optind == argc ? "missing filename" : "extra argument(s)") << "\n";
+                displayHelp();
+                return EXIT_FAILURE;
+            }
             return readFile(dskFilename, argv[optind]);
     }
 

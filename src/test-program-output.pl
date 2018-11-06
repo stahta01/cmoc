@@ -4026,6 +4026,27 @@ program => q`
     typedef unsigned Addr[2];
     Addr addr = { 0xAAAA, 0xBBBB }; 
 
+    typedef char string10_t[10];
+    typedef struct {
+        string10_t str1;
+        char str2[10];
+        int str3[10];
+    } test_t;
+
+    struct S {
+        string10_t grid[5];
+        char c;
+    };
+    
+    typedef int TenInts[10];
+    struct T {
+        TenInts tens[5];
+    };        
+
+    void f1(char *a) {}
+    void f2(int *a) {}
+    unsigned diff(void *a, void *b) { return b - a; }
+
     int main()
     {
         uint16_t u = 2014;
@@ -4046,6 +4067,47 @@ program => q`
         ++localAddr[1];
         assert_eq(localAddr[0] + localAddr[1], 3581);
         
+        string10_t str1;
+        assert_eq(sizeof(str1), 10);
+        assert_eq((str1 + 1) - str1, 1);
+
+        string10_t tens[5];
+        assert_eq(sizeof(tens), 50);
+        assert_eq(sizeof(tens[2]), 10);
+        assert_eq(tens[4] - tens[3], 10);
+        assert_eq((tens + 1) - tens, 10);
+        
+        char str2[10];
+        test_t test;
+        assert_eq(sizeof(string10_t), 10);
+        assert_eq(sizeof(test.str1), 10);
+        assert_eq(sizeof(test.str2), 10);
+        assert_eq(sizeof(test.str3), 20);
+        assert_eq(sizeof(test), 40);
+        f1(str1);
+        f1(str2);
+        f1(test.str1);
+        f1(test.str2);
+        f2(test.str3);
+        assert_eq(diff( test.str1,  test.str2), 10);
+        assert_eq(diff(&test.str1,  test.str2), 10);
+        assert_eq(diff( test.str1, &test.str2), 10);
+        assert_eq(diff( test.str2,  test.str3), 10);
+        assert_eq(diff(&test.str2,  test.str3), 10);
+        assert_eq(diff( test.str2, &test.str3), 10);
+
+        struct S s;
+        assert_eq(sizeof(s.grid), 50);
+        assert_eq(sizeof(s.grid[2]), 10);
+        assert_eq(sizeof(s), 51);
+        assert_eq(diff(s.grid, &s.c), 50);
+        
+        struct T t;
+        assert_eq(sizeof(TenInts), 10 * 2);
+        assert_eq(sizeof(t.tens), 50 * 2);
+        assert_eq(sizeof(t.tens[3]), 10 * 2);
+
+        //FIXME: Test initializers vs. string10_t vs. var/objmember
         return 0;
     }
     `,
@@ -7096,6 +7158,28 @@ program => q`
     `,
 expected => ""
 },
+
+
+{
+title => q{Optimizaton on boolean negation and disjunction},
+program => q`
+    int test(void* a, void* b)
+    {
+        return !a || !b;
+    }
+    int main()
+    {
+        assert(test(0, 0)); 
+        assert(test(1, 0));
+        assert(test(0, 1));
+        assert(!test(1, 1));
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
 
 
 #{

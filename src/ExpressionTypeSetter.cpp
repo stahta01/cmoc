@@ -1,4 +1,4 @@
-/*  $Id: ExpressionTypeSetter.cpp,v 1.23 2016/07/26 01:55:11 sarrazip Exp $
+/*  $Id: ExpressionTypeSetter.cpp,v 1.25 2016/10/11 01:23:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -67,7 +67,7 @@ ExpressionTypeSetter::close(Tree *t)
     if (ce != NULL)
     {
         if (ce->getType() == CLASS_TYPE)
-            errormsg("cannot cast to class type");
+            ce->errormsg("cannot cast to class type");
         assert(ce->getType() != ARRAY_TYPE);  // no syntax for this
         return true;
     }
@@ -138,21 +138,9 @@ ExpressionTypeSetter::close(Tree *t)
             return true;
         }
 
-        const ClassDef *cl = tu.getClassDef(om->getClassName());
-        if (cl == NULL)
-        {
-            om->errormsg("reference to member `%s' of undefined class `%s'",
-                         om->getMemberName().c_str(), om->getClassName().c_str());
-            assert(!om->getClassName().empty());
-            return true;
-        }
-        const ClassDef::ClassMember *mi = cl->getDataMember(om->getMemberName());
-        if (mi == NULL)
-        {
-            om->errormsg("struct %s has no member named %s",
-                         cl->getName().c_str(), om->getMemberName().c_str());
-            return true;
-        }
+        const ClassDef::ClassMember *mi = om->getClassMember();
+        if (!mi)
+            return true;  // error message issued
 
         assert(mi->getTypeDesc()->type != VOID_TYPE);
         om->setTypeDesc(mi->getTypeDesc());

@@ -1,5 +1,5 @@
 %{
-/*  $Id: parser.yy,v 1.34 2016/08/27 00:53:50 sarrazip Exp $
+/*  $Id: parser.yy,v 1.37 2016/10/08 18:15:06 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -239,8 +239,8 @@ specifier_qualifier_list:
     ;
 
 compound_stmt:
-      '{' stmt_list_opt '}'
-                        { $$ = $2; }
+      '{' save_src_fn save_line_no stmt_list_opt '}'
+                        { $$ = $4; $$->setLineNo($2, $3); free($2); }
     ;
 
 stmt_list_opt:
@@ -253,11 +253,11 @@ stmt_list_opt:
 declaration:
       declaration_specifiers ';'  // to define a struct without declaring an instance of it 
                         {
-                            $$ = TranslationUnit::createDeclarationSequence($1, NULL);  // deletes $1
+                            $$ = TranslationUnit::instance().createDeclarationSequence($1, NULL);  // deletes $1
                         }
     | declaration_specifiers init_declarator_list ';'  // includes function prototypes
                         {
-                            $$ = TranslationUnit::createDeclarationSequence($1, $2);  // deletes $1 and $2
+                            $$ = TranslationUnit::instance().createDeclarationSequence($1, $2);  // deletes $1 and $2
                         }
     ;
 
@@ -499,22 +499,7 @@ struct_declaration_list:
     ;
 
 struct_declaration:
-      specifier_qualifier_list struct_declarator_list ';'
-                {
-                    // Return a tree sequence of ClassMembers defined by struct_declarator_list.
-                    const TypeDesc *td = $1->getTypeDesc(); 
-                    $$ = new std::vector<ClassDef::ClassMember *>();
-                    for (std::vector<Declarator *>::iterator it = $2->begin(); it != $2->end(); ++it)
-                    {
-                        Declarator *declarator = *it;
-                        ClassDef::ClassMember *member = new ClassDef::ClassMember(
-                                                                declarator->processPointerLevel(td),
-                                                                declarator);  // Declarator now owned by 'member'
-                        $$->push_back(member);
-                    }
-                    delete $1;
-                    delete $2;  // destroy the vector<Declarator *>, but not the Declarators
-                }
+      specifier_qualifier_list struct_declarator_list ';'    { $$ = ClassDef::createClassMembers($1, $2); }
     ;
 
 struct_declarator_list:

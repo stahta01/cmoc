@@ -1,4 +1,4 @@
-/*  $Id: FunctionDef.h,v 1.13 2016/09/15 03:34:57 sarrazip Exp $
+/*  $Id: FunctionDef.h,v 1.14 2016/10/05 03:17:31 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -23,6 +23,7 @@
 #include "FormalParamList.h"
 
 class DeclarationSpecifierList;
+class Declaration;
 class Scope;
 
 
@@ -121,6 +122,7 @@ private:
     Scope *scope;  // Scope NOT owned by this object
     int16_t minDisplacement;  // set by allocateLocalVariables()
     TreeSequence *bodyStmts;  // owns the pointed object
+    std::vector<Declaration *> formalParamDeclarations;  // owns the pointed objects
     bool isISR;
     bool asmOnly;
     bool called;  // true means at least one call or address-of seen on this function

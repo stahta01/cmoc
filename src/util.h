@@ -1,4 +1,4 @@
-/*  $Id: util.h,v 1.20 2016/09/11 18:46:27 sarrazip Exp $
+/*  $Id: util.h,v 1.22 2016/10/11 01:01:45 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -35,6 +35,20 @@
 #include <string.h>
 #include <stdarg.h>
 #include <memory>
+
+#ifdef _MSC_VER  /* Hacks to help compiler under Visual C++. */
+#pragma warning(disable:4996)  /* Tolerate so-called "unsafe" functions like _snprintf(). */
+#define snprintf _snprintf
+#define popen _popen
+#define pclose _pclose
+#define strcasecmp _stricmp
+#define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+#define WIFEXITED(x) true
+#define WEXITSTATUS(x) (x)
+#else
+#include <strings.h>  /* for strcasecmp(), as per POSIX.1 */
+#include <unistd.h>
+#endif
 
 class Tree;
 class FormalParamList;
@@ -76,7 +90,7 @@ template <typename T>
 inline void
 pushBackUnique(std::vector<T> &v, const T &x)
 {
-    if (find(v.begin(), v.end(), x) == v.end())
+    if (std::find(v.begin(), v.end(), x) == v.end())
         v.push_back(x);
 }
 

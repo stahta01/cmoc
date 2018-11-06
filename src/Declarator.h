@@ -1,4 +1,4 @@
-/*  $Id: Declarator.h,v 1.10 2016/08/20 01:07:05 sarrazip Exp $
+/*  $Id: Declarator.h,v 1.11 2016/10/08 18:15:06 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -61,7 +61,8 @@ public:
 
     bool getNumDimensions(size_t &numDimensions) const;
 
-    uint16_t getArraySize() const;
+    // Returns the number of elements, not the number of bytes.
+    uint16_t getNumArrayElements() const;
 
     void incPointerLevel() { ++pointerLevel; }
 
@@ -77,7 +78,7 @@ public:
 
     int getLineNo() const { return lineno; }
 
-    bool computeArraySize(std::vector<uint16_t> &arrayDimensions,
+    bool computeArrayDimensions(std::vector<uint16_t> &arrayDimensions,
                           bool allowUnknownFirstDimension = false) const;
 
     std::string toString() const;

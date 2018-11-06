@@ -1072,7 +1072,8 @@ allowed to modify A, B, X and CC.
 
 **Under OS-9, CMOC uses Y to refer to the data section** of the current
 process. Any code that needs to use Y must preserve its value and
-restore it when finished.
+restore it when finished. For portability, this rule should also
+be observed on platforms other than OS-9.
 
 The called function does not have to return any particular condition
 codes.

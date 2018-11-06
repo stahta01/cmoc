@@ -1,4 +1,4 @@
-/*  $Id: TranslationUnit.cpp,v 1.58 2016/09/11 20:23:13 sarrazip Exp $
+/*  $Id: TranslationUnit.cpp,v 1.61 2016/10/11 01:23:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -48,7 +48,7 @@ TranslationUnit::instance()
 }
 
 
-TranslationUnit::TranslationUnit(TargetPlatform _targetPlatform)
+TranslationUnit::TranslationUnit(TargetPlatform _targetPlatform, bool _callToUndefinedFunctionAllowed)
   : typeManager(),
     globalScope(NULL),
     definitionList(NULL),
@@ -66,6 +66,7 @@ TranslationUnit::TranslationUnit(TargetPlatform _targetPlatform)
     isProgramExecutableOnlyOnce(false),
     nullPointerCheckingEnabled(false),
     stackOverflowCheckingEnabled(false),
+    callToUndefinedFunctionAllowed(_callToUndefinedFunctionAllowed),
     neededUtilitySubRoutines(),
     targetPlatform(_targetPlatform),
     vxTitle("CMOC"),
@@ -174,8 +175,10 @@ TranslationUnit::registerFunctionCall(const string &callerId, const string &call
 class FunctionChecker : public Tree::Functor
 {
 public:
-    FunctionChecker()
-    :   declaredFunctions(), undefinedFunctions(), definedFunctions(), calledFunctions()
+    FunctionChecker(const TranslationUnit &tu)
+    :   translationUnit(tu),
+        declaredFunctions(), undefinedFunctions(), definedFunctions(), calledFunctions(),
+        isCallToUndefinedFunctionAllowed(tu.isCallToUndefinedFunctionAllowed())
     {
     }
     virtual bool open(Tree *t)
@@ -210,7 +213,8 @@ public:
             // If the undefined function is not provided by the compiler,
             // and it is called by the program, then report it as undefined.
             //
-            if (! TranslationUnit::instance().isStandardFunction(funcId)
+            if (! isCallToUndefinedFunctionAllowed
+                    && ! translationUnit.isStandardFunction(funcId)
                     && calledFunctions.find(funcId) != calledFunctions.end())
             {
                 it->second->errormsg("function %s() declared and called but not defined", funcId.c_str());
@@ -237,10 +241,12 @@ private:
         }
     }
 
+    const TranslationUnit &translationUnit;
     set<string> declaredFunctions;
     map<string, const FunctionDef *> undefinedFunctions;
     set<string> definedFunctions;
     set<string> calledFunctions;
+    bool isCallToUndefinedFunctionAllowed;
 };
 
 
@@ -394,7 +400,7 @@ TranslationUnit::checkSemantics()
     // over the function bodies, so that function calls that use a function pointer
     // can be differentiated from standard calls.
     //
-    FunctionChecker ufc;
+    FunctionChecker ufc(*this);
     definitionList->iterate(ufc);
     ufc.reportErrors();
 }
@@ -1023,6 +1029,12 @@ TranslationUnit::getTypeSize(const TypeDesc &typeDesc) const
         return cl->getSizeInBytes();
     }
 
+    if (typeDesc.type == ARRAY_TYPE)
+    {
+        assert(typeDesc.numArrayElements != uint16_t(-1));
+        return typeDesc.numArrayElements * getTypeSize(*typeDesc.pointedTypeDesc);
+    }
+
     return ::getTypeSize(typeDesc.type);
 }
 
@@ -1280,9 +1292,9 @@ TranslationUnit::createDeclarationSequence(DeclarationSpecifierList *dsl,
                 (void) tm.addTypeDef(td, *it);  // destroys the Declarator object
         ds = NULL;
     }
-    else if (dsl->isExternDeclaration())
+    else if (!callToUndefinedFunctionAllowed && dsl->isExternDeclaration())
     {
-        // Ignore the declarators in a 'extern' declaration because
+        // Ignore the declarators in an 'extern' declaration because
         // separate compilation is not supported.
         if (! declarators || declarators->size() == 0)
             errormsg("extern declaration defines no names");
@@ -1331,3 +1343,11 @@ TranslationUnit::checkForEllipsisWithoutNamedArgument(const FormalParamList *for
     if (formalParamList && formalParamList->endsWithEllipsis() && formalParamList->size() == 0)
         errormsg("named argument is required before `...'");  // as in GCC
 }
+
+
+bool
+TranslationUnit::isCallToUndefinedFunctionAllowed() const
+{
+    return callToUndefinedFunctionAllowed;
+}
+

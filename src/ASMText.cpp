@@ -1,4 +1,4 @@
-/*  $Id: ASMText.cpp,v 1.60 2016/09/15 01:50:50 sarrazip Exp $
+/*  $Id: ASMText.cpp,v 1.62 2016/10/05 22:18:24 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -30,7 +30,6 @@
 #include <stack>
 #include <climits>
 #include <iostream>
-#include <strings.h>  /* for strcasecmp(), as per POSIX.1 */
 
 using namespace std;
 
@@ -1800,8 +1799,11 @@ ASMText::removeAndOrMulAddSub(size_t index)
         } else if (extractConstantLiteral(e.fields[1], val)) {
           const Element &e1 = elements[index + 1];
           if (val == 0 && (e1.type != INSTR || !isBasicBlockEndingInstruction(e1))) {
+            InsEffects effects(e1);
+            if (!(effects.read & CC)) {
             commentOut(index, "optim: removeAndOrMulAddSub");
             madeChanges = true;
+            }
           } else if (val == 0 && e1.type == INSTR && isBasicBlockEndingInstruction(e1) &&
                      simulator.regs.accum.a.known && simulator.regs.accum.a.val == 0) {
             replaceWithInstr(index, "TSTB", "", "optim: removeAndOrMulAddSub");
@@ -1826,7 +1828,7 @@ ASMText::removeAndOrMulAddSub(size_t index)
           const string offsetStr = oper.substr(0, oper.size() - 2);
           if (!(offsetStr == "A" || offsetStr == "B" || offsetStr == "D")) {
             e.fields[0] = "LDX";
-            e.fields[1] = "#$" + my_to_string(mystoi(offsetStr, NULL, 10) + simulator.regs.x.val, 16);
+            e.fields[1] = "#$" + my_to_string(mystoi(offsetStr, NULL, 10) + simulator.regs.x.val, true);
             e.fields[2] = "optim: removeAndOrMulAddSub";
             madeChanges = true;
           }
@@ -2267,6 +2269,11 @@ ASMText::removeUselessOps(size_t index) {
       if (e.type == INSTR && isBasicBlockEndingInstruction(e))
         break;
       if (e.type != INSTR)
+        break;
+
+      // Don't optimize the instruction when a CC is read
+      InsEffects effects(e);
+      if (effects.read & CC)
         break;
 
       // Run the instruction
@@ -4121,7 +4128,7 @@ Pseudo6809::process(const string &instr, const string &operand, int index, bool 
       }
 
       if (indexReg == "S") {
-        if (stack.size() < ((postIncrement2) ? 2 : 1)) {
+        if (stack.size() < size_t((postIncrement2) ? 2 : 1)) {
           if (!ignoreStackErrors)
             return false;
         }
@@ -4130,7 +4137,7 @@ Pseudo6809::process(const string &instr, const string &operand, int index, bool 
         else if (postIncrement1)
           indexVal = pull8(index);
         else {
-          if (stack.size() < (regIs16Bit(targetRegister) ? 2 : 1)) {
+          if (stack.size() < size_t(regIs16Bit(targetRegister) ? 2 : 1)) {
             if (!ignoreStackErrors)
               return false;
           }

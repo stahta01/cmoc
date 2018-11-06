@@ -1,4 +1,4 @@
-/*  $Id: TypeManager.cpp,v 1.17 2016/08/27 00:53:50 sarrazip Exp $
+/*  $Id: TypeManager.cpp,v 1.18 2016/10/08 18:15:06 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -335,7 +335,7 @@ TypeManager::addTypeDef(const TypeDesc *declSpecTypeDef, Declarator *declarator)
         //cerr << "#   After processPointerLevel: " << specificTypeDesc->toString() << endl;
 
         vector<uint16_t> arrayDimensions;
-        if (declarator->computeArraySize(arrayDimensions))  // arrayDimensions will be empty if non-array
+        if (declarator->computeArrayDimensions(arrayDimensions))  // arrayDimensions will be empty if non-array
         {
             if (arrayDimensions.size() > 0)
             {

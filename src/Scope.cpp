@@ -1,4 +1,4 @@
-/*  $Id: Scope.cpp,v 1.4 2016/03/25 02:00:09 sarrazip Exp $
+/*  $Id: Scope.cpp,v 1.6 2016/10/05 02:28:24 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -31,8 +31,7 @@ using namespace std;
 
 
 Scope::Scope(Scope *_parent)
-  : Tree(),
-    parent(_parent),
+  : parent(_parent),
     subScopes(),
     declTable(),
     classTable()
@@ -90,13 +89,16 @@ Scope::getParent()
 int16_t
 Scope::allocateLocalVariables(int16_t displacement, bool processSubScopes)
 {
-    /*cerr << "Scope(" << this << ")::allocateLocalVariables("
+    /*cerr << "# Scope(" << this << ")::allocateLocalVariables("
         << displacement << ", " << processSubScopes << "): " << subScopes.size() << " subscopes\n";*/
     for (vector< pair<string, Declaration *> >::reverse_iterator itd = declTable.rbegin();
                                                                 itd != declTable.rend(); itd++)
     {
         Declaration *decl = itd->second;
         assert(decl != NULL);
+
+        if (decl->getFrameDisplacement() > 0)
+            continue;  // function parameter, i.e., already allocated by FunctionDef::declareFormalParams()
 
         if (decl->isGlobal())
         {
@@ -107,18 +109,18 @@ Scope::allocateLocalVariables(int16_t displacement, bool processSubScopes)
         uint16_t size = 0;
         if (!decl->getVariableSizeInBytes(size))
         {
-            errormsg("invalid dimensions for array %s", decl->getVariableId().c_str());
+            decl->errormsg("invalid dimensions for array %s", decl->getVariableId().c_str());
             continue;
         }
         if (size > 32767)
         {
-            errormsg("local variable %s exceeds maximum of 32767 bytes", decl->getVariableId().c_str());
+            decl->errormsg("local variable %s exceeds maximum of 32767 bytes", decl->getVariableId().c_str());
             continue;
         }
 
         displacement -= int16_t(size);
         /*cerr << "  " << decl->getVariableId() << " is "
-                << decl->getVariableSize()
+                << size
                 << " byte(s), which puts displacement at "
                 << displacement << "\n";*/
         decl->setFrameDisplacement(displacement);

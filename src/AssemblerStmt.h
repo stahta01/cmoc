@@ -1,4 +1,4 @@
-/*  $Id: AssemblerStmt.h,v 1.8 2016/09/15 03:34:56 sarrazip Exp $
+/*  $Id: AssemblerStmt.h,v 1.9 2016/10/05 02:28:23 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -60,7 +60,8 @@ private:
     static bool parseVariableNameAndOffset(const std::string &tokenText, std::string &variableName, int16_t &offset);
     static std::string resolveVariableReferences(const std::string &text,
                                                  const Scope &scope,
-                                                 std::set<std::string> *recognizedVarNames);
+                                                 std::set<std::string> *recognizedVarNames,
+                                                 bool requireAllocatedVariables);
     static bool isGlobalVariable(const std::string &varName);
 
 private:

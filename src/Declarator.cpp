@@ -1,4 +1,4 @@
-/*  $Id: Declarator.cpp,v 1.16 2016/08/20 01:07:05 sarrazip Exp $
+/*  $Id: Declarator.cpp,v 1.19 2016/10/11 01:34:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -66,7 +66,7 @@ Declarator::setInitExpr(Tree *_initExpr)
 // (Can be called more than once.)
 // _arraySizeExpr may be null: it means no size specified, as in v[].
 // However, only the first dimension can be null, as in v[][5][7].
-// Sets array to true, even if _arraySizeExpr is null.
+// Sets 'type' to ARRAY, even if _arraySizeExpr is null.
 //
 // NOTE: The Tree becomes owned by this object. It will be destroyed by ~Declarator().
 //
@@ -115,6 +115,17 @@ Declarator::declareVariable(const TypeDesc *varType, bool isStatic, bool isExter
 
     vector<uint16_t> arrayDimensions;
 
+    // arrayDimensions will contain dimensions from varType as well as from this declarator.
+    // Example: typedef char A[10]; A v[5];
+    // varType is A, which is char[10], and this declarator contains dimension 5.
+    // We start arrayDimensions with the 5, because the type of v is as if v had been
+    // declared as char v[5][10].
+
+    if (!computeArrayDimensions(arrayDimensions))
+        return NULL;
+
+    size_t numDimsDueToDeclarator = arrayDimensions.size();
+
     if (varType->type == ARRAY_TYPE)
     {
         // varType may contain dimensions, if the variable is being declared using
@@ -125,28 +136,16 @@ Declarator::declareVariable(const TypeDesc *varType, bool isStatic, bool isExter
         // In the case of
         //   A someArray[4][5];
         // then the 4 and 5 are stored in this Declarator, and it is the call to computeArraySize()
-        // that will insert 4 and 5 in arrayDimensions.
+        // that will have inserted 4 and 5 in arrayDimensions.
         //
         varType->appendDimensions(arrayDimensions);
-        if (arrayDimensions.size() > 0)
-        {
-            // For an array of T, send T to getArrayOf(), so that it will return T[].
-            //
-            varType = varType->getPointedTypeDesc();
-        }
     }
-
-    //cerr << "# Declarator::declareVariable: varType=[" << varType->toString() << "]\n";
-    //cerr << "# Declarator::declareVariable: arrayDimensions={" << join(", ", arrayDimensions) << "}\n";
-
-    if (!computeArraySize(arrayDimensions))
-        return NULL;
 
     // Here, arrayDimensions is empty if non-array.
 
     //cerr << "# Declarator::declareVariable: arrayDimensions={" << join(", ", arrayDimensions) << "}\n";
 
-    const TypeDesc *td = TranslationUnit::getTypeManager().getArrayOf(varType, arrayDimensions.size());
+    const TypeDesc *td = TranslationUnit::getTypeManager().getArrayOf(varType, numDimsDueToDeclarator);
 
     //cerr << "# Declarator::declareVariable: td='" << td->toString() << "'\n";
 
@@ -166,7 +165,7 @@ Declarator::getNumDimensions(size_t &numDimensions) const
     numDimensions = 0;
 
     vector<uint16_t> arrayDimensions;
-    if (!computeArraySize(arrayDimensions))
+    if (!computeArrayDimensions(arrayDimensions))
         return false;
 
     numDimensions = arrayDimensions.size();
@@ -183,8 +182,8 @@ Declarator::getNumDimensions(size_t &numDimensions) const
 // allowUnknownFirstDimension: if true, this unknown 1st dimension is assumed to be 1.
 //
 bool
-Declarator::computeArraySize(vector<uint16_t> &arrayDimensions,
-                             bool allowUnknownFirstDimension) const
+Declarator::computeArrayDimensions(vector<uint16_t> &arrayDimensions,
+                                   bool allowUnknownFirstDimension) const
 {
     assert(!formalParamList);
 
@@ -284,12 +283,12 @@ Declarator::getId() const
 
 
 uint16_t
-Declarator::getArraySize() const
+Declarator::getNumArrayElements() const
 {
     assert(!formalParamList);
 
     vector<uint16_t> arrayDimensions;
-    if (!computeArraySize(arrayDimensions))  // arrayDimensions will be empty if non-array
+    if (!computeArrayDimensions(arrayDimensions))  // arrayDimensions will be empty if non-array
         return 0;
     if (arrayDimensions.size() == 0)
         return 0;
@@ -336,7 +335,7 @@ Declarator::createFormalParameter(DeclarationSpecifierList &dsl) const
     if (isArray())
     {
         TypeManager &tm = TranslationUnit::getTypeManager();
-        if (!computeArraySize(arrayDimensions, true))  // arrayDimensions will be empty if non-array
+        if (!computeArrayDimensions(arrayDimensions, true))  // arrayDimensions will be empty if non-array
             return NULL;
         if (arrayDimensions.size() > 1)
             td = tm.getArrayOf(td, arrayDimensions.size() - 1);

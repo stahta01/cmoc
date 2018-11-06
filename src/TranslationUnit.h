@@ -1,4 +1,4 @@
-/*  $Id: TranslationUnit.h,v 1.26 2016/08/26 00:43:05 sarrazip Exp $
+/*  $Id: TranslationUnit.h,v 1.27 2016/10/03 03:46:01 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -41,7 +41,7 @@ public:
 
     static TypeManager &getTypeManager() { return instance().typeManager; }
 
-    TranslationUnit(TargetPlatform targetPlatform);
+    TranslationUnit(TargetPlatform targetPlatform, bool _callToUndefinedFunctionAllowed);
 
     // Resets the instance pointer. Do not call instance() after this.
     ~TranslationUnit();
@@ -145,10 +145,12 @@ public:
     //
     bool isStandardFunction(const std::string &functionId) const;
 
-    static DeclarationSequence *createDeclarationSequence(DeclarationSpecifierList *dsl,
-                                                          std::vector<Declarator *> *declarators);
+    DeclarationSequence *createDeclarationSequence(DeclarationSpecifierList *dsl,
+                                                   std::vector<Declarator *> *declarators);
 
     static void checkForEllipsisWithoutNamedArgument(const FormalParamList *formalParamList);
+
+    bool isCallToUndefinedFunctionAllowed() const;
 
 private:
 
@@ -190,6 +192,7 @@ private:
     bool isProgramExecutableOnlyOnce;
     bool nullPointerCheckingEnabled;
     bool stackOverflowCheckingEnabled;
+    bool callToUndefinedFunctionAllowed;
     std::set<std::string> neededUtilitySubRoutines;
     TargetPlatform targetPlatform;
 

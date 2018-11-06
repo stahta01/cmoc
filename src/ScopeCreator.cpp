@@ -1,4 +1,4 @@
-/*  $Id: ScopeCreator.cpp,v 1.9 2016/07/26 02:06:26 sarrazip Exp $
+/*  $Id: ScopeCreator.cpp,v 1.12 2016/10/08 18:15:06 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -32,9 +32,11 @@ using namespace std;
 
 
 ScopeCreator::ScopeCreator(TranslationUnit &tu, Scope *ancestorScope)
-:   translationUnit(tu)
+:   translationUnit(tu),
+    ancestors()
 {
     translationUnit.pushScope(ancestorScope);
+    ancestors.reserve(32);
 }
 
 
@@ -58,20 +60,28 @@ ScopeCreator::~ScopeCreator()
 bool
 ScopeCreator::open(Tree *t)
 {
+    bool ret = privateOpen(t);
+    if (ret)
+        ancestors.push_back(t);
+    return ret;
+}
+
+
+bool
+ScopeCreator::privateOpen(Tree *t)
+{
     Scope *cs = translationUnit.getCurrentScope();
     assert(cs != NULL);
 
-    // Compound statements create a scope.
+    // Compound statements (other than a function's top braces) create a scope.
     // So do the for() and while() statement bodies.
     //
-    if (   dynamic_cast<CompoundStmt *>(t)
+    if (   (dynamic_cast<CompoundStmt *>(t) && ancestors.size() > 0)
         || dynamic_cast<ForStmt *>(t)
         || dynamic_cast<WhileStmt *>(t))
     {
         Scope *s = new Scope(cs);
         assert(s->getParent() == cs);
-
-        s->copyLineNo(*t);  // to help debugging
 
         // Note: 'cs' is now owner of 's', i.e., destroying 'cs' will call delete on 's'.
 
@@ -150,6 +160,9 @@ bool
 ScopeCreator::close(Tree *t)
 {
     t->popScopeIfExists();
+
+    assert(ancestors.size() > 0);
+    ancestors.pop_back();
     return true;
 }
 
