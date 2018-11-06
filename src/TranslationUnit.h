@@ -1,4 +1,4 @@
-/*  $Id: TranslationUnit.h,v 1.27 2016/10/03 03:46:01 sarrazip Exp $
+/*  $Id: TranslationUnit.h,v 1.28 2016/10/19 03:33:39 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -41,7 +41,9 @@ public:
 
     static TypeManager &getTypeManager() { return instance().typeManager; }
 
-    TranslationUnit(TargetPlatform targetPlatform, bool _callToUndefinedFunctionAllowed);
+    TranslationUnit(TargetPlatform targetPlatform,
+                    bool _callToUndefinedFunctionAllowed,
+                    bool _warnSignCompare);
 
     // Resets the instance pointer. Do not call instance() after this.
     ~TranslationUnit();
@@ -152,6 +154,8 @@ public:
 
     bool isCallToUndefinedFunctionAllowed() const;
 
+    bool isWarningOnSignCompareEnabled() const;
+
 private:
 
     void detectCalledFunctions();
@@ -193,6 +197,7 @@ private:
     bool nullPointerCheckingEnabled;
     bool stackOverflowCheckingEnabled;
     bool callToUndefinedFunctionAllowed;
+    bool warnSignCompare;  // warn if <, <=, >, >= used on operands of differing signedness
     std::set<std::string> neededUtilitySubRoutines;
     TargetPlatform targetPlatform;
 

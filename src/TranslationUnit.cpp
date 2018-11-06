@@ -1,4 +1,4 @@
-/*  $Id: TranslationUnit.cpp,v 1.61 2016/10/11 01:23:50 sarrazip Exp $
+/*  $Id: TranslationUnit.cpp,v 1.62 2016/10/19 03:33:39 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -48,7 +48,9 @@ TranslationUnit::instance()
 }
 
 
-TranslationUnit::TranslationUnit(TargetPlatform _targetPlatform, bool _callToUndefinedFunctionAllowed)
+TranslationUnit::TranslationUnit(TargetPlatform _targetPlatform,
+                                 bool _callToUndefinedFunctionAllowed,
+                                 bool _warnSignCompare)
   : typeManager(),
     globalScope(NULL),
     definitionList(NULL),
@@ -67,6 +69,7 @@ TranslationUnit::TranslationUnit(TargetPlatform _targetPlatform, bool _callToUnd
     nullPointerCheckingEnabled(false),
     stackOverflowCheckingEnabled(false),
     callToUndefinedFunctionAllowed(_callToUndefinedFunctionAllowed),
+    warnSignCompare(_warnSignCompare),
     neededUtilitySubRoutines(),
     targetPlatform(_targetPlatform),
     vxTitle("CMOC"),
@@ -1351,3 +1354,9 @@ TranslationUnit::isCallToUndefinedFunctionAllowed() const
     return callToUndefinedFunctionAllowed;
 }
 
+
+bool
+TranslationUnit::isWarningOnSignCompareEnabled() const
+{
+    return warnSignCompare;
+}

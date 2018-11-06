@@ -17,9 +17,9 @@ Copyright &copy; 2003-2016
 Distributed under the **GNU General Public License**,
 **version 3 or later** (see the License section).
 
-Version of CMOC covered by this manual: **0.1.32**
+Version of CMOC covered by this manual: **0.1.33**
 
-Date of this manual: 2016-09-17
+Date of this manual: 2016-10-23
 
 
 Introduction
@@ -294,8 +294,13 @@ The compiler generally produces more efficient code for unsigned
 arithmetic. Therefore, types `unsigned` and `unsigned char` should
 be preferred to `int` and `char` where possible.
 
-CMOC considers that the signedness of an additive of multiplicative
+CMOC considers that the signedness of an additive or multiplicative
 operation is the signedness of the left operand.
+
+CMOC can issue a warning when comparison operators `<`, `<=`, `>` or `>=`
+are used with operands of different signedness. This is obtained by
+passing the `-Wsign-compare` command-line option.
+
 
 ### Pre-increment vs. post-increment
 

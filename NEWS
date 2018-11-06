@@ -1,4 +1,4 @@
-2016-??-??: Version 0.1.33 released
+2016-10-23: Version 0.1.33 released
 
     Fixed bugs with array typedefs.
 
@@ -21,6 +21,9 @@
     tolerate calls to undefined functions. The assembly pass will fail.
     Should be used with the -c option.
 
+    New command-line option -Wsign-compare warns when comparison operators
+    <, <=, > or >= are used with operands of different signedness.
+
     Fixed some portability problems to help compile under Visual C++.
 
     The writecocofile command now declares an error if extra arguments
@@ -29,7 +32,7 @@
 2016-09-17: Version 0.1.32 released
 
     Fixed bugs with the /=, %=, <<= and >>= operators.
-    
+
     The compiler now checks that operators that require an l-value
     are actually applied on one. For example, &(n >> 1) is illegal
     and is now reported as such. 

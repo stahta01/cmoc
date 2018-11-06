@@ -1578,6 +1578,79 @@ expected => [
 },
 
 
+{
+title => q{-Wsign-compare},
+options => "-Wsign-compare",
+program => q!
+    char f(unsigned char uc, signed char sc)
+    {
+        if (uc < sc)
+            return 1;
+        if (uc <= sc)
+            return 2;
+        if (uc > sc)
+            return 3;
+        if (uc >= sc)
+            return 4;
+        if (sc < uc)
+            return 1;
+        if (sc <= uc)
+            return 2;
+        if (sc > uc)
+            return 3;
+        if (sc >= uc)
+            return 4;
+        if (uc >= uc)
+            return 5;
+        if (sc >= sc)
+            return 5;
+        return 0;
+    }
+    int main()
+    {
+        f(0, 0);
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:4: __warning__: comparison of integers of different signs (`unsigned char' vs `char'); using unsigned comparison!,
+    qq!,check-prog.c:6: __warning__: comparison of integers of different signs (`unsigned char' vs `char'); using unsigned comparison!,
+    qq!,check-prog.c:8: __warning__: comparison of integers of different signs (`unsigned char' vs `char'); using unsigned comparison!,
+    qq!,check-prog.c:10: __warning__: comparison of integers of different signs (`unsigned char' vs `char'); using unsigned comparison!,
+    qq!,check-prog.c:12: __warning__: comparison of integers of different signs (`char' vs `unsigned char'); using unsigned comparison!,
+    qq!,check-prog.c:14: __warning__: comparison of integers of different signs (`char' vs `unsigned char'); using unsigned comparison!,
+    qq!,check-prog.c:16: __warning__: comparison of integers of different signs (`char' vs `unsigned char'); using unsigned comparison!,
+    qq!,check-prog.c:18: __warning__: comparison of integers of different signs (`char' vs `unsigned char'); using unsigned comparison!,
+    ]
+},
+
+
+{
+title => q{Without -Wsign-compare},
+program => q!
+    char f(unsigned char uc, signed char sc)
+    {
+        if (uc < sc)
+            return 1;
+        if (uc <= sc)
+            return 2;
+        if (uc > sc)
+            return 3;
+        if (uc >= sc)
+            return 4;
+        return 0;
+    }
+    int main()
+    {
+        f(0, 0);
+        return 0;
+    }
+    !,
+expected => [
+    ]
+},
+
+
 #{
 #title => q{Sample test},
 #program => q!

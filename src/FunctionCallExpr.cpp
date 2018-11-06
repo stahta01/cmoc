@@ -1,4 +1,4 @@
-/*  $Id: FunctionCallExpr.cpp,v 1.37 2016/10/08 18:15:06 sarrazip Exp $
+/*  $Id: FunctionCallExpr.cpp,v 1.38 2016/10/15 04:10:19 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -373,7 +373,7 @@ FunctionCallExpr::emitCode(ASMText &out, bool lValue) const
                                          it != arguments->rend(); it++, index--)
     {
         const Tree *expr = *it;
-        string comment = "argument " + wordToString(index)
+        string comment = "argument " + wordToString(uint16_t(index))
                          + (functionId.empty() ? "" : " of " + functionId + "()");
         const VariableExpr *ve = expr->asVariableExpr();
         const UnaryOpExpr *unary = dynamic_cast<const UnaryOpExpr *>(expr);
@@ -460,7 +460,7 @@ FunctionCallExpr::emitCode(ASMText &out, bool lValue) const
     // Pop the arguments off the stack:
 
     if (arguments->size() > 0)
-        out.ins("LEAS", wordToString(arguments->size() * 2) + ",S");
+        out.ins("LEAS", wordToString(uint16_t(arguments->size()) * 2) + ",S");
 
     return true;
 }

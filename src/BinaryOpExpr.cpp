@@ -1,4 +1,4 @@
-/*  $Id: BinaryOpExpr.cpp,v 1.66 2016/10/11 01:23:50 sarrazip Exp $
+/*  $Id: BinaryOpExpr.cpp,v 1.67 2016/10/19 03:33:39 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -1986,8 +1986,14 @@ BinaryOpExpr::emitBoolJumps(ASMText &out,
 bool
 BinaryOpExpr::isRelationalOperator() const
 {
-    return oper == EQUALITY || oper == INEQUALITY
-        || oper == INFERIOR || oper == INFERIOR_OR_EQUAL
+    return oper == EQUALITY || oper == INEQUALITY || isOrderComparisonOperator();
+}
+
+
+bool
+BinaryOpExpr::isOrderComparisonOperator() const
+{
+    return oper == INFERIOR || oper == INFERIOR_OR_EQUAL
         || oper == SUPERIOR || oper == SUPERIOR_OR_EQUAL;
 }
 

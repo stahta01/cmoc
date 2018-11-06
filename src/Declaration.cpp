@@ -1,4 +1,4 @@
-/*  $Id: Declaration.cpp,v 1.38 2016/10/05 02:28:23 sarrazip Exp $
+/*  $Id: Declaration.cpp,v 1.39 2016/10/15 04:10:19 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -743,7 +743,7 @@ Declaration::emitCode(ASMText &out, bool lValue) const
             // Emit a call to memcpy() that reads from the string literal
             // and writes to the array address.
             //
-            out.ins("LDD", "#" + wordToString(sle->getLiteral().length() + 1), "length of string literal + terminating NUL");
+            out.ins("LDD", "#" + wordToString(uint16_t(sle->getLiteral().length()) + 1), "length of string literal + terminating NUL");
             out.ins("PSHS", "B,A", "push length to _memcpy");
             out.ins("LEAX", sle->getArg(), sle->getEscapedVersion());
             out.ins("PSHS", "X", "source array");

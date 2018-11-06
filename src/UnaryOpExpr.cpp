@@ -1,4 +1,4 @@
-/*  $Id: UnaryOpExpr.cpp,v 1.25 2016/10/11 01:23:50 sarrazip Exp $
+/*  $Id: UnaryOpExpr.cpp,v 1.26 2016/10/15 04:10:19 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -378,7 +378,13 @@ UnaryOpExpr::getSizeOfValue(uint16_t &size) const
     // sizeof("literal") is the size between the quotes, plus 1 for the terminating '\0'.
     if (const StringLiteralExpr *sle = dynamic_cast<const StringLiteralExpr *>(subExpr))
     {
-        size = sle->getDecodedLength() + 1;
+        size_t decodedLength = sle->getDecodedLength();
+        if (decodedLength + 1 > 0xFFFF)
+        {
+            errormsg("string literal used in sizeof() is too large (%u bytes)", decodedLength + 1);
+            return false;
+        }
+        size = uint16_t(decodedLength) + 1;
         return true;
     }
 

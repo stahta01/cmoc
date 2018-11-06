@@ -1,4 +1,4 @@
-/*  $Id: main.cpp,v 1.49 2016/10/05 22:18:24 sarrazip Exp $
+/*  $Id: main.cpp,v 1.50 2016/10/19 03:33:39 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -113,6 +113,7 @@ displayHelp()
         "--check-stack       Insert run-time checks for stack overflow. See manual.\n"
         "--emit-uncalled     Emit functions even if they are not called by C code.\n"
         "--allow-undef-func  Allow calls to undefined functions.\n"
+        "-Wsign-compare      Warn when <, <=, >, >= used on operands of differing signedness.\n"
         "-O0|-O1|-O2         Optimization level (default is 2).\n"
         "--no-peephole       Deprecated: equivalent to -O0.\n"
         "-Werror             Treat warnings as errors.\n"
@@ -207,6 +208,7 @@ main(int argc, char *argv[])
     bool generateSREC = false;  // generate a Motorola SREC executable
     bool emitUncalledFunctions = false;
     bool callToUndefinedFunctionAllowed = false;
+    bool warnSignCompare = false;
     bool wholeFunctionOptimization = false;
     size_t optimizationLevel = 2;
     string assemblerFilename = pkgdatadir + string("/") + "a09";
@@ -399,6 +401,11 @@ main(int argc, char *argv[])
             callToUndefinedFunctionAllowed = true;
             continue;
         }
+        if (curopt == "-Wsign-compare")
+        {
+            warnSignCompare = true;
+            continue;
+        }
         if (strncmp(curopt.c_str(), "-O", 2) == 0)
         {
             string level(curopt, 2, string::npos);
@@ -564,7 +571,7 @@ main(int argc, char *argv[])
         Parse the source file and generate the assembly code if no errors were detected.
         Otherwise, stop.
     */
-    TranslationUnit tu(targetPlatform, callToUndefinedFunctionAllowed);
+    TranslationUnit tu(targetPlatform, callToUndefinedFunctionAllowed, warnSignCompare);
     if (verbose)
         cout << "Compiling..." << endl;
     assert(yyin != NULL);

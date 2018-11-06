@@ -1,4 +1,4 @@
-/*  $Id: BinaryOpExpr.h,v 1.14 2016/10/05 22:18:24 sarrazip Exp $
+/*  $Id: BinaryOpExpr.h,v 1.15 2016/10/19 03:33:39 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -57,6 +57,8 @@ public:
     Op getOperator() const;
 
     bool isRelationalOperator() const;
+
+    bool isOrderComparisonOperator() const;
 
     Tree *getLeft() const;
     Tree *getRight() const;
