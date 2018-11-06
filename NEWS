@@ -1,3 +1,39 @@
+2016-09-12: Version 0.1.31 released
+
+    Inline assembly: When an asm{} block refers to a C variable
+    whose name is that of a register, such a reference must now be
+    preceded by a colon character, which acts as an escape character.
+    For example: char b; asm { lda :b }
+    When no such colon appears, the name is now always taken to be
+    a reference to the register. Existing inline assembly statements
+    may need to be fixed accordingly to resolve assembly errors.     
+
+    Added atoi() and atoui() to the standard library.
+
+    Fixed a bug with the return statement that omitted the sign
+    extension when returning a signed character from a function
+    returning signed int.
+
+    Fixed a bug where wrong code was emitted for the multiplication
+    of two members of a struct, where one of the members was the
+    first of the struct.
+
+    Fixed a bug where sizeof() on a string literal returned 2
+    instead of the length of the string plus one. A string literal
+    is now typed as an array of characters instead of a pointer to
+    a character.
+
+    Fixed a bug where printf() and putstr() failed to translate some
+    '\n' characters into a carriage return under Color Basic. In the
+    case of printf(), it was when the '\n' appeared in the argument
+    of a %s placeholder.
+
+    CMOC now rejects a variadic function that has no named argument,
+    e.g., void f(...), as does GNU GCC. 
+
+    Restored some level 2 optimizations that had been suspended
+    since version 0.1.29. 
+
 2016-08-21: Version 0.1.30 released
 
     Fixed a bug with the optimization of a division of a signed

@@ -1,4 +1,4 @@
-/*  $Id: ASMText.cpp,v 1.56 2016/07/24 23:03:05 sarrazip Exp $
+/*  $Id: ASMText.cpp,v 1.59 2016/09/11 16:43:27 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -495,8 +495,8 @@ ASMText::peepholeOptimize(bool useStage2Optims)
                     modified = true;
                 else if (removeClr(i))
                     modified = true;
-                //else if (removeAndOrMulAddSub(i))  // unit tests do not pass with this, as of 2016-07-24
-                    //modified = true;
+                else if (removeAndOrMulAddSub(i))
+                    modified = true;
                 else if (isInstr(i, "CMPB", "#$00") ||
                          isInstr(i, "CMPA", "#$00") ||
                          isInstr(i, "CMPB", "#0") ||
@@ -546,8 +546,8 @@ ASMText::peepholeOptimize(bool useStage2Optims)
                     modified = true;
                 else if (optimizeIndexedX2(i))
                     modified = true;
-                //else if (removeUselessLdb(i))  // unit tests do not pass with this, as of 2016-07-24
-                    //modified = true;
+                else if (removeUselessLdb(i))
+                    modified = true;
                 else if (removeUselessLdd(i))
                     modified = true;
                 else if (transformPshsXPshsX(i))
@@ -1048,6 +1048,8 @@ ASMText::stripExtraPulsX(size_t index)
       } else if (e.type == INSTR) {
         const InsEffects insEffects(e);
         if (isBasicBlockEndingInstruction(e) || (insEffects.written & X) ||
+            ((insEffects.read & X) && (e1.fields[1] == "B,A")) ||
+            e.fields[0] == "BSR" || e.fields[0] == "LBSR" ||
             e.fields[0] == "PSHS" || e.fields[0] == "PULS" || e.fields[0] == "LEAS" ||
             e.fields[1].find(",S") != string::npos) {
           return false;
@@ -1207,9 +1209,9 @@ ASMText::stripPushLeas1(size_t index)
       } else if (e.type == INSTR) {
         const InsEffects insEffects(e);
         if (isBasicBlockEndingInstruction(e) || 
-            e.fields[0] == "LBSR" || e.fields[0] == "PSHS" ||
-            e.fields[0] == "PULS" || e.fields[0] == "LEAS" ||
-            e.fields[1].find(",S") != string::npos) {
+            e.fields[0] == "LBSR" || e.fields[0] == "BSR" ||
+            e.fields[0] == "PSHS" || e.fields[0] == "PULS" ||
+            e.fields[0] == "LEAS" || e.fields[1].find(",S") != string::npos) {
           return false;
         }
       }
@@ -2852,11 +2854,12 @@ ASMText::optimizeIndexedX(size_t index) {
 
       if (index >= startIndex + 2) {
         InsEffects effects(e);
-        if (effects.written & X) {
-          break;
-        }
         if (effects.read & X) {
           return false;
+        }
+
+        if (effects.written & X) {
+          break;
         }
       }
 

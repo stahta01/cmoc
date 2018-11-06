@@ -1,4 +1,4 @@
-/*  $Id: util.h,v 1.19 2016/07/10 06:36:23 sarrazip Exp $
+/*  $Id: util.h,v 1.20 2016/09/11 18:46:27 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -159,6 +159,26 @@ std::string int8ToString(int8_t n, bool hex = false);
 
 
 void stringToLower(std::string &s);
+
+
+// Determines if 'c' is a character that can appear in a C identifier.
+//
+inline bool isCIdentifierChar(char c)
+{
+    return isalnum(c) || c == '_';
+}
+
+
+// Determines if 'c' is a character that can appear in an assembly language identifier.
+//
+inline bool isAssemblyIdentifierChar(char c)
+{
+    return isCIdentifierChar(c) || c == '@';
+}
+
+
+bool isRegisterName(const std::string &s);
+
 
 bool isPowerOf2(int16_t n);
 

@@ -400,9 +400,9 @@ program => q!
     }
     !,
 expected => [
-    qq!,check-prog.c:2: __error__: initializing char with expression of type char *!,
-    qq!,check-prog.c:2: __error__: initializing char with expression of type char *!,
-    qq!,check-prog.c:2: __error__: initializing char with expression of type char *!,
+    qq!,check-prog.c:2: __error__: initializing char with expression of type char[]!,
+    qq!,check-prog.c:2: __error__: initializing char with expression of type char[]!,
+    qq!,check-prog.c:2: __error__: initializing char with expression of type char[]!,
     ]
 },
 
@@ -412,13 +412,18 @@ title => q{Array whose initializer contains expressions of types that do not mat
 program => q!
     struct A { char byteField; };
     struct A structArray[3] = { { 42 }, "foo", { 44 } };
+    int v0[4] = "foo";
+    int v1[] = { 9999 };
+    int v2[] = &v1;
     int main()
     {
         return 0;
     }
     !,
 expected => [
-    qq!,check-prog.c:3: __error__: initializer for struct A is of type `char *': must be list, or struct of same type!,
+    qq!,check-prog.c:6: __error__: unexpected type of array initializer!,
+    qq!,check-prog.c:3: __error__: initializer for struct A is of type `char[]': must be list, or struct of same type!,
+    qq!,check-prog.c:4: __error__: initializer for array `v0' is invalid!,
     ]
 },
 
@@ -450,10 +455,10 @@ program => q!
     }
     !,
 expected => [
-    qq!,check-prog.c:6: __error__: initializing char with expression of type char *!,
-    qq!,check-prog.c:11: __error__: initializing char with expression of type char *!,
-    qq!,check-prog.c:17: __error__: initializing char with expression of type char *!,
-    qq!,check-prog.c:18: __error__: initializing char with expression of type char *!,
+    qq!,check-prog.c:6: __error__: initializing char with expression of type char[]!,
+    qq!,check-prog.c:11: __error__: initializing char with expression of type char[]!,
+    qq!,check-prog.c:17: __error__: initializing char with expression of type char[]!,
+    qq!,check-prog.c:18: __error__: initializing char with expression of type char[]!,
     ]
 },
 
@@ -1475,6 +1480,26 @@ program => q!
 expected => [
     qq!,check-prog.c:4: __warning__: hex escape sequence out of range!,
     qq!,check-prog.c:5: __warning__: octal escape sequence out of range!,
+    ]
+},
+
+
+{
+title => q{Named argument required before ellipsis of variadic function},
+program => q!
+    void functionWithNoNamedArg(...) {}
+    void prototypeWithNoNamedArg(...);
+    int main()
+    {
+        void (*fp)(...);
+        functionWithNoNamedArg(1, 2, 3);
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:6: __error__: named argument is required before `...'!,
+    qq!,check-prog.c:2: __error__: function functionWithNoNamedArg() uses `...' but has no named argument before it!,
+    qq!,check-prog.c:3: __error__: prototype prototypeWithNoNamedArg() uses `...' but has no named argument before it!,
     ]
 },
 

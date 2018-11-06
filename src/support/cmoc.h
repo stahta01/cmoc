@@ -45,6 +45,14 @@ char *strchr(char *s, int c);
 char *strlwr(char *s);
 char *strupr(char *s);
 
+// Converts an ASCII unsigned decimal string into an unsigned word.
+//
+unsigned atoui(char *s);
+
+// Converts an ASCII signed decimal string into a signed word.
+//
+int atoi(char *s);
+
 // Double-word to ASCII.
 // Converts the unsigned 32-bit integer formed by hi * 65536 + lo into
 // an ASCII decimal representation that gets written to 'out'.

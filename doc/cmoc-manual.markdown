@@ -17,9 +17,9 @@ Copyright &copy; 2003-2016
 Distributed under the **GNU General Public License**,
 **version 3 or later** (see the License section).
 
-Version of CMOC covered by this manual: **0.1.30**
+Version of CMOC covered by this manual: **0.1.31**
 
-Date of this manual: 2016-08-21
+Date of this manual: 2016-09-12
 
 
 Introduction
@@ -129,7 +129,8 @@ Features
 - Declaring more than one variable on the same line, i.e., int a = 0, b = 1;
 
 - [Variadic functions](https://en.wikipedia.org/wiki/Variadic_function),
-  i.e., void foo(const char \*format, ...);
+  i.e., void foo(const char \*format, ...). There must be at least one named
+  argument before the ellipsis (...), as in ISO C.
 
 - Ending an initializer list with a comma.
 
@@ -649,7 +650,7 @@ and if the called function is too far from the call, the assembly
 step will fail.
 
 
-### Preprocessor identifiers in inline assembly
+#### Preprocessor identifiers in inline assembly
 
 The GNU C preprocessor can add spaces in surprising ways, which makes its
 use slightly problematic in inline assembly. For example:
@@ -674,7 +675,37 @@ No space gets added before the identifier.
 Therefore, preprocessor identifiers should be used with caution in
 inline assembly.
 
-### Assembly-only functions
+
+#### Referring to variables whose name is that of a register
+
+Before version 0.1.31, bad assembly language text could be emitted
+if inline assembly referred to a C variable that has the name of a
+register. To help resolve this ambiguity, version 0.1.31 introduced
+a _C variable escape character_, which is a colon that is put in
+front of the C variable name.
+
+For example:
+
+    char b;
+    asm
+    {
+        inc     :b
+        ldb     :b
+        leax    b,x
+    }
+
+Here, `:b` refers to variable _b_ of the C program, while the _b_
+in _b,x_ refers to the register.
+
+This change may break inline assembly code in programs that were
+written for versions of CMOC preceding 0.1.31. Adding a colon at
+the right places will resolve the issue.
+
+Note that the escape character is not necessary on variable names
+that are not also register names.
+
+
+#### Assembly-only functions
 
 When a function is written entirely in assembly language for
 performance reasons, the stack frame may not be necessary.

@@ -1208,18 +1208,28 @@ _setConsoleOutHook
 #endif  /* _CMOC_NEED_setConsoleOutHook_ */
 
 
-#ifdef _CMOC_NEED_putchar_
+#if defined(_CMOC_NEED_putchar_) || defined(_CMOC_NEED_putstr_) || defined(_CMOC_NEED_sprintf_) || defined(_CMOC_NEED_printf_)
 
 * void putchar(byte c)
 *
 * Converts LF ($0A) into CR ($0D) before calling CHROUT.
 *
+#if defined(_CMOC_NEED_putchar_)
 _putchar
 	lda	3,s
+#endif
+
+* putchar_a should be called by the other routines (printf, etc.)
+* whenever the character to be printed might be a newline.
+*
+putchar_a
+
+#ifdef _COCO_BASIC_  /* Only Color Basic expects CR for newline; others expect LF. */
 	cmpa	#10		C linefeed?
 	bne	putchar_010
 	lda	#13		CHROUT does newline on char 13
 putchar_010:
+#endif
 	jmp	[CHROUT,DAT]
 
 #endif  /* _CMOC_NEED_putchar_ */
@@ -1239,7 +1249,7 @@ putstr:
 	ldu	4,s	address of string to write
 putstr_100:
 	lda	,u+
-	jsr	[CHROUT,DAT]
+	bsr     putchar_a
 	leax    -1,x
 	bne	putstr_100
 putstr_900:
@@ -1292,7 +1302,6 @@ _sprintf
 * void printf(const char *fmt, ...)
 *
 * Minimal printf(3) function.
-* Converts LF ($0A) into CR ($0D) before calling the routine in CHROUT.
 * To redirect the output characters, store a routine pointer in CHROUT.
 * That routine must accept the character to print in register A.
 *
@@ -1311,10 +1320,7 @@ PTF010	LDA	,X+		get char from format string
 	LBEQ	PTF900
 	CMPA	#$25		'%'?
 	BEQ	PTF490
-	CMPA	#$0A		C linefeed?
-	BNE	PTF020
-	LDA	#$0D		CHROUT does newline on char 13
-PTF020	JSR	[CHROUT,DAT]	ordinary char: print it
+PTF020	LBSR    putchar_a	ordinary char: print it
 	BRA	PTF010
 
 PTF490				* '%' just seen
@@ -1401,9 +1407,9 @@ PTF538
 
 PTF540	CMPA	#$63		%c?
 	BNE	PTF550
-	CLR	,U+
-	LDA	,U+
-	JSR	[CHROUT,DAT]
+        LDD     ,U++            get char in B
+	TFR     B,A
+	LBSR    putchar_a
 	LBRA	PTF010
 PTF550	CMPA	#$25		%%?
 	BNE	PTF560
@@ -1437,7 +1443,7 @@ PTF800	PSHS	A		unknown code after '%': print '%' then the code
 	LDA	#$25
 	JSR	[CHROUT,DAT]
 	PULS	A
-	JSR	[CHROUT,DAT]
+	LBSR    putchar_a
 	LBRA	PTF010
 
 PTF900	LEAS	3,S
@@ -1649,7 +1655,7 @@ PRWD90	PULS	A,B,X,PC
 * Print the ASCII character in B.  Preserves X and D.
 PRINTC	PSHS	A
 	TFR	B,A
-	JSR	[CHROUT,DAT]
+	LBSR    putchar_a
 	PULS	A,PC
 
 
@@ -1657,7 +1663,7 @@ PRINTC	PSHS	A
 PRINTS	PSHS	X,B,A
 	TFR	D,X
 	BRA	PRS020
-PRS010	JSR	[CHROUT,DAT]
+PRS010	LBSR    putchar_a
 PRS020	LDA	,X+
 	BNE	PRS010
 	PULS	A,B,X,PC
@@ -1677,7 +1683,7 @@ _readword
 #endif  /* _CMOC_NEED_readword_ */
 
 _
-#if defined(_CMOC_NEED_printf_) || defined(_CMOC_NEED_readword_)
+#if defined(_CMOC_NEED_printf_) || defined(_CMOC_NEED_readword_) || defined(_CMOC_NEED_atoi_) || defined(_CMOC_NEED_atoui_)
 
 * Convert unsigned decimal integer pointed by X into word returned in D.
 * Upon return, X points to character where conversion stopped.
@@ -1721,6 +1727,40 @@ MUL168	PSHS	X,B,A		acc A pushed to create temp byte at ,S
 
 
 #endif  /* defined(_CMOC_NEED_printf_) || defined(_CMOC_NEED_readword_) */
+
+
+#if defined(_CMOC_NEED_atoui_)
+
+* unsigned atoui(char *s);
+_atoui
+        ldx     2,s             s
+        bra     ATOW
+
+#endif  /* defined(_CMOC_NEED_atoui_) */
+
+
+#if defined(_CMOC_NEED_atoi_)
+
+* int atoi(char *s);
+_atoi
+        ldx     2,s             s
+        clr     ,-s             sign byte: 0 = positive
+        ldb     ,x              1st char
+        cmpb    #'-'            minus sign?
+        bne     atoi_010        no
+        com     ,s              $FF = negative
+        leax    1,x             pass minus sign
+atoi_010
+        bsr     ATOW            convert rest of s
+        tst     ,s+             apply sign byte
+        beq     atoi_020        positive
+        coma
+        comb
+        addd    #1
+atoi_020
+        rts
+
+#endif  /* defined(_CMOC_NEED_atoi_) */
 
 
 #ifdef _CMOC_NEED_srand_
@@ -1803,7 +1843,7 @@ DELAY9	PULS	A,B,PC
 
 
 #if defined(_CMOC_NEED_putchar_) || defined(_CMOC_NEED_putstr_) || defined(_CMOC_NEED_sprintf_) || defined(_CMOC_NEED_printf_)
-* FIXME: This is inefficient for a string: have printf accumulate, then send a string.
+* NOTE: This is inefficient for a string: have printf accumulate, then send a string.
 PUTCHR	pshs	u,y,x,a
 	leax	,s		point to char pushed in stack
 	ldy	#1		1 char to print
@@ -2606,6 +2646,16 @@ _sbrkmax_non_neg
 	rts
 
 #endif  /* defined(_CMOC_NEED_sbrkmax_) || defined(_CMOC_NEED_sbrk_) */
+
+
+#if defined(_CMOC_NEED_initSingleFromSWord_)
+
+* Initializes the single-precision float at X with the signed word in D.
+*
+initSingleFromSWord
+	rts				; not implemented
+
+#endif  /* defined(_CMOC_NEED_initSingleFromSWord_) */
 
 
 stdlib_end:

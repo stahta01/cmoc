@@ -1,4 +1,4 @@
-/*  $Id: DeclarationSpecifierList.cpp,v 1.9 2016/07/24 23:03:06 sarrazip Exp $
+/*  $Id: DeclarationSpecifierList.cpp,v 1.10 2016/08/27 00:53:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -47,25 +47,25 @@ DeclarationSpecifierList::~DeclarationSpecifierList()
 }
 
 
-// Does not keep a reference to 'ts', but keeps a pointer to 'ts.typeDesc'.
+// Does not keep a reference to 'tsToAdd', but keeps a pointer to 'tsToAdd.typeDesc'.
 //
 void
-DeclarationSpecifierList::add(const TypeSpecifier &ts)
+DeclarationSpecifierList::add(const TypeSpecifier &tsToAdd)
 {
     if (!typeDesc)
     {
-        typeDesc = ts.typeDesc;
-        enumTypeName = ts.enumTypeName;
+        typeDesc = tsToAdd.typeDesc;
+        enumTypeName = tsToAdd.enumTypeName;
         assert(!enumeratorList);
-        enumeratorList = ts.enumeratorList;
+        enumeratorList = tsToAdd.enumeratorList;
 
         if (enumeratorList)
-            TranslationUnit::getTypeManager().declareEnumerationList(ts.enumTypeName, *enumeratorList);
+            TranslationUnit::getTypeManager().declareEnumerationList(tsToAdd.enumTypeName, *enumeratorList);
 
         return;
     }
 
-    if (ts.typeDesc->type == SIZELESS_TYPE)  // if type in 'ts' is just 'signed' or 'unsigned', without a size
+    if (tsToAdd.typeDesc->type == SIZELESS_TYPE)  // if type in 'tsToAdd' is just 'signed' or 'unsigned', without a size
     {
         // Apply the signedness of that keyword to 'typeDesc', if the latter is an integral type.
         if (!typeDesc->isIntegral())
@@ -78,11 +78,11 @@ DeclarationSpecifierList::add(const TypeSpecifier &ts)
             errormsg("signed and unsigned modifiers cannot be applied to an enum");
             return;
         }
-        typeDesc = TranslationUnit::getTypeManager().getIntType(typeDesc->type, ts.typeDesc->isSigned);
+        typeDesc = TranslationUnit::getTypeManager().getIntType(typeDesc, tsToAdd.typeDesc->isSigned);
         return;
     }
 
-    if (typeDesc != ts.typeDesc)
+    if (typeDesc != tsToAdd.typeDesc)
         errormsg("combining type specifiers is not supported");
 }
 

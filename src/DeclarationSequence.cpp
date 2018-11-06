@@ -1,4 +1,4 @@
-/*  $Id: DeclarationSequence.cpp,v 1.8 2016/08/20 01:07:05 sarrazip Exp $
+/*  $Id: DeclarationSequence.cpp,v 1.9 2016/08/27 00:53:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -57,6 +57,9 @@ void DeclarationSequence::processDeclarator(Declarator *declarator, const Declar
     //
     if (! declarator->isFunctionPointer())
         specificTypeDesc = declarator->processPointerLevel(specificTypeDesc);
+
+    //cout << "# DeclarationSequence::processDeclarator: specificTypeDesc='" << *specificTypeDesc
+    //     << "', " << declarator->getId() << "\n";
 
     if (declarator->getFormalParamList() != NULL)  // if function prototype
     {

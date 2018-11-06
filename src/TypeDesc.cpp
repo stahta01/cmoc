@@ -1,4 +1,4 @@
-/*  $Id: TypeDesc.cpp,v 1.7 2016/06/21 01:06:13 sarrazip Exp $
+/*  $Id: TypeDesc.cpp,v 1.9 2016/08/27 04:14:28 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -80,7 +80,42 @@ TypeDesc::isPtrOrArray() const
 bool
 TypeDesc::isIntegral() const
 {
-    return type == BYTE_TYPE || type == WORD_TYPE;
+    return type == BYTE_TYPE || type == WORD_TYPE || isLong();
+}
+
+
+bool
+TypeDesc::isLong() const
+{
+    return type == CLASS_TYPE && (className == "_ULong" || className == "_Long");
+}
+
+
+bool
+TypeDesc::isFloat() const
+{
+    return type == CLASS_TYPE && (className == "_Float" || className == "_Double");
+}
+
+
+bool
+TypeDesc::isSingle() const
+{
+    return type == CLASS_TYPE && className == "_Float";
+}
+
+
+bool
+TypeDesc::isDouble() const
+{
+    return type == CLASS_TYPE && className == "_Double";
+}
+
+
+bool
+TypeDesc::isNumerical() const
+{
+    return isIntegral() || isFloat();
 }
 
 

@@ -1,4 +1,4 @@
-/*  $Id: TranslationUnit.h,v 1.25 2016/07/26 03:32:40 sarrazip Exp $
+/*  $Id: TranslationUnit.h,v 1.26 2016/08/26 00:43:05 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -147,6 +147,8 @@ public:
 
     static DeclarationSequence *createDeclarationSequence(DeclarationSpecifierList *dsl,
                                                           std::vector<Declarator *> *declarators);
+
+    static void checkForEllipsisWithoutNamedArgument(const FormalParamList *formalParamList);
 
 private:
 

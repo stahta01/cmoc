@@ -1,4 +1,4 @@
-/*  $Id: AssemblerStmt.h,v 1.6 2016/05/06 03:42:54 sarrazip Exp $
+/*  $Id: AssemblerStmt.h,v 1.7 2016/09/11 18:46:27 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -72,8 +72,10 @@ private:
     std::string asmText;  // if empty, other fields contain instruction
     std::string instruction;
     std::string argument;
-    bool argIsVariable;
     const Scope *scopeOfAsmOnlyFunction;  // not null when stmt is in function defined with modifier 'asm'
+    bool argIsVariable;
+
+    static const char variableNameEscapeChar;  // precede var name w/ this to force ref to var instead of reg
 
 };
 

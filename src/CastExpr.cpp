@@ -1,4 +1,4 @@
-/*  $Id: CastExpr.cpp,v 1.6 2016/07/24 23:03:05 sarrazip Exp $
+/*  $Id: CastExpr.cpp,v 1.7 2016/09/08 23:57:13 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -76,12 +76,21 @@ CastExpr::emitCode(ASMText &out, bool lValue) const
 
     const TypeDesc *castTD = getTypeDesc();
     const TypeDesc *subTD = subExpr->getTypeDesc();
+    return emitCastCode(out, castTD, subTD);
+}
+
+
+CodeStatus
+CastExpr::emitCastCode(ASMText &out, const TypeDesc *castTD, const TypeDesc *subTD)
+{
     if (castTD->type == VOID_TYPE || subTD == castTD)
         return true;
 
     if (subTD->type == BYTE_TYPE && castTD->type != BYTE_TYPE)
     {
         // We are casting to a 2-byte type.
+        assert(TranslationUnit::instance().getTypeSize(*castTD) == 2);
+
         const char *extendIns = (subTD->isSigned ? "SEX" : "CLRA");  // as in C
         out.ins(extendIns, "", "cast from byte");
         return true;

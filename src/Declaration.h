@@ -1,4 +1,4 @@
-/*  $Id: Declaration.h,v 1.11 2016/08/20 01:07:04 sarrazip Exp $
+/*  $Id: Declaration.h,v 1.12 2016/08/27 04:14:28 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -113,6 +113,7 @@ private:
     static void checkInitExpr(Tree *initializationExpr, const TypeDesc *varTypeDesc, const std::string &variableId, const std::vector<uint16_t> &arrayDimensions, size_t dimIndex);
     static void checkArrayInitializer(Tree *initializationExpr, const TypeDesc *varTypeDesc, const std::string &variableId, const std::vector<uint16_t> &arrayDimensions, size_t dimIndex);
     static void checkClassInitializer(Tree *initializationExpr, const TypeDesc *varTypeDesc, const std::string &variableId);
+    static bool isFloatOrLongInitWithNumber(const TypeDesc *varTypeDesc, const Tree &initializationExpr);
     bool isTreeSequenceWithOnlyIntegerValues(const TreeSequence *seq) const;
     bool emitInitCode(ASMText &out, const Tree *initializer, const TypeDesc *requiredTypeDesc, int16_t arraySizeInBytes, uint16_t& writingOffset) const;
 

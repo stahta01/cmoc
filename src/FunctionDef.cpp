@@ -1,4 +1,4 @@
-/*  $Id: FunctionDef.cpp,v 1.28 2016/08/20 01:07:05 sarrazip Exp $
+/*  $Id: FunctionDef.cpp,v 1.29 2016/08/26 00:43:05 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -250,6 +250,13 @@ FunctionDef::declareFormalParams()
         else
             paramFrameDisplacement += int16_t(size);
     }
+
+    // Require at least one named argument before an ellipsis, as does GCC.
+    //
+    if (formalParamList->endsWithEllipsis() && formalParamList->size() == 0)
+        errormsg("%s %s() uses `...' but has no named argument before it",
+                 bodyStmts ? "function" : "prototype",
+                 functionId.c_str());
 }
 
 

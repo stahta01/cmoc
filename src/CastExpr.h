@@ -1,4 +1,4 @@
-/*  $Id: CastExpr.h,v 1.5 2016/05/06 03:42:54 sarrazip Exp $
+/*  $Id: CastExpr.h,v 1.6 2016/09/08 23:57:13 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -36,6 +36,8 @@ public:
     Tree *getSubExpr();
 
     virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
+
+    static CodeStatus emitCastCode(ASMText &out, const TypeDesc *castTD, const TypeDesc *subTD);
 
     virtual bool iterate(Functor &f);
 

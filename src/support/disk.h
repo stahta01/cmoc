@@ -302,8 +302,8 @@ sbyte dwcompare(word *a, word *b)
     asm
     {
         pshs    y       // must not use U, which serves to refer to 'a' and 'b'
-        ldx     a
-        ldy     b
+        ldx     :a
+        ldy     :b
         ldd     ,x++            // compare MSBs
         cmpd    ,y++
         beq     dwcompare_equal

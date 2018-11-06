@@ -1,4 +1,4 @@
-/*  $Id: TypeManager.h,v 1.16 2016/07/30 01:45:44 sarrazip Exp $
+/*  $Id: TypeManager.h,v 1.18 2016/08/27 00:53:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -52,11 +52,21 @@ public:
 
     ~TypeManager();
 
+    void createBasicTypes();
+
+    void createInternalStructs(class Scope &globalScope);
+
     const TypeDesc *getVoidType() const;
 
     const TypeDesc *getIntType(BasicType byteOrWordType, bool isSigned) const;
 
+    const TypeDesc *getIntType(const TypeDesc *baseTypeDesc, bool isSigned) const;
+
     const TypeDesc *getSizelessType(bool isSigned) const;  // for 'signed' and 'unsigned'
+
+    const TypeDesc *getLongType(bool isSigned) const;
+
+    const TypeDesc *getFloatType(bool isDoublePrecision) const;
 
     const TypeDesc *getPointerTo(const TypeDesc *td) const;
 
@@ -101,6 +111,13 @@ public:
     bool isIdentiferMemberOfNamedEnum(const std::string &enumTypeName, const std::string &id) const;
 
     void setEnumeratorTypes() const;
+
+    void dumpTypes(std::ostream &out) const;
+
+private:
+
+    void createStructWithArrayOfBytes(Scope &globalScope, const char *structName, size_t numBytesInArray);
+    void createStructWithPairOfWords(Scope &globalScope, const char *structName, bool isHighWordSigned);
 
 private:
 

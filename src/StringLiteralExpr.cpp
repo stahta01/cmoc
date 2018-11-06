@@ -1,4 +1,4 @@
-/*  $Id: StringLiteralExpr.cpp,v 1.8 2016/07/26 03:32:40 sarrazip Exp $
+/*  $Id: StringLiteralExpr.cpp,v 1.9 2016/08/23 01:34:58 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -25,7 +25,7 @@ using namespace std;
 
 
 StringLiteralExpr::StringLiteralExpr(const string &literal)
-  : Tree(TranslationUnit::getTypeManager().getPointerToIntegral(BYTE_TYPE, true)),  // char *
+  : Tree(TranslationUnit::getTypeManager().getArrayOf(TranslationUnit::getTypeManager().getIntType(BYTE_TYPE, true), 1)),  // char *
     stringLiteral(literal),
     stringLabel()
 {
@@ -190,7 +190,7 @@ StringLiteralExpr::interpretStringLiteralPosition(size_t &i, char &out,
             }
             return true;
         case '0':
-            out = 0;
+            out = '\0';
             for (++i; i < stringLiteral.size() && stringLiteral[i] >= '0' && stringLiteral[i] <= '7'; ++i)
             {
                 char digit = stringLiteral[i] - '0';
@@ -212,6 +212,9 @@ StringLiteralExpr::interpretStringLiteralPosition(size_t &i, char &out,
 }
 
 
+// Returns the run-time value of the literal, i.e., after interpretation
+// of the backslash escape sequences.
+//
 /*static*/
 string
 StringLiteralExpr::decodeEscapedLiteral(bool &hexEscapeOutOfRange,
@@ -230,6 +233,14 @@ StringLiteralExpr::decodeEscapedLiteral(bool &hexEscapeOutOfRange,
 
     //cout << "StringLiteralExpr::decodeEscapedLiteral: return {" << stringValue << "}\n";
     return stringValue;
+}
+
+
+size_t
+StringLiteralExpr::getDecodedLength() const
+{
+    bool h, o;
+    return decodeEscapedLiteral(h, o).length();
 }
 
 

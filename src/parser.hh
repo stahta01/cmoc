@@ -97,7 +97,10 @@
      REGISTER = 315,
      GOTO = 316,
      EXTERN = 317,
-     STATIC = 318
+     STATIC = 318,
+     CONST = 319,
+     VOLATILE = 320,
+     AUTO = 321
    };
 #endif
 /* Tokens.  */
@@ -162,6 +165,9 @@
 #define GOTO 316
 #define EXTERN 317
 #define STATIC 318
+#define CONST 319
+#define VOLATILE 320
+#define AUTO 321
 
 
 
@@ -171,7 +177,7 @@ typedef union YYSTYPE
 {
 
 /* Line 2068 of yacc.c  */
-#line 74 "parser.yy"
+#line 73 "parser.yy"
 
     char *str;
     char character;
@@ -205,7 +211,7 @@ typedef union YYSTYPE
 
 
 /* Line 2068 of yacc.c  */
-#line 209 "parser.hh"
+#line 215 "parser.hh"
 } YYSTYPE;
 # define YYSTYPE_IS_TRIVIAL 1
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */

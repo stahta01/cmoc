@@ -1,7 +1,7 @@
-/*  $Id: AssemblerStmt.cpp,v 1.13 2016/05/27 04:23:02 sarrazip Exp $
+/*  $Id: AssemblerStmt.cpp,v 1.14 2016/09/11 18:46:27 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -26,6 +26,9 @@
 using namespace std;
 
 
+const char AssemblerStmt::variableNameEscapeChar = ':';
+
+
 AssemblerStmt::AssemblerStmt(const std::string &ins,
                                 const std::string &arg,
                                 bool _argIsVariable)
@@ -33,8 +36,8 @@ AssemblerStmt::AssemblerStmt(const std::string &ins,
     asmText(),
     instruction(ins),
     argument(arg),
-    argIsVariable(_argIsVariable),
-    scopeOfAsmOnlyFunction(NULL)
+    scopeOfAsmOnlyFunction(NULL),
+    argIsVariable(_argIsVariable)
 {
     if (instruction.length() < 3 || instruction.length() > 5)
         errormsg("invalid assembler instruction");
@@ -46,8 +49,8 @@ AssemblerStmt::AssemblerStmt(const char *_asmText)
     asmText(_asmText),
     instruction(),
     argument(),
-    argIsVariable(false),
-    scopeOfAsmOnlyFunction(NULL)
+    scopeOfAsmOnlyFunction(NULL),
+    argIsVariable(false)
 {
 }
 
@@ -66,7 +69,7 @@ AssemblerStmt::setAssemblyOnly(const Scope *functionScope)
 
 
 // Parse a newline, whitespace sequence or word at offset 'i' in 'text'.
-// Returns END if 'i' is at end of string.
+// Returns END if 'i' is at the end of the string.
 // Returns the text of the parsed token (empty string for END).
 // Advances 'i' to the character past the parsed token.
 // (No advancement in the case of END.)
@@ -75,8 +78,12 @@ AssemblerStmt::setAssemblyOnly(const Scope *functionScope)
 // but foo[bar] is considered as a single token.
 // The first rule facilitates the parsing of indirect addresses,
 // e.g., "jsr [someVariable]".
-// The second rule allows to par an array reference as a single token, e.g.,
+// The second rule allows to parse an array reference as a single token, e.g.,
 // "ldd someIntegerArray[12]".
+//
+// A variable name may be precedes by an escape character (given by variableNameEscapeChar).
+// This is useful when the name is that of a register. The escape character forces the name
+// to refer to the variable instead of the register.
 //
 AssemblerStmt::Token
 AssemblerStmt::getToken(const string &text, size_t &i, string &tokenText)
@@ -97,12 +104,6 @@ AssemblerStmt::getToken(const string &text, size_t &i, string &tokenText)
 
     tokenText = text[i];
 
-    if (text[i] == '[' || text[i] == ']')
-    {
-        ++i;  // pass the character
-        return WORD;
-    }
-
     // Parse a sequence of white space, or of non-space characters.
     // Such a sequence stops before a ']', which is considered a word by itself.
     //
@@ -115,9 +116,16 @@ AssemblerStmt::getToken(const string &text, size_t &i, string &tokenText)
         return WHITESPACE;
     }
 
+    if (!isAssemblyIdentifierChar(text[i - 1]) && text[i - 1] != variableNameEscapeChar)
+    {
+        // The character cannot be part of an identifier, so it is considered as a single-character token.
+        // Note that '@' can be part of an assembler identifier (this is supported by LWASM).
+        return WORD;
+    }
+
     // If '[' is encountered, we want to accumulate all chars up to and including "]",
     // because this is the "foo[bar]" case.
-    // If no '[' is encountered, we want to stop at "]",
+    // If no '[' is encountered, we want to stop before the "]",
     // because this is the "[var]" case.
     //
     bool gotOpeningBracket = false;
@@ -131,6 +139,8 @@ AssemblerStmt::getToken(const string &text, size_t &i, string &tokenText)
             break;
         if (text[i] == '[')  // remember this
             gotOpeningBracket = true;
+        else if (!gotOpeningBracket && !isAssemblyIdentifierChar(text[i]))  // stop on '+', '-' etc.
+            break;
         tokenText += text[i];
     }
 
@@ -208,6 +218,7 @@ AssemblerStmt::parseVariableNameAndOffset(const string &tokenText, string &varia
 // scope: Scope object to use to resolve variable names.
 // recognizedVarNames: If not null, the set accumulates the names of declared
 //                     C variables that were referred to in 'text'.
+//                     (Does not accumulate enumerated names.)
 //
 string
 AssemblerStmt::resolveVariableReferences(const string &text,
@@ -237,21 +248,32 @@ AssemblerStmt::resolveVariableReferences(const string &text,
             break;
 
         case WORD:
-            if (colNum == 3 && currentInstructionCanRefVariables)  // if instruction argument that could refer to variable
+            if (colNum == 3 && currentInstructionCanRefVariables)  // if instruction argument that could refer to variable or enum
             {
                 int16_t offset = 0;
                 string variableName;
                 if (!parseVariableNameAndOffset(tokenText, variableName, offset))
                     variableName = tokenText;
 
-                const Declaration *variableDecl = scope.getVariableDeclaration(variableName, true);
+                // If a C variable name escape is used, remove it.
+                string unescapedVariableName = variableName;
+                if (variableName.length() > 0 && variableName[0] == variableNameEscapeChar)
+                    unescapedVariableName.erase(0, 1);
 
-                if (variableDecl != NULL)
+                const Declaration *variableDecl = scope.getVariableDeclaration(unescapedVariableName, true);
+
+                uint16_t enumValue = 0;
+
+                if (isRegisterName(variableName))
+                {
+                    result += tokenText;  // no substitution allowed on register name
+                }
+                else if (variableDecl != NULL)
                 {
                     result += variableDecl->getFrameDisplacementArg(offset);
 
                     if (recognizedVarNames != NULL)
-                        recognizedVarNames->insert(variableName);
+                        recognizedVarNames->insert(unescapedVariableName);
                 }
                 else if (FunctionDef *fd = TranslationUnit::instance().getFunctionDef(tokenText))
                 {
@@ -280,8 +302,14 @@ AssemblerStmt::resolveVariableReferences(const string &text,
                     fd->setCalled(); // make sure the code for 'fd' gets emitted
                     TranslationUnit::instance().registerFunctionCall(caller->getId(), fd->getId());
                 }
+                else if (TranslationUnit::getTypeManager().getEnumeratorValue(unescapedVariableName, enumValue))
+                {
+                    result += wordToString(enumValue);
+                }
                 else  // no match: keep text as is
+                {
                     result += tokenText;
+                }
             }
             else
             {

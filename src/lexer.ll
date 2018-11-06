@@ -134,13 +134,25 @@ asm({ws}|\n)*\{([^\{\}]|(\{[^\{\}]*\}))*\}         {
                                 yylval.real = n;
                                 return REAL; }
 
-    /* Decimal constant (integer or float).
+    /* Decimal float constant.
        No optional minus sign at the beginning of this rule, because it creates
        an ambiguity where 'n-1' is seen as tokens 'n' and '-1'. It should be seen
        as 'n', '-' and '1', and the add_expr rule in parser.yy will recognize
        these 3 tokens as a subtraction. 
     */
-((([0-9]+)|([0-9]*\.[0-9]+))([eE][-+]?[0-9]+)?)       {
+(([0-9]*\.[0-9]+))([eE][-+]?[0-9]+)?[fF]?       {
+                yylval.real = atof(yytext);
+                return REAL; }
+
+    /* If there are no digits after the decimal point, there must be
+       at least one digit before the point, e.g., "1.", "1.e6", "1.f", "1.e6f".
+    */
+([0-9]+\.)([eE][-+]?[0-9]+)?[fF]?       {
+                yylval.real = atof(yytext);
+                return REAL; }
+
+    /* Decimal or octal integer, with optional "unsigned" or "long" suffix character. */ 
+([0-9]+)([uUlL]*)       {
                 uint64_t octalConversion = 0;
                 if (yytext[0] == '0' && isOctal(octalConversion, yytext + 1))
                     yylval.real = double(octalConversion);
@@ -183,6 +195,9 @@ asm({ws}|\n)*\{([^\{\}]|(\{[^\{\}]*\}))*\}         {
                 if (strcmp(yytext, "extern") == 0) return EXTERN;
                 if (strcmp(yytext, "static") == 0) return STATIC;
                 if (strcmp(yytext, "enum") == 0) return ENUM;
+                if (strcmp(yytext, "const") == 0) return CONST;
+                if (strcmp(yytext, "volatile") == 0) return VOLATILE;
+                if (strcmp(yytext, "auto") == 0) return AUTO;
 
                 const TypeDesc *td = TranslationUnit::getTypeManager().getTypeDef(yytext);
                 if (td)  // if yytext is the name of a typedef: 

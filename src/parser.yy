@@ -1,5 +1,5 @@
 %{
-/*  $Id: parser.yy,v 1.30 2016/08/16 02:04:19 sarrazip Exp $
+/*  $Id: parser.yy,v 1.34 2016/08/27 00:53:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -61,10 +61,9 @@ extern int lineno;  // defined in lexer.ll
 int numErrors = 0;  // error counter for yyerror()
 int numWarnings = 0;
 
-const TypeDesc *rejectTypeKeyword(const char *keyword)
+void rejectTypeKeyword(const char *keyword)
 {
     errormsg("unsupported type keyword `%s'", keyword);
-    return TranslationUnit::getTypeManager().getIntType(WORD_TYPE, true);
 }
 
 %}
@@ -111,7 +110,7 @@ const TypeDesc *rejectTypeKeyword(const char *keyword)
 %token LT_LT GT_GT BREAK CONTINUE RETURN ASM VERBATIM_ASM STRUCT UNION THIS
 %token PLUS_EQUALS MINUS_EQUALS ASTERISK_EQUALS SLASH_EQUALS PERCENT_EQUALS LT_LT_EQUALS GT_GT_EQUALS
 %token CARET_EQUALS AMP_EQUALS PIPE_EQUALS
-%token RIGHT_ARROW INTERRUPT SIZEOF ELLIPSIS TYPEDEF ENUM SWITCH CASE DEFAULT REGISTER GOTO EXTERN STATIC
+%token RIGHT_ARROW INTERRUPT SIZEOF ELLIPSIS TYPEDEF ENUM SWITCH CASE DEFAULT REGISTER GOTO EXTERN STATIC CONST VOLATILE AUTO
 
 %type <tree> external_declaration stmt selection_stmt else_part_opt while_stmt do_while_stmt for_stmt expr_stmt labeled_stmt
 %type <tree> expr expr_opt logical_or_expr logical_and_expr rel_expr add_expr mul_expr
@@ -195,6 +194,9 @@ function_definition:
 parameter_type_list:
       parameter_list                 { $$ = $1; }
     | parameter_list ',' ELLIPSIS    { $$ = $1; $$->endWithEllipsis(); }
+    | ELLIPSIS                       { $$ = new FormalParamList(); $$->endWithEllipsis(); }
+                                       /* Lone ellipsis tolerated here;
+                                          error message in FunctionDef::declareFormalParams(). */
     ;
 
 parameter_list
@@ -277,6 +279,7 @@ storage_class_specifier:
     | TYPEDEF       { $$ = DeclarationSpecifierList::TYPEDEF_SPEC; }
     | ASM           { $$ = DeclarationSpecifierList::ASSEMBLY_ONLY_SPEC; }
     | REGISTER      { $$ = -1; /* not supported, ignored */ }
+    | AUTO          { $$ = -1; /* not supported, ignored */ }          
     | STATIC        { $$ = DeclarationSpecifierList::STATIC_SPEC; }
     | EXTERN        { $$ = DeclarationSpecifierList::EXTERN_SPEC; }
     ;
@@ -370,9 +373,9 @@ non_void_basic_type:
 
 /* To avoid bison warning re: "Terminals unused in grammar". */
 unsupported_basic_type:
-      LONG      { $$ = rejectTypeKeyword("long");   }
-    | FLOAT     { $$ = rejectTypeKeyword("float");  }
-    | DOUBLE    { $$ = rejectTypeKeyword("double"); }
+      LONG      { rejectTypeKeyword("long");   $$ = TranslationUnit::getTypeManager().getLongType(true);   }
+    | FLOAT     { rejectTypeKeyword("float");  $$ = TranslationUnit::getTypeManager().getFloatType(false); }
+    | DOUBLE    { rejectTypeKeyword("double"); $$ = TranslationUnit::getTypeManager().getFloatType(true);  }
     ;
 
 basic_type:
@@ -445,12 +448,14 @@ direct_declarator:
                 $$ = new Declarator($3, sourceFilename, lineno);
                 $$->setAsFunctionPointer();
                 free($3);
+                TranslationUnit::checkForEllipsisWithoutNamedArgument($6);
                 delete $6;
             }
     | '(' '*' ')' '(' parameter_type_list_opt ')'  /* unnamed function pointer variable */
             {
                 $$ = new Declarator(string(), sourceFilename, lineno);
                 $$->setAsFunctionPointer();
+                TranslationUnit::checkForEllipsisWithoutNamedArgument($5);
                 delete $5;
             }
     ;

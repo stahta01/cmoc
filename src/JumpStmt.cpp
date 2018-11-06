@@ -1,4 +1,4 @@
-/*  $Id: JumpStmt.cpp,v 1.11 2016/06/30 18:40:05 sarrazip Exp $
+/*  $Id: JumpStmt.cpp,v 1.12 2016/09/08 23:57:13 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -23,6 +23,7 @@
 #include "FunctionDef.h"
 #include "SemanticsChecker.h"
 #include "WordConstantExpr.h"
+#include "CastExpr.h"
 
 #include <assert.h>
 
@@ -160,12 +161,9 @@ JumpStmt::emitCode(ASMText &out, bool lValue) const
                     if (!argument->emitCode(out, false))  // value in D
                         return false;
 
-                    if (currentFunctionDef->getType() != BYTE_TYPE
-                               && argument->getType() == BYTE_TYPE)
-                        out.ins("CLRA");
+                    CastExpr::emitCastCode(out, currentFunctionDef->getTypeDesc(), argument->getTypeDesc());
                 }
-                string label =
-                    TranslationUnit::instance().getCurrentFunctionEndLabel();
+                string label = TranslationUnit::instance().getCurrentFunctionEndLabel();
                 if (label.empty())
                     assert(!"return outside of a function body");
                 out.ins("LBRA", label, "return (" + getLineNo() + ")");

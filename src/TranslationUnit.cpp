@@ -1,4 +1,4 @@
-/*  $Id: TranslationUnit.cpp,v 1.54 2016/08/20 01:07:05 sarrazip Exp $
+/*  $Id: TranslationUnit.cpp,v 1.58 2016/09/11 20:23:13 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -77,7 +77,11 @@ TranslationUnit::TranslationUnit(TargetPlatform _targetPlatform)
     vxCopyright("2015")
 {
     theInstance = this;  // instance() needed by Scope constructor
-    globalScope = new Scope(NULL);
+    typeManager.createBasicTypes();
+    globalScope = new Scope(NULL);  // requires 'void', i.e., must come after createBasicTypes()
+    typeManager.createInternalStructs(*globalScope);  // global scope must be created; receives internal structs
+
+    //typeManager.dumpTypes(cout); // dumps all predefined types in C notation
 }
 
 
@@ -1175,6 +1179,8 @@ const TranslationUnit::StandardFunctionDeclaration TranslationUnit::stdLibTable[
     { "putstr",     { NULL } },
     { "srand",      { NULL } },
     { "rand",       { NULL } },
+    { "atoui",      { NULL } },
+    { "atoi",       { NULL } },
     { "mulww",      { NULL } },
     { "mulwb",      { NULL } },
     { "zerodw",     { NULL } },
@@ -1316,4 +1322,12 @@ TranslationUnit::createDeclarationSequence(DeclarationSpecifierList *dsl,
     delete dsl;
 
     return ds;
+}
+
+
+void
+TranslationUnit::checkForEllipsisWithoutNamedArgument(const FormalParamList *formalParamList)
+{
+    if (formalParamList && formalParamList->endsWithEllipsis() && formalParamList->size() == 0)
+        errormsg("named argument is required before `...'");  // as in GCC
 }

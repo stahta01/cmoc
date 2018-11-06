@@ -1,4 +1,4 @@
-/*  $Id: util.cpp,v 1.19 2016/07/10 06:36:22 sarrazip Exp $
+/*  $Id: util.cpp,v 1.20 2016/09/11 18:46:27 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -177,6 +177,15 @@ stringToLower(string &s)
 {
     for (size_t len = s.length(), i = 0; i < len; ++i)
         s[i] = tolower(s[i]);
+}
+
+
+bool
+isRegisterName(const std::string &s)
+{
+    std::string lc = s;
+    stringToLower(lc);
+    return (lc.length() == 1 && strchr("uyxbad", lc[0])) || lc == "pc" || lc == "cc" || lc == "dp";
 }
 
 

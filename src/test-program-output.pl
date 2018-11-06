@@ -33,8 +33,17 @@ expected => ""
 
 {
 title => q{printf()},
-program => 'int main() { printf("Hello, world.\n"); return 0; }',
-expected => "Hello, world.\n"
+program => q`
+    int main()
+    {
+        printf("Hello, world.\n");
+        printf("A%sB\n", "\n");
+        putstr("C\nD\n", 4);
+        putchar('\n');
+        return 0;
+    }
+    `,
+expected => "Hello, world.\nA\nB\nC\nD\n\n"
 },
 
 
@@ -585,7 +594,7 @@ expected => ""
 },
 
 {
-title => q{Returning byte from of type word},
+title => q{Returning byte from function of type word},
 program => '
     word f()
     {
@@ -603,11 +612,20 @@ program => '
         asm("LDD", "#$4567");  // not supposed to affect return value
         return 0;  // A must be cleared by this statement
     }
+    int fi()
+    {
+        char a = 255;
+        return a; 
+    }
     int main()
     {
         assert_eq(f(), 1);
         assert_eq(g(), 0x12);
         assert_eq(getPtr(), 0);
+        assert_eq(fi(), -1);
+        assert_eq((int) ((char) 255), -1);
+        char a = 255;
+        assert_eq((int) ((char) a), -1);
         return 0;
     }
     ',
@@ -2431,6 +2449,7 @@ program => q`
             std [p]     // brackets are words by themselves
         }
     }
+    enum { FOO = 42 };
     int main()
     {
         word w = 0x1000;
@@ -2442,7 +2461,7 @@ program => q`
             inca
             incb
             pshs x      // register X
-            inc x       // variable x
+            inc  :x     // C variable 'x' ("inc x" would refer to register, i.e., error) 
             puls x      // register X
         }
         asm("std", w);
@@ -2452,6 +2471,32 @@ program => q`
         int n = 0;
         f(&n);
         assert_eq(n, 1844);
+        
+        byte m[2] = { 22, 33 };
+        byte a[2] = { 44, 55 };
+        asm {
+            ldb     m
+            addb    m[1]
+            stb     m[0]
+            ldb     :a
+            addb    :a[1]
+            stb     :a[0]
+        }
+        assert_eq(m[0], 22 + 33);
+        assert_eq(a[0], 44 + 55);
+        
+        byte foo = 42;
+        asm {
+            ldb #1+:FOO*2  // escaped enumerated name
+            stb foo
+        }
+        assert_eq(foo, 85);
+        
+        word d;
+        asm {
+            leax d,x  // 'd' must refer to register D, not C variable 'd'
+        }
+
         return 0;
     }
     `,
@@ -3178,6 +3223,13 @@ program => q`
         
         word arrayWithNoSize[] = { 1, 2, 3, 4, 5 };
         assert_eq(sizeof(arrayWithNoSize), 10);
+
+        assert_eq(sizeof(""), 1);
+        assert_eq(sizeof("foobar"), 7);
+        assert_eq(sizeof("\0\0\0"), 4);
+        char s[] = "quux";
+        assert_eq(sizeof(s), 5);
+
         return 0;
     }
     `,
@@ -5612,7 +5664,7 @@ program => q`
     byte t() { return 1; }
     int main()
     {
-        byte *b, *a;
+        byte *bb, *aa;
         asm {
 before:
         }
@@ -5620,11 +5672,11 @@ before:
         asm {
 after:
             leax    before,pcr
-            stx     b
+            stx     bb
             leax    after,pcr
-            stx     a
+            stx     aa
         }
-        assert_eq(b, a);
+        assert_eq(bb, aa);
         return 0;
     }
     `,
@@ -6755,6 +6807,13 @@ program => q`
         DEPENDENT_ON_PREVIOUS = 1 << INDEPENDENT,
     };
     
+    #define STR "foobar"
+    enum
+    {
+        SIZE_OF_STR = sizeof(STR),
+        SIZE_OF_STR_PLUS_ONE = sizeof(STR) + 1
+    };    
+
     int main()
     {
         assert_eq(FOO, 0);
@@ -6810,7 +6869,64 @@ program => q`
         assert_eq(FIFTEEN, 15);
         int FIFTEEN = 999;
         assert_eq(FIFTEEN, 999);
+        
+        assert_eq(SIZE_OF_STR, 7);
+        assert_eq(SIZE_OF_STR_PLUS_ONE, 8);
+        
+        unsigned k0 = 22222, k1 = 22222;
+        asm {
+            ldd     #WALDO
+            std     k0
+            ldd     #WALDO+234
+            std     k1
+        }
+        assert_eq(k0, 1000);
+        assert_eq(k1, 1234);
 
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{Multiplication of members of a struct},
+program => q`
+    typedef struct {
+        int x, y;
+    } test_t;
+    int test1(test_t* v)
+    {
+        return v->x * v->y;  // removeUselessLdx() would mishandle this
+    }
+    int main()
+    {
+        test_t a0 = { 240, 250 };
+        assert_eq(test1(&a0), 60000);
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{atoui() and atoi()},
+program => q`
+    int main()
+    {
+        assert_eq(atoui("0"),       0);
+        assert_eq(atoui("1"),       1);
+        assert_eq(atoui("543"),     543);
+        assert_eq(atoui("65535"),   65535);
+        assert_eq(atoi("0"),        0);
+        assert_eq(atoi("1"),        1);
+        assert_eq(atoi("543"),      543);
+        assert_eq(atoi("32767"),    32767);
+        assert_eq(atoi("-1"),       -1);
+        assert_eq(atoi("-543"),     -543);
+        assert_eq(atoi("-32768"),   -32768);
         return 0;
     }
     `,

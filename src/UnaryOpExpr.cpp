@@ -1,4 +1,4 @@
-/*  $Id: UnaryOpExpr.cpp,v 1.20 2016/07/24 23:03:07 sarrazip Exp $
+/*  $Id: UnaryOpExpr.cpp,v 1.21 2016/08/23 01:34:58 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -28,6 +28,7 @@
 #include "IdentifierExpr.h"
 #include "CastExpr.h"
 #include "Declaration.h"
+#include "StringLiteralExpr.h"
 
 #include <assert.h>
 
@@ -181,7 +182,10 @@ UnaryOpExpr::setSizeofArgTypeDesc()
         // has already been issued about the invalid argument.
 
         if (sizeofArgTypeDesc->type == ARRAY_TYPE
-                && (! subExpr->asVariableExpr() && ! dynamic_cast<ObjectMemberExpr *>(subExpr) && ! isArrayRef(subExpr)))
+                && (! subExpr->asVariableExpr()
+                   && ! dynamic_cast<ObjectMemberExpr *>(subExpr)
+                   && ! dynamic_cast<StringLiteralExpr *>(subExpr)
+                   && ! isArrayRef(subExpr)))
             errormsg("taking size of array expression that is not an array name nor a struct member");
     }
 
@@ -306,6 +310,14 @@ UnaryOpExpr::getSizeOfValue(uint16_t &size) const
             return true;
         }
     }
+
+    // sizeof("literal") is the size between the quotes, plus 1 for the terminating '\0'.
+    if (const StringLiteralExpr *sle = dynamic_cast<const StringLiteralExpr *>(subExpr))
+    {
+        size = sle->getDecodedLength() + 1;
+        return true;
+    }
+
     errormsg("unexpected type %s as argument of sizeof()", subExpr->getTypeDesc()->toString().c_str());
     return false;
 }

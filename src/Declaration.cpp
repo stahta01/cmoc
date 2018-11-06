@@ -1,4 +1,4 @@
-/*  $Id: Declaration.cpp,v 1.34 2016/08/20 01:07:04 sarrazip Exp $
+/*  $Id: Declaration.cpp,v 1.37 2016/09/01 02:24:01 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -630,6 +630,7 @@ Declaration::checkArrayInitializer(Tree *initializationExpr, const TypeDesc *var
     {
         // Check that initializationExpr is not too long. Warn if too short.
         //
+        assert(dimIndex < arrayDimensions.size());
         uint16_t numArrayElements = arrayDimensions[dimIndex];
         if (seq->size() > size_t(numArrayElements))
         {
@@ -654,7 +655,7 @@ Declaration::checkArrayInitializer(Tree *initializationExpr, const TypeDesc *var
             || ! initializationExpr->getTypeDesc()->isPtrOrArray()
             || initializationExpr->getTypeDesc()->getPointedType() != BYTE_TYPE)
         {
-            initializationExpr->errormsg("initializer for array '%s' is invalid", variableId.c_str());
+            initializationExpr->errormsg("initializer for array `%s' is invalid", variableId.c_str());
         }
     }
 }
@@ -675,7 +676,8 @@ Declaration::checkClassInitializer(Tree *initializationExpr, const TypeDesc *var
     const string &className = varTypeDesc->className;
 
     TreeSequence *seq = dynamic_cast<TreeSequence *>(initializationExpr);
-    if (seq == NULL && initializationExpr->getTypeDesc() != varTypeDesc)  // if neither list nor same-type struct
+    if (seq == NULL && initializationExpr->getTypeDesc() != varTypeDesc
+                    && ! isFloatOrLongInitWithNumber(varTypeDesc, *initializationExpr))
     {
         initializationExpr->errormsg("initializer for struct %s is of type `%s': must be list, or struct of same type",
                                      className.c_str(), initializationExpr->getTypeDesc()->toString().c_str());
@@ -705,6 +707,14 @@ Declaration::checkClassInitializer(Tree *initializationExpr, const TypeDesc *var
 }
 
 
+bool
+Declaration::isFloatOrLongInitWithNumber(const TypeDesc *varTypeDesc, const Tree &initializationExpr)
+{
+    return (varTypeDesc->isLong() || varTypeDesc->isFloat())
+           && initializationExpr.getTypeDesc()->isNumerical();
+}
+
+
 /*virtual*/
 CodeStatus
 Declaration::emitCode(ASMText &out, bool lValue) const
@@ -716,6 +726,7 @@ Declaration::emitCode(ASMText &out, bool lValue) const
     {
         writeLineNoComment(out, "init of variable " + variableId);
 
+        const TypeDesc *declTD = getTypeDesc();
         const WordConstantExpr *wce = dynamic_cast<const WordConstantExpr *>(initializationExpr);
         const StringLiteralExpr *sle = dynamic_cast<const StringLiteralExpr *>(initializationExpr);
 
@@ -725,7 +736,7 @@ Declaration::emitCode(ASMText &out, bool lValue) const
         {
             uint16_t writingOffset = 0;
             uint16_t numArrayElements = (arrayDimensions.size() > 0 ? arrayDimensions.front() : 1);
-            if (!emitInitCode(out, seq, getTypeDesc(), numArrayElements, writingOffset))
+            if (!emitInitCode(out, seq, declTD, numArrayElements, writingOffset))
                 return false;
         }
         else if (getType() == ARRAY_TYPE && sle)  // if char[] init by string literal
@@ -746,13 +757,13 @@ Declaration::emitCode(ASMText &out, bool lValue) const
         }
         else if (initializationExpr->getType() == CLASS_TYPE)  // if struct initialized from other struct
         {
-            assert(getTypeDesc() == initializationExpr->getTypeDesc());
+            assert(declTD == initializationExpr->getTypeDesc());
 
             if (!initializationExpr->emitCode(out, true))  // get address of other struct in X
                 return false;
 
-            int16_t structSizeInBytes = TranslationUnit::instance().getTypeSize(*getTypeDesc());
-            out.ins("LDD", "#" + wordToString(structSizeInBytes), "size of struct " + getTypeDesc()->className);
+            int16_t structSizeInBytes = TranslationUnit::instance().getTypeSize(*declTD);
+            out.ins("LDD", "#" + wordToString(structSizeInBytes), "size of struct " + declTD->className);
             out.ins("PSHS", "B,A", "push size to _memcpy");
             out.ins("PSHS", "X", "source struct");
             out.ins("LEAX", getFrameDisplacementArg(), "destination struct: " + variableId);
@@ -794,14 +805,31 @@ Declaration::emitCode(ASMText &out, bool lValue) const
                     out.ins("CLRA");
             }
 
-            string store = getStoreInstruction(getType());
-            if (store.empty())
+            if (declTD->isFloat())
             {
-                assert(!"unknown type");
-                return false;
+                out.ins("LEAX", getFrameDisplacementArg(), "address of variable " + variableId);
+                const char *utility = NULL;
+                if (     declTD->isSingle() && ! initializationExpr->isSigned())
+                    utility = "initSingleFromUWord";
+                else if (declTD->isSingle() &&   initializationExpr->isSigned())
+                    utility = "initSingleFromSWord";
+                else if (declTD->isDouble() && ! initializationExpr->isSigned())
+                    utility = "initDoubleFromUWord";
+                else if (declTD->isDouble() &&   initializationExpr->isSigned())
+                    utility = "initDoubleFromSWord";
+                callUtility(out, utility);
             }
+            else
+            {
+                string store = getStoreInstruction(getType());
+                if (store.empty())
+                {
+                    assert(!"unknown type");
+                    return false;
+                }
 
-            out.ins(store, getFrameDisplacementArg(), "variable " + variableId);
+                out.ins(store, getFrameDisplacementArg(), "variable " + variableId);
+            }
         }
     }
     return true;

@@ -1,4 +1,4 @@
-/*  $Id: TypeDesc.h,v 1.5 2016/07/10 06:36:22 sarrazip Exp $
+/*  $Id: TypeDesc.h,v 1.7 2016/08/27 04:14:28 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -86,6 +86,16 @@ public:
     bool isPtrOrArray() const;
 
     bool isIntegral() const;
+
+    bool isNumerical() const;
+
+    bool isLong() const;
+
+    bool isFloat() const;
+
+    bool isSingle() const;
+
+    bool isDouble() const;
 
     const TypeDesc *getPointedTypeDesc() const;
 

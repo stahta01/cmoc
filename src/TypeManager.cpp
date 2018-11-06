@@ -1,4 +1,4 @@
-/*  $Id: TypeManager.cpp,v 1.15 2016/07/24 23:03:07 sarrazip Exp $
+/*  $Id: TypeManager.cpp,v 1.17 2016/08/27 00:53:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -23,7 +23,9 @@
 #include "Declarator.h"
 #include "WordConstantExpr.h"
 #include "ExpressionTypeSetter.h"
-
+#include "ClassDef.h"
+#include "Scope.h"
+#include "Declarator.h"
 
 using namespace std;
 
@@ -34,6 +36,12 @@ TypeManager::TypeManager()
     enumTypeNames(),
     enumerators()
 {
+}
+
+
+void
+TypeManager::createBasicTypes()
+{
     // The order is significant. See the other methods.
     types.push_back(new TypeDesc(VOID_TYPE, NULL, string(), false, false));
     types.push_back(new TypeDesc(BYTE_TYPE, NULL, string(), false, false));
@@ -42,6 +50,63 @@ TypeManager::TypeManager()
     types.push_back(new TypeDesc(WORD_TYPE, NULL, string(), true, false));
     types.push_back(new TypeDesc(SIZELESS_TYPE, NULL, string(), false, false));
     types.push_back(new TypeDesc(SIZELESS_TYPE, NULL, string(), true, false));
+}
+
+
+void
+TypeManager::createInternalStructs(Scope &globalScope)
+{
+    // Internal structs that represent 'float', 'double', 'long' and 'unsigned long', e.g.,
+    // struct _Float { unsigned char bytes[N]; };
+    // struct _Long { int hi; unsigned lo; };
+    //
+    // Order matters: these calls add elements to types[] and their indices are used in
+    // getFloatType(), getLongType().
+    //
+    createStructWithPairOfWords(globalScope, "_Long",   true);
+    createStructWithPairOfWords(globalScope, "_ULong", false);
+    createStructWithArrayOfBytes(globalScope, "_Float",  5);  // TODO: make these sizes changeable with command-line param.
+    createStructWithArrayOfBytes(globalScope, "_Double", 8);
+}
+
+
+void
+TypeManager::createStructWithArrayOfBytes(Scope &globalScope, const char *structName, size_t numBytesInArray)
+{
+    types.push_back(new TypeDesc(CLASS_TYPE, NULL, structName, false, false));
+    ClassDef *theStruct = new ClassDef();
+    theStruct->setName(structName);  // use same name as TypeDesc
+    const TypeDesc *memberTypeDesc = getIntType(BYTE_TYPE, false);
+    Declarator *memberDeclarator = new Declarator("bytes", "<internal>", 0);  // no source filename and line no
+    memberDeclarator->addArraySizeExpr(new WordConstantExpr(numBytesInArray, true, false));  // make the declarator an array
+    assert(memberDeclarator->isArray());
+    ClassDef::ClassMember *structMember = new ClassDef::ClassMember(memberTypeDesc, memberDeclarator);  // this appends 'unsigned char[]' to types[]
+    theStruct->addDataMember(structMember);
+    globalScope.declareClass(theStruct);
+}
+
+
+void
+TypeManager::createStructWithPairOfWords(Scope &globalScope, const char *structName, bool isHighWordSigned)
+{
+    types.push_back(new TypeDesc(CLASS_TYPE, NULL, structName, false, false));
+    ClassDef *theStruct = new ClassDef();
+    theStruct->setName(structName);  // use same name as TypeDesc
+
+    const TypeDesc *highWordTypeDesc = getIntType(WORD_TYPE, isHighWordSigned);
+    const TypeDesc *lowWordTypeDesc  = getIntType(WORD_TYPE, false);
+
+    Declarator *highMemberDeclarator = new Declarator("hi", "<internal>", 0);  // no source filename and line no
+    Declarator *lowMemberDeclarator  = new Declarator("lo", "<internal>", 0);
+
+    ClassDef::ClassMember *highStructMember = new ClassDef::ClassMember(highWordTypeDesc, highMemberDeclarator);
+    ClassDef::ClassMember *lowStructMember  = new ClassDef::ClassMember(lowWordTypeDesc,  lowMemberDeclarator);
+
+    // We compile for a big endian platform, so the high word is declared first.
+    theStruct->addDataMember(highStructMember);
+    theStruct->addDataMember(lowStructMember);
+
+    globalScope.declareClass(theStruct);
 }
 
 
@@ -72,6 +137,29 @@ TypeManager::getIntType(BasicType byteOrWordType, bool isSigned) const
         return types[isSigned ? 4 : 3];
     assert(false);
     return NULL;
+}
+
+
+const TypeDesc *
+TypeManager::getIntType(const TypeDesc *baseTypeDesc, bool isSigned) const
+{
+    if (baseTypeDesc->type == BYTE_TYPE || baseTypeDesc->type == WORD_TYPE)
+        return getIntType(baseTypeDesc->type, isSigned);
+    return getLongType(isSigned);
+}
+
+
+const TypeDesc *
+TypeManager::getLongType(bool isSigned) const
+{
+    return types[isSigned ? 7 : 8];
+}
+
+
+const TypeDesc *
+TypeManager::getFloatType(bool isDoublePrecision) const
+{
+    return types[isDoublePrecision ? 11 : 9];
 }
 
 
@@ -159,7 +247,7 @@ TypeManager::getArrayOf(const TypeDesc *pointedTypeDesc, size_t numArrayDimensio
 
 // getSizedArrayOf("int", {2, 3, 4}, 2) gives int[2][3][4].
 // It recursively calls getSizedArrayOf("int", {2, 3, 4}, 1) to request int[2][3].
-// This called getSizedArrayOf("int", {2, 3, 4}, 0) to get int[2].
+// This calls getSizedArrayOf("int", {2, 3, 4}, 0) to get int[2].
 // Then int[2][3] is created and returned.
 // Then int[2][3][4] is created and returned.
 //
@@ -433,6 +521,14 @@ TypeManager::setEnumeratorTypes() const
             enumerator->valueExpr->iterate(ets);
         }
     }
+}
+
+
+void
+TypeManager::dumpTypes(std::ostream &out) const
+{
+    for (vector<TypeDesc *>::const_iterator it = types.begin(); it != types.end(); ++it)
+        out << **it << "\n";
 }
 
 
