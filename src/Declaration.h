@@ -1,4 +1,4 @@
-/*  $Id: Declaration.h,v 1.12 2016/08/27 04:14:28 sarrazip Exp $
+/*  $Id: Declaration.h,v 1.13 2016/09/15 03:34:56 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -89,6 +89,8 @@ public:
     }
 
     bool emitStaticValues(ASMText &out, Tree *arrayElementInitializer, const TypeDesc *requiredTypeDesc);
+
+    virtual bool isLValue() const { return false; }
 
 public:
 

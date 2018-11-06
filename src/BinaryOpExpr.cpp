@@ -1,4 +1,4 @@
-/*  $Id: BinaryOpExpr.cpp,v 1.60 2016/08/14 02:38:37 sarrazip Exp $
+/*  $Id: BinaryOpExpr.cpp,v 1.64 2016/09/15 03:43:57 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -29,6 +29,7 @@
 #include "CastExpr.h"
 #include "ClassDef.h"
 #include "ObjectMemberExpr.h"
+#include "FunctionCallExpr.h"
 
 #include <assert.h>
 
@@ -72,9 +73,14 @@ BinaryOpExpr::checkSemantics(Functor &)
     case RIGHT_ASSIGN:
         if (subExpr0->getType() == ARRAY_TYPE)
             errormsg("cannot assign to array name");
+        else if (!subExpr0->isLValue())
+            errormsg("lvalue required as left operand of assignment");
         break;
 
     case ARRAY_REF:
+        if (!subExpr0->isLValue() && subExpr0->getType() != POINTER_TYPE)
+            errormsg("lvalue required as left operand of array reference");
+
         // Compute the number of bytes per array element, including the case
         // where subExpr0 is an array of arrays, or a pointer to an array.
         // The last case is useful in the case of a function parameter of array type,
@@ -94,6 +100,7 @@ BinaryOpExpr::checkSemantics(Functor &)
     default:
         ;
     }
+
 }
 
 
@@ -185,7 +192,9 @@ BinaryOpExpr::emitCode(ASMText &out, bool lValue) const
 
         case LEFT_SHIFT:
         case RIGHT_SHIFT:
-            return emitShift(out, lValue, oper == LEFT_SHIFT);
+            if (lValue)
+                return false;  // should have been rejected before code emission
+            return emitShift(out, oper == LEFT_SHIFT, false);
 
         case ASSIGNMENT:
         case INC_ASSIGN:
@@ -988,12 +997,13 @@ BinaryOpExpr::emitLogicalOr(ASMText &out, bool lValue) const
 }
 
 
+// changeLeftSide: If true, the left side gets the result of the shift AND
+//                 the address of the left side is left in X.
+//                 If false, only an r-value is computed (and left in D or B).
+//
 CodeStatus
-BinaryOpExpr::emitShift(ASMText &out, bool lValue, bool isLeftShift) const
+BinaryOpExpr::emitShift(ASMText &out, bool isLeftShift, bool changeLeftSide) const
 {
-    if (lValue)
-        return false;
-
     bool isLeftByte = (getType() == BYTE_TYPE);
 
     uint16_t numBits = 0;
@@ -1001,11 +1011,16 @@ BinaryOpExpr::emitShift(ASMText &out, bool lValue, bool isLeftShift) const
 
     if (constShift && numBits <= 7)  // if number of bits to shift by is a constant and small
     {
-        if (!subExpr0->emitCode(out, false))
+        // If changeLeftSide true, get address of left side in X.
+        // Otherwise, get value of left side in D or B.
+        if (!subExpr0->emitCode(out, changeLeftSide))
             return false;
 
         if (isLeftByte)
         {
+            if (changeLeftSide)
+                out.ins("LDB", ",X", "get byte to be shifted");
+
             if (!isLeftShift && subExpr0->isSigned() && numBits == 7)
             {
                 // Left side is in B. Result of right shift is $FF if B < 0, zero otherwise.
@@ -1019,15 +1034,30 @@ BinaryOpExpr::emitShift(ASMText &out, bool lValue, bool isLeftShift) const
                 for ( ; numBits--; )
                     out.ins(op);
             }
+
+            if (changeLeftSide)
+            {
+                out.ins("STB", ",X", "store shifted byte");
+                // Leave address of left side in X.
+            }
         }
         else
         {
+            if (changeLeftSide)
+                out.ins("LDD", ",X", "get word to be shifted");
+
             const char *op1 = (isLeftShift ? "LSLB" : (subExpr0->isSigned() ? "ASRA" : "LSRA"));
             const char *op2 = (isLeftShift ? "ROLA" : "RORB");
             for ( ; numBits--; )
             {
                 out.ins(op1);
                 out.ins(op2);
+            }
+
+            if (changeLeftSide)
+            {
+                out.ins("STD", ",X", "store shifted word");
+                // Leave address of left side in X.
             }
         }
     }
@@ -1037,8 +1067,11 @@ BinaryOpExpr::emitShift(ASMText &out, bool lValue, bool isLeftShift) const
         {
             if (!isLeftShift && subExpr0->isSigned())
             {
-                if (!subExpr0->emitCode(out, false))
+                if (!subExpr0->emitCode(out, changeLeftSide))
                     return false;
+
+                if (changeLeftSide)
+                    out.ins("LDB", ",X", "get byte to be shifted");
 
                 // Left side is in B. Result of right shift is $FF if B < 0, zero otherwise.
                 out.ins("SEX");
@@ -1048,13 +1081,22 @@ BinaryOpExpr::emitShift(ASMText &out, bool lValue, bool isLeftShift) const
             else
             {
                 // Note: No call to subExpr0->emitCode() needed.
-                out.ins("CLRB", "", "shift B 8 bits " + string(isLeftShift ? "left" : "right"));
+                out.ins("CLRB", "", "shift B 8 or more bits " + string(isLeftShift ? "left" : "right"));
+            }
+
+            if (changeLeftSide)
+            {
+                out.ins("STB", ",X", "store shifted byte");
+                // Leave address of left side in X.
             }
         }
-        else
+        else  // left is word:
         {
-            if (!subExpr0->emitCode(out, false))
+            if (!subExpr0->emitCode(out, changeLeftSide))
                 return false;
+
+            if (changeLeftSide)
+                out.ins("LDD", ",X", "get word to be shifted");
 
             if (isLeftShift)
             {
@@ -1092,12 +1134,24 @@ BinaryOpExpr::emitShift(ASMText &out, bool lValue, bool isLeftShift) const
                             out.ins(subExpr0->isSigned() ? "ASRB" : "LSRB");
                 }
             }
+
+            if (changeLeftSide)
+            {
+                out.ins("STD", ",X", "store shifted word");
+                // Leave address of left side in X.
+            }
         }
     }
     else  // general case:
     {
-        if (!subExpr0->emitCode(out, false))
+        if (!subExpr0->emitCode(out, changeLeftSide))
             return false;
+
+        if (changeLeftSide)
+        {
+            out.ins(subExpr0->getLoadIns(), ",X", "get value to be shifted");
+            out.ins("PSHS", "X", "preserve address of left side");
+        }
 
         const char *utilityName = NULL;  // name of stdlib.inc subroutine
         if (isLeftShift)
@@ -1115,6 +1169,13 @@ BinaryOpExpr::emitShift(ASMText &out, bool lValue, bool isLeftShift) const
             out.ins("CLRA");
 
         callUtility(out, utilityName);
+
+        if (changeLeftSide)
+        {
+            out.ins("PULS", "X", "restore address of left side of shift");
+            out.ins(subExpr0->getStoreIns(), ",X", "store shifted value");
+            // Leave address of left side in X.
+        }
     }
 
     return true;
@@ -1164,10 +1225,9 @@ BinaryOpExpr::getOperatorToken(Op oper)
 }
 
 
-// If true is returned, the assignment is completed emitted.
+// If true is returned, the assignment is completely emitted.
 // If false is returned, no instructions have been emitted,
-// but assignedValueArg may have received a value.
-//
+// but assignedValueArg may have received a (non empty) value.
 //
 bool
 BinaryOpExpr::emitAssignmentIfNoFuncAddrExprInvolved(ASMText &out,
@@ -1276,6 +1336,69 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
         return true;
     }
 
+    // Process /= and %=.
+    //
+    if (oper == DIV_ASSIGN || oper == MOD_ASSIGN)
+    {
+        // Emit the dividend as an l-value, which puts its address in X.
+        if (!subExpr0->emitCode(out, true))
+            return false;
+        out.ins("PSHS", "X", "preserve address of left side of assignment");
+
+        // Emit the divisor as an r-value, which puts the divisor in D or B.
+        // This may trash X, hence the previous PSHS X.
+        if (!subExpr1->emitCode(out, false))
+            return false;
+
+        // Promote the divisor to a word (in D).
+        if (subExpr1->getType() == BYTE_TYPE)
+            out.ins(subExpr1->getConvToWordIns());
+
+        // Get the value of the dividend in X, without touching D, which
+        // contains the divisor.
+        if (getType() == BYTE_TYPE)
+        {
+            out.ins("PSHS", "B", "preserve divisor");
+            out.ins("LDB", "[1,S]", "get value of left side of assignment");
+            out.ins(subExpr0->getConvToWordIns(), "promote dividend to word in D");
+            out.ins("TFR", "D,X", "dividend to X");
+            out.ins("PULS", "B", "restore divisor");
+        }
+        else
+            out.ins("LDX", "[,S]", "get value of left side of assignment");
+
+        // Divide X by D: quotient will be in X, remainder in D.
+        callUtility(out, subExpr0->isSigned() && subExpr1->isSigned() ? "SDIV16" : "DIV16");
+
+        // Store the result.
+        if (oper == DIV_ASSIGN)
+        {
+            out.ins("TFR", "X,D", "quotient to D");  // necessary in case lValue is false: r-value must be left in D
+            if (getType() == BYTE_TYPE)
+                out.ins("STB", "[,S]", "store LSB of quotient at address of left side of assignment");
+            else
+                out.ins("STD", "[,S]", "store quotient at address of left side of assignment");
+        }
+        else  // MOD_ASSIGN: remainder in D
+        {
+            if (getType() == BYTE_TYPE)
+                out.ins("STB", "[,S]", "store LSB of remainder at address of left side of assignment");
+            else
+                out.ins("STD", "[,S]", "store quotient at address of left side of assignment");
+        }
+        if (lValue)
+            out.ins("PULS", "X", "assignment requested as l-value, so X => address of left side");
+        else
+            out.ins("LEAS", "2,S", "dispose of address of left side of assignment");
+        return true;
+    }
+
+    // Process <<= and >>=.
+    if (oper == LEFT_ASSIGN || oper == RIGHT_ASSIGN)
+    {
+        return emitShift(out, oper == LEFT_ASSIGN, true);
+    }
+
     /*  Prepare the assigned value argument, i.e., immediate, pushed,
         indexed, etc:
     */
@@ -1308,7 +1431,7 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
             }
             else
             {
-                // If left side is word, always push word.
+                // Left side is word so force right side to be word.
                 if (subExpr1->getType() == BYTE_TYPE)
                     out.ins(subExpr1->getConvToWordIns());
 
@@ -1452,39 +1575,6 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
             out.ins("STD", destAddr);
         }
     }
-    else if (oper == DIV_ASSIGN || oper == MOD_ASSIGN)
-    {
-        assert(getType() != VOID_TYPE);
-        if (destAddr == ",X")
-            out.ins("PSHS", "X");
-
-        if (getType() == BYTE_TYPE)
-        {
-            out.ins("LDB", destAddr, "dividend");
-            out.ins(getConvToWordIns());
-            out.ins("TFR", "D,X");
-            out.ins("LDB", assignedValueArg, "divisor");
-        }
-        else
-        {
-            out.ins("LDX", destAddr, "dividend");
-            out.ins("LDD", assignedValueArg, "divisor");
-        }
-
-        callUtility(out, subExpr0->isSigned() && subExpr1->isSigned() ? "SDIV16" : "DIV16", "/=");
-
-        if (oper == DIV_ASSIGN)
-            out.ins("TFR", "X,D");
-        if (destAddr == ",X")
-            out.ins("PULS", "X");  // necessary if lValue is true
-        if (getType() == BYTE_TYPE)
-        {
-            out.ins("STB", destAddr);
-            out.ins("CLRA");
-        }
-        else
-            out.ins("STD", destAddr);
-    }
     else if (oper == XOR_ASSIGN || oper == AND_ASSIGN || oper == OR_ASSIGN)
     {
         assert(getType() != VOID_TYPE);
@@ -1514,15 +1604,6 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
             out.ins(op + "B", "1,X");
             out.ins("STD", ",X");
         }
-    }
-    else if (oper == LEFT_ASSIGN || oper == RIGHT_ASSIGN)
-    {
-        assert(!lValue || !destAddr.empty());
-
-        if (!emitShift(out, false, oper == LEFT_ASSIGN))  // emit as r-value
-            return false;
-
-        out.ins((subExpr0->getType() == BYTE_TYPE ? "STB" : "STD"), destAddr, "result of shift assignment");
     }
 
     // If a left-value address was requested, and the destination address

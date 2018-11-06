@@ -1,3 +1,11 @@
+2016-09-17: Version 0.1.32 released
+
+    Fixed bugs with the /=, %=, <<= and >>= operators.
+    
+    The compiler now checks that operators that require an l-value
+    are actually applied on one. For example, &(n >> 1) is illegal
+    and is now reported as such. 
+
 2016-09-12: Version 0.1.31 released
 
     Inline assembly: When an asm{} block refers to a C variable

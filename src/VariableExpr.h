@@ -1,4 +1,4 @@
-/*  $Id: VariableExpr.h,v 1.8 2016/07/24 23:03:07 sarrazip Exp $
+/*  $Id: VariableExpr.h,v 1.9 2016/09/15 03:34:58 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -51,6 +51,8 @@ public:
     virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
 
     virtual bool iterate(Functor &f);
+
+    virtual bool isLValue() const { return true; }
 
 private:
     // Forbidden:

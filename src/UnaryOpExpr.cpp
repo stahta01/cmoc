@@ -1,4 +1,4 @@
-/*  $Id: UnaryOpExpr.cpp,v 1.21 2016/08/23 01:34:58 sarrazip Exp $
+/*  $Id: UnaryOpExpr.cpp,v 1.24 2016/09/15 03:34:57 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -34,6 +34,26 @@
 
 using namespace std;
 
+
+const char *
+UnaryOpExpr::getOperatorName(Op op)
+{
+    switch (op)
+    {
+    case IDENTITY: return "identity";
+    case NEG: return "arithmetic negation";
+    case POSTINC: return "post-increment";
+    case POSTDEC: return "post-decrement";
+    case PREINC: return "pre-increment";
+    case PREDEC: return "pre-decrement";
+    case ADDRESS_OF: return "address-of";
+    case INDIRECTION: return "indirection";
+    case BOOLEAN_NEG: return "boolean negation";
+    case BITWISE_NOT: return "bitwise not";
+    case SIZE_OF: return "sizeof";
+    default: return "<UNKNOWN UNARY OPERATOR>";
+    }
+}
 
 UnaryOpExpr::UnaryOpExpr(Op op, Tree *e)
   : Tree(),
@@ -86,8 +106,15 @@ UnaryOpExpr::getSubExpr()
 void
 UnaryOpExpr::checkSemantics(Functor & /*f*/)
 {
+    bool requireLValueSubExpr = false;
+
     switch (oper)
     {
+        case ADDRESS_OF:
+            assert(subExpr != NULL);
+            requireLValueSubExpr = true;
+            break;
+
         case INDIRECTION:
             assert(subExpr != NULL);
             if (subExpr->getType() == POINTER_TYPE || subExpr->getType() == ARRAY_TYPE)
@@ -112,6 +139,7 @@ UnaryOpExpr::checkSemantics(Functor & /*f*/)
         case PREDEC:
         case POSTINC:
         case POSTDEC:
+            requireLValueSubExpr = true;
             if (subExpr->getType() == ARRAY_TYPE)
                 errormsg("cannot %screment array name", (oper == PREINC || oper == POSTINC ? "in" : "de"));
             break;
@@ -128,6 +156,11 @@ UnaryOpExpr::checkSemantics(Functor & /*f*/)
 
         default:
             ;
+    }
+
+    if (requireLValueSubExpr && !subExpr->isLValue())
+    {
+        errormsg("lvalue required as operand of %s", getOperatorName(oper));
     }
 }
 
@@ -379,7 +412,7 @@ UnaryOpExpr::emitCode(ASMText &out, bool lValue) const
         case PREDEC:
         {
             if (!subExpr->emitCode(out, true))
-                assert(!"increment of r-value");
+                return false;
 
             bool isInc = (oper == POSTINC || oper == PREINC);
             bool isPre = (oper == PREINC || oper == PREDEC);
@@ -409,7 +442,7 @@ UnaryOpExpr::emitCode(ASMText &out, bool lValue) const
         case ADDRESS_OF:
         {
             if (lValue)
-                return false;
+                return false;  // should have been rejected before code emission
 
             // Special case #1: if subExpr is an array, we cannot ask for its l-value,
             // because it has none (i.e., cannot do this: word a[5]; a = 0;).

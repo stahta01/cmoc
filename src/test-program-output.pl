@@ -5894,14 +5894,6 @@ expected => "writableText=[foo]\nconstText=[bar]\nwritableText=[fXo]\nconstText=
 {
 title => q{Promotion to int for comparisons},
 program => q`
-    /*FIXME: wrong
-    int s0(char *e)
-    {
-        if (*e == 0xFF)  // always false because signed byte cannot equal 255
-            return 1;
-        return 0;
-    }
-    */
     int s1(char *e)
     {
         if (*e == (char) 0xFF)  // *e compared with -1
@@ -5935,7 +5927,6 @@ program => q`
     int main()
     {
         char c = (char) 0xFF;
-        //FIXME assert_eq(s0(&c), 0);
         assert_eq(s1(&c), 1);
         assert_eq(s2(&c), 1);
         unsigned char uc = 0xFF;
@@ -6929,6 +6920,179 @@ program => q`
         assert_eq(atoi("-32768"),   -32768);
         return 0;
     }
+    `,
+expected => ""
+},
+
+
+{
+title => q{Assignment operators on a struct field},
+program => q`
+    typedef struct {
+        int _dummy, value;
+    } WordValue;
+    
+    typedef struct {
+        int _dummy;
+        char value;
+    } ByteValue;
+    
+    void test1div_ww(WordValue* t)
+    {
+        t->value /= 2;
+    }
+
+    void test1div_bw(ByteValue* t)
+    {
+        t->value /= 2;
+    }
+
+    void test1mod_ww(WordValue* t)
+    {
+        t->value %= 100;
+    }
+
+    void test1mod_bw(ByteValue* t)
+    {
+        t->value %= 14;
+    }
+
+    void test1sl_ww(WordValue* t)
+    {
+        t->value <<= 1;
+    }
+
+    void test1sl_bw(ByteValue* t)
+    {
+        t->value <<= 1;
+    }
+
+    unsigned one() { return 1; }
+    void test1sl_nonConstRightSide(WordValue* t)
+    {
+        t->value <<= one();
+    }
+
+    void test1sr_ww(WordValue* t)
+    {
+        t->value >>= 1;
+    }
+    
+    void test1sr_bw(ByteValue* t)
+    {
+        t->value >>= 1;
+    }
+    
+    void test2div(WordValue* t)
+    {
+        t->value = t->value / 2;
+    }
+
+    void test2mod(WordValue* t)
+    {
+        t->value = t->value % 100;
+    }
+
+    void test2sl(WordValue* t)
+    {
+        t->value = t->value << 1;
+    }
+
+    void test2sr(WordValue* t)
+    {
+        t->value = t->value >> 1;
+    }
+    
+    void testWithWordAsLeftSide()
+    {
+        WordValue s0 = { 1111, 0 };
+        
+        s0.value = 4444;
+        test1div_ww(&s0);
+        assert_eq(s0.value, 2222);
+
+        s0.value = 12345;
+        test1mod_ww(&s0);
+        assert_eq(s0.value, 45);
+
+        s0.value = 333;
+        test1sl_ww(&s0);
+        assert_eq(s0.value, 666);
+        
+        assert_eq(&(s0.value /= 2), &s0.value);
+        assert_eq(&(s0.value %= 2), &s0.value);
+        assert_eq(&(s0.value >>= 1), &s0.value);
+        assert_eq(&(s0.value <<= 1), &s0.value);
+        
+        s0.value = 333;
+        test1sl_nonConstRightSide(&s0);
+        assert_eq(s0.value, 666);
+
+        s0.value = 444;
+        test1sr_ww(&s0);
+        assert_eq(s0.value, 222);
+        
+        s0.value <<= 10;
+        assert_eq(s0.value, 0x7800);
+        s0.value >>= 10;
+        assert_eq(s0.value, 30);
+
+        s0.value = 4444;
+        test2div(&s0);
+        assert_eq(s0.value, 2222);
+
+        s0.value = 12345;
+        test2mod(&s0);
+        assert_eq(s0.value, 45);
+
+        s0.value = 333;
+        test2sl(&s0);
+        assert_eq(s0.value, 666);
+
+        s0.value = 444;
+        test2sr(&s0);
+        assert_eq(s0.value, 222);
+    }
+    
+    void testWithByteAsLeftSide()
+    {
+        ByteValue s0 = { 1111, 0 };
+        
+        s0.value = 44;
+        test1div_bw(&s0);
+        assert_eq(s0.value, 22);
+
+        s0.value = 123;
+        test1mod_bw(&s0);
+        assert_eq(s0.value, 11);
+
+        s0.value = 33;
+        test1sl_bw(&s0);
+        assert_eq(s0.value, 66);
+        
+        assert_eq(&(s0.value /= 2), &s0.value);
+        assert_eq(&(s0.value %= 2), &s0.value);
+        assert_eq(&(s0.value >>= 1), &s0.value);
+        assert_eq(&(s0.value <<= 1), &s0.value);
+
+        s0.value = 44;
+        test1sr_bw(&s0);
+        assert_eq(s0.value, 22);
+        
+        s0.value <<= 10;
+        assert_eq(s0.value, 0);
+        s0.value = 255;
+        s0.value >>= 10;
+        assert_eq(s0.value, -1);  // because 'value' is signed
+    }
+
+    int main()
+    {
+        testWithWordAsLeftSide();
+        testWithByteAsLeftSide();
+        return 0;
+    }
+    
     `,
 expected => ""
 },

@@ -1,4 +1,4 @@
-/*  $Id: BinaryOpExpr.h,v 1.10 2016/07/26 02:38:58 sarrazip Exp $
+/*  $Id: BinaryOpExpr.h,v 1.13 2016/09/15 03:43:57 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -76,6 +76,12 @@ public:
 
     virtual void replaceChild(Tree *existingChild, Tree *newChild);
 
+    virtual bool isLValue() const { return oper == ASSIGNMENT || oper == INC_ASSIGN || oper == DEC_ASSIGN
+                                        || oper == MUL_ASSIGN || oper == DIV_ASSIGN || oper == MOD_ASSIGN
+                                        || oper == XOR_ASSIGN || oper == AND_ASSIGN || oper == OR_ASSIGN
+                                        || oper == LEFT_ASSIGN || oper == RIGHT_ASSIGN
+                                        || oper == ARRAY_REF; }
+
 private:
 
     bool emitComparisonIfNoFuncAddrExprInvolved(ASMText &out) const;
@@ -107,7 +113,7 @@ private:
     CodeStatus emitMulDivMod(ASMText &out, bool lValue) const;
     CodeStatus emitLogicalAnd(ASMText &out, bool lValue) const;
     CodeStatus emitLogicalOr(ASMText &out, bool lValue) const;
-    CodeStatus emitShift(ASMText &out, bool lValue, bool isLeftShift) const;
+    CodeStatus emitShift(ASMText &out, bool isLeftShift, bool changeLeftSide) const;
     CodeStatus emitAssignment(ASMText &out, bool lValue, Op oper) const;
     static bool isArrayOrPointerVariable(const Tree *tree);
     static int16_t getNumBytesPerMultiDimArrayElement(const Tree *tree);

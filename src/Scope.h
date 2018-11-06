@@ -1,4 +1,4 @@
-/*  $Id: Scope.h,v 1.3 2016/03/25 02:00:09 sarrazip Exp $
+/*  $Id: Scope.h,v 1.4 2016/09/15 03:34:57 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -94,6 +94,8 @@ public:
     */
     template <class F>
     void forEachClassDef(F &f);
+
+    virtual bool isLValue() const { return false; }
 
 private:
 

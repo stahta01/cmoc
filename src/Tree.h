@@ -1,4 +1,4 @@
-/*  $Id: Tree.h,v 1.15 2016/07/24 23:03:07 sarrazip Exp $
+/*  $Id: Tree.h,v 1.17 2016/09/15 03:34:57 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -75,6 +75,8 @@ public:
     bool isSigned() const { assert(typeDesc); return typeDesc->isSigned; }
     bool isUnsignedOrPositiveConst() const;
     const char *getConvToWordIns() const { return isSigned() ? "SEX" : "CLRA"; }
+    const char *getLoadIns() const  { return getType() == BYTE_TYPE ? "LDB" : "LDD"; }
+    const char *getStoreIns() const { return getType() == BYTE_TYPE ? "STB" : "STD"; }
 
     /** Returns an empty string if there is no class name.
     */
@@ -118,6 +120,10 @@ public:
     // contains a VariableExpr.
     //
     const VariableExpr *asVariableExpr() const;
+
+    // Indicates if this tree represents an expression that has an address in memory.
+    //
+    virtual bool isLValue() const = 0;
 
 protected:
 

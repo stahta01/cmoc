@@ -1,4 +1,4 @@
-/*  $Id: ASMText.cpp,v 1.59 2016/09/11 16:43:27 sarrazip Exp $
+/*  $Id: ASMText.cpp,v 1.60 2016/09/15 01:50:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -3824,6 +3824,16 @@ ASMText::InsEffects::InsEffects(const Element &e)
             || onlyDecimalDigits(arg)
             || (arg[0] == '$' || onlyHexDigits(arg, 1)))
         ;
+    else if (arg[0] == '[' && endsWith(arg, ",S]"))
+    {
+        string middle(arg, 1, arg.length() - 4);
+        if (middle == "A")
+            read |= A;
+        else if (middle == "B")
+            read |= B;
+        else if (middle == "D")
+            read |= A | B;
+    }
     else
         cout << "# failed to determine registers affected by argument of " << ins << " " << arg << endl;
 }

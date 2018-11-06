@@ -1,4 +1,4 @@
-/*  $Id: AssemblerStmt.h,v 1.7 2016/09/11 18:46:27 sarrazip Exp $
+/*  $Id: AssemblerStmt.h,v 1.8 2016/09/15 03:34:56 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -48,6 +48,8 @@ public:
     virtual void checkSemantics(Functor &f);
 
     virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
+
+    virtual bool isLValue() const { return false; }
 
 private:
 

@@ -1,4 +1,4 @@
-/*  $Id: ConditionalExpr.h,v 1.6 2016/06/21 04:28:52 sarrazip Exp $
+/*  $Id: ConditionalExpr.h,v 1.7 2016/09/15 03:34:56 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -45,6 +45,8 @@ public:
 
     const Tree *getTrueExpression() const;
     const Tree *getFalseExpression() const;
+
+    virtual bool isLValue() const { return trueExpr->isLValue() && falseExpr->isLValue(); }
 
 private:
 

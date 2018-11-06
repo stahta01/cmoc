@@ -1,4 +1,4 @@
-/*  $Id: UnaryOpExpr.h,v 1.9 2016/05/06 03:42:56 sarrazip Exp $
+/*  $Id: UnaryOpExpr.h,v 1.10 2016/09/15 03:34:57 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -38,6 +38,8 @@ public:
         SIZE_OF
     };
 
+    static const char *getOperatorName(Op op);
+
     UnaryOpExpr(Op op, Tree *e);
 
     UnaryOpExpr(const TypeDesc *_typeDesc);  // sizeof(type) (sizeof(expr) uses preceding ctor)
@@ -76,6 +78,8 @@ public:
     virtual void replaceChild(Tree *existingChild, Tree *newChild);
 
     void allowDereferencingVoid() { dereferencingVoidAllowed = true; }
+
+    virtual bool isLValue() const { return oper == INDIRECTION || oper == PREINC || oper == POSTINC || oper == POSTINC || oper == POSTDEC; }
 
 private:
 

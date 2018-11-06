@@ -1,4 +1,4 @@
-/*  $Id: SwitchStmt.h,v 1.7 2016/06/18 17:15:35 sarrazip Exp $
+/*  $Id: SwitchStmt.h,v 1.8 2016/09/15 03:34:57 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -61,6 +61,8 @@ public:
             return;
         assert(!"child not found");
     }
+
+    virtual bool isLValue() const { return false; }
 
 private:
 

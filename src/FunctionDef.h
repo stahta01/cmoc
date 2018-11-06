@@ -1,4 +1,4 @@
-/*  $Id: FunctionDef.h,v 1.12 2016/07/10 17:11:49 sarrazip Exp $
+/*  $Id: FunctionDef.h,v 1.13 2016/09/15 03:34:57 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -100,6 +100,8 @@ public:
     // Returns an empty string if not found.
     //
     std::string findAssemblyLabelFromIDLabeledStatement(const std::string &id) const;
+
+    virtual bool isLValue() const { return false; }
 
 private:
     // Forbidden:

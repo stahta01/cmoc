@@ -31,7 +31,10 @@ program => q!
         return 0;
     }
 !,
-expected => [ qq!$cFilename:4: error: undeclared identifier `a'! ]
+expected => [
+    qq!$cFilename:4: __error__: undeclared identifier `a'!,
+    qq!$cFilename:4: __error__: lvalue required as left operand of assignment!,
+    ]
 },
 
 
@@ -1053,11 +1056,12 @@ program => q!
     }
     !,
 expected => [
-    qq!,check-prog.c:4: error: undeclared identifier `a'!,
-    qq!,check-prog.c:4: error: undeclared identifier `a'!,
-    qq!,check-prog.c:4: error: array reference on non array or pointer!,
-    qq!,check-prog.c:4: error: cannot take sizeof(void)!,
-    qq!,check-prog.c:4: error: cannot take sizeof(void)!,
+    qq!,check-prog.c:4: __error__: undeclared identifier `a'!,
+    qq!,check-prog.c:4: __error__: undeclared identifier `a'!,
+    qq!,check-prog.c:4: __error__: array reference on non array or pointer!,
+    qq!,check-prog.c:4: __error__: cannot take sizeof(void)!,
+    qq!,check-prog.c:4: __error__: cannot take sizeof(void)!,
+    qq!,check-prog.c:4: __error__: lvalue required as left operand of array reference!,
     ]
 },
 
@@ -1500,6 +1504,42 @@ expected => [
     qq!,check-prog.c:6: __error__: named argument is required before `...'!,
     qq!,check-prog.c:2: __error__: function functionWithNoNamedArg() uses `...' but has no named argument before it!,
     qq!,check-prog.c:3: __error__: prototype prototypeWithNoNamedArg() uses `...' but has no named argument before it!,
+    ]
+},
+
+
+{
+title => q{l-value required for some operators},
+program => q!
+    void f(unsigned *n) {}
+    char g() { return 1; }
+    int *h() { return 0; }
+    int main()
+    {
+        unsigned n = 891;
+        f(&(n >> 1));
+        ++(n >> 1);
+        --(n >> 1);
+        (n >> 1)++;
+        (n >> 1)--;
+        char a, b;
+        (g() ? a : b) = 42;  // OK because both alternatives are l-values
+        (g() ? a : 99) = 42;
+        (g() ? 99 : b) = 42;
+        h()[0] = 0;  // OK
+        *h() = 0;  // OK
+        ((int *) 0x400)[32] = 0;  // OK
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:8: __error__: lvalue required as operand of address-of!,
+    qq!,check-prog.c:9: __error__: lvalue required as operand of pre-increment!,
+    qq!,check-prog.c:10: __error__: lvalue required as operand of pre-decrement!,
+    qq!,check-prog.c:11: __error__: lvalue required as operand of post-increment!,
+    qq!,check-prog.c:12: __error__: lvalue required as operand of post-decrement!,
+    qq!,check-prog.c:15: __error__: lvalue required as left operand of assignment!,
+    qq!,check-prog.c:16: __error__: lvalue required as left operand of assignment!,
     ]
 },
 

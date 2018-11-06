@@ -1,4 +1,4 @@
-/*  $Id: Pragma.h,v 1.7 2016/03/19 18:38:39 sarrazip Exp $
+/*  $Id: Pragma.h,v 1.8 2016/09/15 03:34:57 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -78,6 +78,8 @@ public:
     // If this pragma is 'vx_music label', the label points to the startup music.
     //
     bool isVxMusic(std::string &label) const;
+
+    virtual bool isLValue() const { return false; }
 
 private:
 

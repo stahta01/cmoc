@@ -1,4 +1,4 @@
-/*  $Id: ClassDef.h,v 1.6 2015/09/17 02:00:02 sarrazip Exp $
+/*  $Id: ClassDef.h,v 1.7 2016/09/15 03:34:56 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -54,6 +54,8 @@ public:
 
         const Declarator &getDeclarator() const;
 
+        virtual bool isLValue() const { return false; }
+
     private:
         Declarator *declarator;  // owned by this ClassMember
 
@@ -98,6 +100,8 @@ public:
                                 const ClassMember *&member) const;
 
     void clearMembers();
+
+    virtual bool isLValue() const { return false; }
 
 private:
 
