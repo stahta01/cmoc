@@ -1,3 +1,12 @@
+2018-10-14: Version 0.1.55 released
+
+    Fixed a bug that gave an error when returning a non-const
+    pointer from a function that returns a const pointer (e.g.,
+    const char *f(char *p) { return p; }).
+
+    Fixed a bug where C errors would still be reported when
+    --deps-only was specified.
+
 2018-10-04: Version 0.1.54 released
 
     The compiler now tolerates the use of NULL (e.g., (void *) 0) in

@@ -4,8 +4,8 @@
     This file is in the public domain.
 */
 
-#ifndef _coco3_h_
-#define _coco3_h_
+#ifndef _coco_h_
+#define _coco_h_
 
 #include <cmoc.h>
 
@@ -16,6 +16,12 @@
 
 
 enum { FALSE, TRUE };
+
+#ifndef _CMOC_HAVE_BOOL_
+typedef unsigned char BOOL;
+#define _CMOC_HAVE_BOOL_
+#endif
+
 
 #ifndef _CMOC_BASIC_TYPES_
 #define _CMOC_BASIC_TYPES_
@@ -749,4 +755,4 @@ byte waitkey(byte blinkCursor)
 #define enableInterrupts()  asm("ANDCC", "#$AF")
 
 
-#endif  /* _coco3_h_ */
+#endif  /* _coco_h_ */

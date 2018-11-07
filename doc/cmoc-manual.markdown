@@ -17,9 +17,9 @@ Copyright &copy; 2003-2018
 Distributed under the **GNU General Public License**,
 **version 3 or later** (see the License section).
 
-Version of CMOC covered by this manual: **0.1.54**
+Version of CMOC covered by this manual: **0.1.55**
 
-Date of this manual: 2018-10-04
+Date of this manual: 2018-10-14
 
 
 Introduction

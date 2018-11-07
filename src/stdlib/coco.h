@@ -212,7 +212,9 @@ enum KeyboardBits
 
 // Writes 'out' to $FF02 and tests the bit specified by 'testBit'.
 // Returns non-zero iff the designated key is currently pressed.
-// Example: isKeyPressed(0x7F, 0x08) checks for the space key.
+// See the KeyboardBits enumeration above.
+// Example: isKeyPressed(KEY_PROBE_SPACE, KEY_BIT_SPACE) checks
+//          for the space key.
 // For details, look for a CoCo keyboard grid diagram.
 //
 byte isKeyPressed(byte probe, byte testBit);
@@ -239,6 +241,8 @@ enum
 // Reads the joysticks and returns the address of a 4-byte array
 // that contains the 0..63 values that would be returned by
 // JOYSTK(0..3) in Color Basic.
+// Starts by turning the audio off, then turns it on again
+// before leaving.
 //
 const byte *readJoystickPositions();
 

@@ -1,4 +1,4 @@
-/*  $Id: TypeDesc.h,v 1.27 2018/09/15 19:42:37 sarrazip Exp $
+/*  $Id: TypeDesc.h,v 1.28 2018/10/07 03:16:08 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -146,6 +146,8 @@ public:
     static int compare(const TypeDesc &a, const TypeDesc &b);
 
     static bool sameTypesModuloConst(const TypeDesc &a, const TypeDesc &b);
+
+    static bool sameTypesModuloConstAtPtrLevel(const TypeDesc &a, const TypeDesc &b);
 
 private:
 

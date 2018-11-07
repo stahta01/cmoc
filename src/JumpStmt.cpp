@@ -1,4 +1,4 @@
-/*  $Id: JumpStmt.cpp,v 1.20 2018/09/22 05:46:36 sarrazip Exp $
+/*  $Id: JumpStmt.cpp,v 1.21 2018/10/07 03:16:07 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -112,6 +112,13 @@ JumpStmt::checkSemantics(Functor &f)
             else if (currentFunctionDef->getTypeDesc()->isLong() && argument->getTypeDesc()->isByteOrWord())
                 ;  // returning char or short fro function that returns long
             else if (funcRetType == POINTER_TYPE && CastExpr::isZeroCastToVoidPointer(*argument))
+                ;
+            else if (TypeDesc::sameTypesModuloConstAtPtrLevel(*currentFunctionDef->getTypeDesc(), *argument->getTypeDesc())
+                     && (currentFunctionDef->getTypeDesc()->isConstant()
+                         || (currentFunctionDef->getTypeDesc()->type == POINTER_TYPE
+                             && currentFunctionDef->getTypeDesc()->getPointedTypeDesc()->isConstant())
+                        )
+                     )  // returning T * from function returning const T *
                 ;
             else if (currentFunctionDef->getTypeDesc() != argument->getTypeDesc())
                 errormsg("returning expression of type `%s', which differs from function's return type (`%s')",

@@ -1,4 +1,4 @@
-/*  $Id: TypeDesc.cpp,v 1.38 2018/09/16 03:34:40 sarrazip Exp $
+/*  $Id: TypeDesc.cpp,v 1.39 2018/10/07 03:16:07 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -397,6 +397,23 @@ TypeDesc::sameTypesModuloConst(const TypeDesc &a, const TypeDesc &b)
     TypeDesc tmp(a);
     tmp.isConst = b.isConst;
     return tmp == b;
+}
+
+
+// Accept a difference of constness at the 1st or 2nd pointer level.
+//
+bool
+TypeDesc::sameTypesModuloConstAtPtrLevel(const TypeDesc &a, const TypeDesc &b)
+{
+    if (a.isPtrOrArray() != b.isPtrOrArray())
+        return false;
+    TypeDesc tmp(a);
+    tmp.isConst = b.isConst;
+    if (!tmp.isPtrOrArray())  // if comparing types that are neither pointers nor arrays
+        return tmp == b;
+    TypeDesc tmpPtrType(*tmp.pointedTypeDesc);
+    tmpPtrType.isConst = b.pointedTypeDesc->isConst;
+    return tmpPtrType == *b.pointedTypeDesc;
 }
 
 

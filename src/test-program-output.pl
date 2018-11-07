@@ -8785,6 +8785,24 @@ expected => ""
 },
 
 
+{
+title => q{Returning non-const pointer from function returning const pointer},
+program => q`
+    const char *f()
+    {
+        char *p = 0x1234;
+        return p;  
+    }
+    int main()
+    {
+        assert_eq(f(), 0x1234);
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
 #{
 #title => q{Sample test},
 #program => q`
