@@ -1,0 +1,8 @@
+#!/bin/sh -e
+#
+# CAUTION: automake 1.12 or later is required (previous versions
+#          generate src/parser.h instead of src/parser.hh).
+
+aclocal -I macros $ACLOCAL_FLAGS
+automake --add-missing --copy
+autoconf

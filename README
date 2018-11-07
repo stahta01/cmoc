@@ -1,0 +1,19 @@
+CMOC - A C-like 6809-targeting cross-compiler
+
+Home page: http://sarrazip.com/dev/cmoc.html
+
+License
+
+    See the file COPYING. Note that it does not apply to the files
+    under src/usim-0.91-cmoc.
+
+Installation
+
+    See the file INSTALL. If using the FrankASM 6809 assembler
+    (as6809), it should already have been installed. CMOC can also
+    use LWTOOLS' lwasm. See the home page for details.
+
+Automake
+
+    To do CMOC development, GNU Automake 1.12 or later is required
+    (previous versions generate src/parser.h instead of src/parser.hh).
