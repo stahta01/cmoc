@@ -1,7 +1,7 @@
-/*  $Id: TranslationUnit.h,v 1.28 2016/10/19 03:33:39 sarrazip Exp $
+/*  $Id: TranslationUnit.h,v 1.55 2018/09/08 20:37:31 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -20,7 +20,7 @@
 #ifndef _H_TranslationUnit
 #define _H_TranslationUnit
 
-#include "util.h"
+#include "TypeManager.h"
 #include "Scope.h"
 
 class Tree;
@@ -37,13 +37,22 @@ class TranslationUnit
 {
 public:
 
-    static TranslationUnit &instance();
+    static TranslationUnit &instance()
+    {
+        assert(theInstance);
+        return *theInstance;
+    }
 
     static TypeManager &getTypeManager() { return instance().typeManager; }
 
-    TranslationUnit(TargetPlatform targetPlatform,
-                    bool _callToUndefinedFunctionAllowed,
-                    bool _warnSignCompare);
+    static void createInstance(TargetPlatform targetPlatform,
+                               bool callToUndefinedFunctionAllowed,
+                               bool warnSignCompare,
+                               bool warnPassingConstForFuncPtr,
+                               bool isConstIncorrectWarningEnabled,
+                               bool relocatabilitySupported);
+
+    static void destroyInstance();
 
     // Resets the instance pointer. Do not call instance() after this.
     ~TranslationUnit();
@@ -71,18 +80,30 @@ public:
     // See detectCalledFunctions().
     void registerFunctionCall(const std::string &callerId, const std::string &calleeId);
 
-    void checkSemantics();
+    void checkSemantics(bool monolithMode);
 
     void setTargetPlatform(TargetPlatform platform);
 
     TargetPlatform getTargetPlatform() const;
 
+    // Get the register (i.e., Y or PCR, i.e., data segment or code segment) that is used
+    // to refer to global data.
+    //
+    const char *getDataIndexRegister(bool prefixWithComma, bool readOnly) const;
+
+    // Like getDataIndexRegister(), but for string, long and floating-point literals.
+    // Despite being data, these things may reside in the read-only code segment because
+    // they are not supposed to be modified by the C program.
+    //
+    const char *getLiteralIndexRegister(bool prefixWithComma) const;
+
     void allocateLocalVariables();
 
     // allocateLocalVariables() must have been called.
     void emitAssembler(ASMText &out, const std::string &programName, bool compileOnly,
-                       uint16_t codeAddress, uint16_t dataAddress,
-                       bool emitBootLoaderMarker, bool emitUncalledFunctions);
+                       uint16_t codeAddress, uint16_t dataAddress, uint16_t stackSpace,
+                       bool emitBootLoaderMarker, bool emitUncalledFunctions,
+                       bool monolithMode);
 
     void pushScope(Scope *scope);
     Scope *getCurrentScope();
@@ -102,10 +123,19 @@ public:
     std::string generateLabel(char letter);
 
     // Returns the assembly label now associated with the contents of sle's literal string.
+    // A given string literal is not registered twice, so as to save memory.
     //
     std::string registerStringLiteral(const class StringLiteralExpr &sle);
 
     std::string getEscapedStringLiteral(const std::string &stringLabel);
+
+    // A given real constant is not registered twice, so as to save memory.
+    //
+    std::string registerRealConstant(const class RealConstantExpr &rce);
+
+    // A given dword constant is not registered twice, so as to save memory.
+    //
+    std::string registerDWordConstant(const class DWordConstantExpr &rce);
 
     int16_t getTypeSize(const TypeDesc &typeDesc) const;
 
@@ -116,11 +146,13 @@ public:
 
     const std::set<std::string> &getNeededUtilitySubRoutines() const;
 
-    void warnNotRelocatable(Tree *responsible, const char *reason);
+    bool isRelocatabilitySupported() const;
 
     void processPragmas(uint16_t &codeAddress, bool codeAddressSetBySwitch,
                         uint16_t &codeLimitAddress, bool codeLimitAddressSetBySwitch,
-                        uint16_t &dataAddress);
+                        uint16_t &dataAddress, bool dataAddressSetBySwitch,
+                        uint16_t &stackSpace,
+                        bool monolithMode, bool compileOnly);
 
     /** Determines if accesses to pointers will include a run-time null pointer check.
     */
@@ -138,12 +170,12 @@ public:
     */
     bool isStackOverflowCheckingEnabled() const;
 
-    // If the function body of 'functionId' is provided by stdlib.inc, register the name as
+    // If the function body of 'functionId' is provided by the standard library, register the name as
     // a needed utility sub-routine, and also register any other needed routine.
     //
     void checkForNeededUtility(const std::string &functionId);
 
-    // Determines if the definition of the named function is provided by stdlib.inc or not.
+    // Determines if the definition of the named function is provided by the standard library or not.
     //
     bool isStandardFunction(const std::string &functionId) const;
 
@@ -156,11 +188,41 @@ public:
 
     bool isWarningOnSignCompareEnabled() const;
 
+    bool isWarningOnPassingConstForFuncPtr() const;
+
+    void warnIfFloatUnsupported();
+
+    bool warnOnConstIncorrect() const;
+
+    void warnAboutVolatile();
+
+    // Adds the given filename to the list of filenames that the current
+    // translation unit depends on.
+    //
+    void addPrerequisiteFilename(const char *filename);
+
+    // Writes a makefile prerequisite rule.
+    // Files whose path begins with the string in pkgdatadir (case sensitive) are not listed.
+    //
+    void writePrerequisites(std::ostream &out,
+                            const std::string &dependenciesFilename,
+                            const std::string &objectFilename,
+                            const std::string &pkgdatadir) const;
+
 private:
 
+    TranslationUnit(TargetPlatform targetPlatform,
+                    bool _callToUndefinedFunctionAllowed,
+                    bool _warnSignCompare,
+                    bool _warnPassingConstForFuncPtr,
+                    bool _isConstIncorrectWarningEnabled,
+                    bool _relocatabilitySupported);
+
     void detectCalledFunctions();
-    bool emitWritableGlobals(ASMText &out) const;
-    bool emitGlobalVariables(ASMText &out, bool readOnlySection, bool withStaticInitializer) const;
+    static std::string resolveVectrexMusicAddress(const std::string &symbol);
+    void emitProgramEnd(ASMText &out) const;
+    CodeStatus emitWritableGlobals(ASMText &out, bool monolithMode) const;
+    CodeStatus emitGlobalVariables(ASMText &out, bool readOnlySection, bool withStaticInitializer) const;
     void checkConstDataDeclarationInitializer(const Declaration &decl) const;
 
     struct StandardFunctionDeclaration
@@ -175,29 +237,47 @@ private:
 
 private:
 
+    typedef std::map<std::string, FunctionDef *> FunctionDefTable;
+
     static TranslationUnit *theInstance;
 
     TypeManager typeManager;
     Scope *globalScope;  // Scope tree must be destroyed after the TreeSequences in definitionList
     TreeSequence *definitionList;  // owns the object, which must have been allocated with 'new'
-    std::map<std::string, FunctionDef *> functionDefs;  // does not own the pointed objects
+    FunctionDefTable functionDefs;  // does not own the pointed objects
     StringGraph callGraph;  // maps a function to the functions it calls
     std::vector<Declaration *> globalVariables;  // in order of declaration; does not own the pointed objects
     std::vector<Scope *> scopeStack;  // does not own the pointed objects
     std::vector<BreakableLabels> breakableStack;
     std::string functionEndLabel;  // assembly label of the function currently being emitted
     size_t labelGeneratorIndex;
-    std::map<std::string, std::string> stringLiteralLabelToValue;
-                        // key = string label, value = string value
+
+    typedef std::map<std::string, const StringLiteralExpr *> StringLiteralToExprMap;  // key = asm label
+    StringLiteralToExprMap stringLiteralLabelToValue;
     std::map<std::string, std::string> stringLiteralValueToLabel;
-                        // key = string value, value = string label
+                        // key = string value, value = asm label
+
+    std::map< std::string, std::vector<uint8_t> > realConstantLabelToValue;
+                        // key = asm label, value = float representation
+    std::map< std::vector<uint8_t>, std::string > realConstantValueToLabel;
+                        // key = float representation, value = asm label
+
+    std::map< std::string, std::vector<uint8_t> > dwordConstantLabelToValue;
+                        // key = asm label, value = dword representation
+    std::map< std::vector<uint8_t>, std::string > dwordConstantValueToLabel;
+                        // key = dword representation, value = asm label
+
     std::map<std::string, std::string> builtInFunctionDescs;
-    size_t numNonRelocatableExpressions;
+    bool relocatabilitySupported;
     bool isProgramExecutableOnlyOnce;
     bool nullPointerCheckingEnabled;
     bool stackOverflowCheckingEnabled;
     bool callToUndefinedFunctionAllowed;
     bool warnSignCompare;  // warn if <, <=, >, >= used on operands of differing signedness
+    bool warnPassingConstForFuncPtr;
+    bool warnedAboutUnsupportedFloats;
+    bool isConstIncorrectWarningEnabled;
+    bool warnedAboutVolatile;
     std::set<std::string> neededUtilitySubRoutines;
     TargetPlatform targetPlatform;
 
@@ -210,11 +290,24 @@ private:
     int8_t vxTitlePosY;
     std::string vxCopyright;
 
+    std::vector<std::string> sourceFilenamesSeen;  // as listed by cpp output
+
     // Forbidden operations:
     TranslationUnit(const TranslationUnit &);
     TranslationUnit & operator = (const TranslationUnit &);
 };
 
+
+// inline because called often by parser.yy
+inline void
+TranslationUnit::warnIfFloatUnsupported()
+{
+    if (warnedAboutUnsupportedFloats)
+        return;
+    if (targetPlatform != COCO_BASIC && targetPlatform != OS9)
+        warnmsg("floating-point arithmetic is not supported on this platform");
+    warnedAboutUnsupportedFloats = true;
+}
 
 
 #endif  /* _H_TranslationUnit */

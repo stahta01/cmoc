@@ -1,4 +1,4 @@
-/*  $Id: Pragma.cpp,v 1.8 2016/03/19 18:38:39 sarrazip Exp $
+/*  $Id: Pragma.cpp,v 1.10 2018/09/15 20:00:49 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -83,23 +83,20 @@ Pragma::parseOrg(uint16_t &address) const
 }
 
 
-// #pragma const_data [start|end]
+// startIndex: MUST be initialized to the index in 'directive' where
+//             the scanning must start.
+// endIndex: Will receive the end of the found word.
+// Examples: With directive == "foo waldo blargh" and startIndex at 3,
+//           this function will return 4 and 9, i.e., "waldo".
+//           With startIndex at 9, 10 and 16 are returned ("blargh").
+//           With startIndex at 16, 16 and 16 are returned (no word found).
 //
-bool
-Pragma::isConstData(bool &isStart) const
+void
+Pragma::getNextWord(size_t &startIndex, size_t &endIndex) const
 {
-    if (strncmp(directive.c_str(), "const_data", 10) != 0)
-        return false;
-
-    size_t i = 10, len = directive.length();
-    for ( ; i < len && isspace(directive[i]); ++i)  // pass white space
-        ;
-    size_t j;
-    for (j = i; j < len && !isspace(directive[j]); ++j)  // pass non-white space chars
-        ;
-    string arg(directive, i, j - i);
-    isStart = (arg == "start");
-    return isStart || arg == "end";
+    passSpaces(directive, startIndex);
+    endIndex = startIndex;
+    passNonSpaces(directive, endIndex);
 }
 
 
@@ -107,6 +104,25 @@ bool
 Pragma::isExecOnce() const
 {
     return directive == "exec_once";
+}
+
+
+bool
+Pragma::isStackSpace(uint16_t &numBytes) const
+{
+    if (strncmp(directive.c_str(), "stack_space", 11) != 0)
+        return false;
+
+    size_t argStart = 11, argEnd;
+    getNextWord(argStart, argEnd);
+    string arg(directive, argStart, argEnd);
+
+    unsigned long n = strtoul(arg.c_str(), NULL, 10);
+    if (n == 0 || n > 0xFFFF || errno == ERANGE)
+        return false;
+
+    numBytes = (uint16_t) n;
+    return true;
 }
 
 

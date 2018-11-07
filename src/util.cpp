@@ -1,4 +1,4 @@
-/*  $Id: util.cpp,v 1.20 2016/09/11 18:46:27 sarrazip Exp $
+/*  $Id: util.cpp,v 1.33 2018/05/23 03:34:13 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -29,6 +29,7 @@
 #include "DeclarationSpecifierList.h"
 
 #include <string.h>
+#include <iomanip>
 
 using namespace std;
 
@@ -55,6 +56,7 @@ getTypeSize(BasicType t)
             return 0;
         case VOID_TYPE:
         case SIZELESS_TYPE:
+        case FUNCTION_TYPE:
             return 0;
     }
     return 0;
@@ -136,10 +138,62 @@ getStoreInstruction(BasicType t)
 }
 
 
-string
-wordToString(uint16_t w, bool hex)
+static struct { const char *name; Register reg; } registerNames[] =
 {
-    char t[512];
+    { "A",  A },
+    { "B",  B },
+    { "D",  D },
+    { "X",  X },
+    { "U",  U },
+    { "S",  S },
+    { "Y",  Y },
+    { "PC", PC },
+    { "DP", DP },
+};
+
+
+Register
+getRegisterFromName(const char *name)
+{
+    for (size_t i = 0; i < sizeof(registerNames) / sizeof(registerNames[0]); ++i)
+    {
+        const char *n = registerNames[i].name;
+        if (n[0] == name[0])  // if 1st char matches
+            if (!n[1] || n[1] == name[1])  // if name to match is single char, or 2nd char matches
+                return registerNames[i].reg;
+    }
+    return NO_REGISTER;
+}
+
+
+static void
+dwordToCharBuffer(char *buffer, size_t bufferSize, uint32_t dw, bool hex)
+{
+    const char *fmt;
+    if (hex)
+        if (dw <= 0xFFFF)
+            fmt = "$%04lX";
+        else
+            fmt = "$%08lX";
+    else
+        fmt = "%lu";
+
+    snprintf(buffer, bufferSize, fmt, (unsigned long) dw);
+}
+
+
+string
+dwordToString(uint32_t dw, bool hex)
+{
+    char t[32];
+    dwordToCharBuffer(t, sizeof(t), dw, hex);
+    return t;
+}
+
+
+static void
+wordToCharBuffer(char *buffer, size_t bufferSize, uint16_t w, bool hex)
+{
     const char *fmt;
     if (hex)
         if (w <= 0xFF)
@@ -149,7 +203,15 @@ wordToString(uint16_t w, bool hex)
     else
         fmt = "%u";
 
-    snprintf(t, sizeof(t), fmt, (unsigned) w);
+    snprintf(buffer, bufferSize, fmt, unsigned(w));
+}
+
+
+string
+wordToString(uint16_t w, bool hex)
+{
+    char t[32];
+    wordToCharBuffer(t, sizeof(t), w, hex);
     return t;
 }
 
@@ -157,7 +219,14 @@ wordToString(uint16_t w, bool hex)
 string
 intToString(int16_t n, bool hex)
 {
-    return (n < 0 ? "-" : "") + wordToString(abs(n), hex);
+    if (n >= 0)
+        return wordToString(uint16_t(n), hex);
+    if (n == -32768)
+        return wordToString(0x8000, hex);
+    char t[32];
+    t[0] = '-';
+    wordToCharBuffer(t + 1, sizeof(t) - 1, uint16_t(-n), hex);
+    return t;
 }
 
 
@@ -167,7 +236,16 @@ int8ToString(int8_t n, bool hex)
     char t[16];
     const char *fmt = (hex) ? "$%02X" : "%d";
   
-    snprintf(t, sizeof(t), fmt, n & 0xFF);
+    snprintf(t, sizeof(t), fmt, n);
+    return t;
+}
+
+
+string
+doubleToString(double d)
+{
+    char t[64];
+    snprintf(t, sizeof(t), "%.9g", d);
     return t;
 }
 
@@ -176,7 +254,7 @@ void
 stringToLower(string &s)
 {
     for (size_t len = s.length(), i = 0; i < len; ++i)
-        s[i] = tolower(s[i]);
+        s[i] = (char) tolower(s[i]);
 }
 
 
@@ -200,6 +278,80 @@ isPowerOf2(int16_t n)
         n >>= 1;
 
     return n == 1;  // if only one set bit, original value was a power of 2
+}
+
+
+bool
+startsWith(const string &s, const char *prefix)
+{
+    return s.compare(0, strlen(prefix), prefix) == 0;
+}
+
+
+bool
+endsWith(const string &s, const char *suffix)
+{
+    size_t suffixLen = strlen(suffix);
+    if (s.length() < suffixLen)
+        return false;  // s too short
+    return s.compare(s.length() - suffixLen, suffixLen, suffix) == 0;
+}
+
+
+string
+removeExtension(string &s)
+{
+    string::size_type posExt = s.rfind('.');
+    if (posExt == string::npos)
+        return string();
+    string ext(s, posExt);
+    s.erase(posExt);
+    return ext;
+}
+
+
+string
+replaceExtension(const string &s, const char *newExt)
+{
+    string result = s;
+    (void) removeExtension(result);
+    return result + newExt;
+}
+
+
+string
+getBasename(const string &filename)
+{
+    string::size_type lastSlash = filename.rfind('/');
+    if (lastSlash == string::npos)  // if no slash
+        return filename;
+    return string(filename, lastSlash + 1, string::npos);
+}
+
+
+ConstCorrectnessCode
+isPointerInitConstCorrect(const TypeDesc *declPointedTypeDesc, const TypeDesc *initPointedTypeDesc)
+{
+    for (;;)
+    {
+        assert(declPointedTypeDesc && initPointedTypeDesc);
+
+        if (! declPointedTypeDesc->isConstant()
+            && initPointedTypeDesc->isConstant()
+            && TypeDesc::sameTypesModuloConst(*declPointedTypeDesc, *initPointedTypeDesc))
+        {
+            return CONST_INCORRECT;  // e.g., int * = const int *
+        }
+        if (declPointedTypeDesc->type == POINTER_TYPE && initPointedTypeDesc->type == POINTER_TYPE)
+        {
+            declPointedTypeDesc = declPointedTypeDesc->pointedTypeDesc;
+            initPointedTypeDesc = initPointedTypeDesc->pointedTypeDesc;
+            continue;  // e.g., go check next pointer level
+        }
+        if (declPointedTypeDesc->type != initPointedTypeDesc->type)
+            return INCOMPAT_TYPES;
+        return CONST_CORRECT;
+    }
 }
 
 
@@ -259,6 +411,19 @@ errormsgEx(const string &explicitLineNo, const char *fmt, ...)
 
 
 void
+errormsgEx(const std::string &sourceFilename, int lineno, const char *fmt, ...)
+{
+    char s[1024];
+    snprintf(s, sizeof(s), "%s:%d", sourceFilename.c_str(), lineno);
+
+    va_list ap;
+    va_start(ap, fmt);
+    diagnoseVa("error", s, fmt, ap);
+    va_end(ap);
+}
+
+
+void
 warnmsg(const char *fmt, ...)
 {
     extern int lineno;
@@ -281,5 +446,16 @@ yyerror(const char *msg)
 
     if (strcmp(msg, "parse error") == 0)
         msg = "syntax error";
-    errormsg("%s: %s", msg, yytext);
+
+    // Escape any non-printable characters in yytext[].
+    stringstream escapedText;
+    escapedText << hex;
+    for (size_t i = 0; yytext[i]; ++i)
+        if (isprint(yytext[i]))
+            escapedText << yytext[i];
+        else
+            escapedText << "\\x" << setw(2) << (unsigned) (unsigned char) yytext[i];
+
+    errormsg("%s: %s", msg, escapedText.str().c_str());
 }
+

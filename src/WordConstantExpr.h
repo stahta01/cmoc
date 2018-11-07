@@ -1,4 +1,4 @@
-/*  $Id: WordConstantExpr.h,v 1.7 2016/09/15 03:34:58 sarrazip Exp $
+/*  $Id: WordConstantExpr.h,v 1.8 2016/12/29 02:12:48 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -31,6 +31,11 @@ public:
     //
     WordConstantExpr(double value, bool isWord, bool isSigned);
 
+    // tokenText: String stored by parser in yytext[]. Used to interpret suffixes
+    //            (U for unsigned, L for long).
+    //
+    WordConstantExpr(double value, const char *tokenText);
+
     virtual ~WordConstantExpr();
 
     uint16_t getWordValue() const;
@@ -40,6 +45,11 @@ public:
     virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
 
     virtual bool isLValue() const { return false; }
+
+private:
+
+    static bool hasUnsignedSuffix(const char *tokenText);
+    static bool hasLongSuffix(const char *tokenText);
 
 private:
 

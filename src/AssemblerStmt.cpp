@@ -1,4 +1,4 @@
-/*  $Id: AssemblerStmt.cpp,v 1.15 2016/10/05 02:28:23 sarrazip Exp $
+/*  $Id: AssemblerStmt.cpp,v 1.23 2018/03/28 23:28:58 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -52,6 +52,12 @@ AssemblerStmt::AssemblerStmt(const char *_asmText)
     scopeOfAsmOnlyFunction(NULL),
     argIsVariable(false)
 {
+    // Fix the source line number so that it points to the start of the text
+    // instead of the end.
+    int numNewlines = 0;
+    for (const char *s = _asmText; (s = strchr(s, '\n')) != NULL; ++s)
+        ++numNewlines;
+    setIntLineNo(getIntLineNo() - numNewlines);
 }
 
 
@@ -81,9 +87,17 @@ AssemblerStmt::setAssemblyOnly(const Scope *functionScope)
 // The second rule allows to parse an array reference as a single token, e.g.,
 // "ldd someIntegerArray[12]".
 //
-// A variable name may be precedes by an escape character (given by variableNameEscapeChar).
+// A variable name may be preceded by an escape character (given by variableNameEscapeChar).
 // This is useful when the name is that of a register. The escape character forces the name
 // to refer to the variable instead of the register.
+//
+// A semi-colon introduces a comment. The text from that semi-colon (inclusively)
+// up to the end of the line (excluding the newline character) is considered as
+// a comment to be ignored. WHITESPACE is returned, and the comment text (including
+// the semi-colon) is stored in 'tokenText'.
+// Note that the assembler may give special meaning to the presence of a semi-colon
+// comment. With LWASM in particular, as of 2017, such a comment line can be used
+// to avoid breaking the scope of local labels (those with an initial @).
 //
 AssemblerStmt::Token
 AssemblerStmt::getToken(const string &text, size_t &i, string &tokenText)
@@ -92,13 +106,13 @@ AssemblerStmt::getToken(const string &text, size_t &i, string &tokenText)
 
     if (i >= text.length())
     {
-        tokenText = "";
+        tokenText.clear();
         return END;
     }
     if (text[i] == '\n')
     {
         ++i;  // pass the newline
-        tokenText = "\n";
+        tokenText = '\n';
         return NEWLINE;
     }
 
@@ -107,13 +121,33 @@ AssemblerStmt::getToken(const string &text, size_t &i, string &tokenText)
     // Parse a sequence of white space, or of non-space characters.
     // Such a sequence stops before a ']', which is considered a word by itself.
     //
-    bool isFirstCharSpace = isspace(text[i]);
+    int isFirstCharSpace = isspace(text[i]);
     ++i;  // pass 1st char of token
     if (isFirstCharSpace)
     {
         for ( ; i < text.length() && text[i] != '\n' && isspace(text[i]); ++i)  // accumulate sequence of spaces
             tokenText += text[i];
         return WHITESPACE;
+    }
+
+    // Return a semi-colon-introduced comment as white space.
+    if (text[i - 1] == ';')
+    {
+        for ( ; i < text.length() && text[i] != '\n'; ++i)  // advance until end of line
+            tokenText += text[i];
+        return WHITESPACE;
+    }
+
+    if (text[i - 1] == '\"')  // if string literal (e.g., argument for FCC directive)
+    {
+        for ( ; i < text.length() && text[i] != '\"'; ++i)
+            tokenText += text[i];
+        if (i < text.length())
+        {
+            tokenText += '\"';
+            ++i;  // pass closing quote
+        }
+        return WORD;
     }
 
     if (!isAssemblyIdentifierChar(text[i - 1]) && text[i - 1] != variableNameEscapeChar)
@@ -193,7 +227,7 @@ AssemblerStmt::parseVariableNameAndOffset(const string &tokenText, string &varia
     if (i == 0)
         return false;  // closing bracket found, but not opening bracket: fail
     if (i == 1)
-        return false;  // closing bracket found at beginning of tokenText: fail
+        return false;  // opening bracket found at beginning of tokenText: fail
     if (i == tokenLen - 1)
         return false;  // nothing inside bracket: fail
 
@@ -219,27 +253,33 @@ AssemblerStmt::parseVariableNameAndOffset(const string &tokenText, string &varia
 // recognizedVarNames: If not null, the set accumulates the names of declared
 //                     C variables that were referred to in 'text'.
 //                     (Does not accumulate enumerated names.)
+// unrecognizedNames: If not null, accumulates the names that refer to undeclared
+//                    C variables or enumerators.
 // requireAllocatedVariables: Require the variables used by the assembly code
 //                            to have received a valid frame displacement.
-//                            Must only be set to true when the returned text
-//                            will not be used in the final emitted code.
 //
 string
 AssemblerStmt::resolveVariableReferences(const string &text,
                                          const Scope &scope,
                                          set<string> *recognizedVarNames,
+                                         set<string> *unrecognizedNames,
                                          bool requireAllocatedVariables)
 {
     string result;
+    result.reserve(text.length() * 2);
 
     size_t colNum = 1;  // 1 = label column, 2 = instr. col., 3 = arg. col.
     Token tok = END;
     string tokenText, lastCol2;
+    tokenText.reserve(256);
+    lastCol2.reserve(256);
     size_t i = 0;  // offset in 'text'
     bool currentInstructionCanRefVariables = false;
 
     while ((tok = getToken(text, i, tokenText)) != END)
     {
+        //cout << "# resolveVariableReferences: tok=" << tok << ", <" << tokenText << ">" << endl;
+
         switch (tok)
         {
         case NEWLINE:
@@ -260,12 +300,18 @@ AssemblerStmt::resolveVariableReferences(const string &text,
                 if (!parseVariableNameAndOffset(tokenText, variableName, offset))
                     variableName = tokenText;
 
-                // If a C variable name escape is used, remove it.
+                // If a C variable name escape character is used (e.g., ":" in ":someCVariable"), remove it.
                 string unescapedVariableName = variableName;
-                if (variableName.length() > 0 && variableName[0] == variableNameEscapeChar)
+                bool escapeCharUsed = (variableName.length() > 0 && variableName[0] == variableNameEscapeChar);
+                if (escapeCharUsed)
                     unescapedVariableName.erase(0, 1);
 
                 const Declaration *variableDecl = scope.getVariableDeclaration(unescapedVariableName, true);
+
+                /*cout << "# resolveVariableReferences:   '" << variableName << "', '" << unescapedVariableName << "', "
+                     << escapeCharUsed << ", variableDecl=" << variableDecl
+                     << " at " << (variableDecl ? variableDecl->getLineNo() : "n/a")
+                     << ", fd=" << (variableDecl ? variableDecl->getFrameDisplacement() : 0x8000) << endl;*/
 
                 uint16_t enumValue = 0;
 
@@ -315,6 +361,9 @@ AssemblerStmt::resolveVariableReferences(const string &text,
                 else  // no match: keep text as is
                 {
                     result += tokenText;
+
+                    if (escapeCharUsed && unrecognizedNames != NULL)
+                        unrecognizedNames->insert(unescapedVariableName);
                 }
             }
             else
@@ -361,6 +410,8 @@ AssemblerStmt::isGlobalVariable(const string &varName)
 void
 AssemblerStmt::checkSemantics(Functor &f)
 {
+    //cout << "# AssemblerStmt::checkSemantics: " << getLineNo() << ", asmText=[[" << asmText << "]]" << endl;
+
     // Get the parent function.
     //
     SemanticsChecker &checker = dynamic_cast<SemanticsChecker &>(f);
@@ -380,9 +431,9 @@ AssemblerStmt::checkSemantics(Functor &f)
         // (via FunctionDef::setCalled() and TranslationUnit::registerFunctionCall()).
         //
         set<string> recognizedVarNames;
-        const Scope *scope = (scopeOfAsmOnlyFunction ? scopeOfAsmOnlyFunction : parentFunctionDef->getScope());
-        assert(scope);
-        (void) resolveVariableReferences(removeComments(asmText), *scope, &recognizedVarNames, false);
+        const Scope *sc = (scopeOfAsmOnlyFunction ? scopeOfAsmOnlyFunction : TranslationUnit::instance().getCurrentScope());
+        assert(sc);
+        (void) resolveVariableReferences(removeComments(asmText), *sc, &recognizedVarNames, NULL, false);
 
         // An assembly-only function is not allowed to refer to local C variables because such a function
         // has no stack frame. (It is allowed to call functions however.)
@@ -390,7 +441,7 @@ AssemblerStmt::checkSemantics(Functor &f)
         if (parentFunctionDef->isAssemblyOnly() && recognizedVarNames.size() > 0)
         {
             // Create and issue an error message.
-            stringstream enumeration;
+            stringstream varNames;
             size_t numLocals = 0;
             for (set<string>::const_iterator it = recognizedVarNames.begin(); it != recognizedVarNames.end(); ++it)
             {
@@ -398,15 +449,26 @@ AssemblerStmt::checkSemantics(Functor &f)
                 if (isGlobalVariable(varName))
                     continue;  // allow asm{} text to refer to globals
                 if (numLocals > 0)
-                    enumeration << ", ";
-                enumeration << "`" << varName << "'";
+                    varNames << ", ";
+                varNames << "`" << varName << "'";
                 ++numLocals;
             }
             if (numLocals > 0)
                 errormsg("assembly-only function refers to local C variable%s %s",
-                         numLocals > 1 ? "s" : "", enumeration.str().c_str());
+                         numLocals > 1 ? "s" : "", varNames.str().c_str());
         }
     }
+}
+
+
+void
+AssemblerStmt::getAllVariableNames(set<string> &varNames) const
+{
+    set<string> unrecognizedNames;
+    const Scope *sc = (scopeOfAsmOnlyFunction ? scopeOfAsmOnlyFunction : TranslationUnit::instance().getCurrentScope());
+    assert(sc);
+    (void) resolveVariableReferences(removeComments(asmText), *sc, &varNames, &unrecognizedNames, false);
+    varNames.insert(unrecognizedNames.begin(), unrecognizedNames.end());
 }
 
 
@@ -419,9 +481,11 @@ AssemblerStmt::emitCode(ASMText &out, bool lValue) const
 
     if (!asmText.empty())  // if multi-line assembly language text instead of single instruction:
     {
+        writeLineNoComment(out, "inline assembly");
+
         const Scope *cs = TranslationUnit::instance().getCurrentScope();
         assert(cs);
-        string resolvedAsmText = resolveVariableReferences(removeComments(asmText), *cs, NULL, true);
+        string resolvedAsmText = resolveVariableReferences(removeComments(asmText), *cs, NULL, NULL, true);
         out.emitInlineAssembly(resolvedAsmText);
         return true;
     }

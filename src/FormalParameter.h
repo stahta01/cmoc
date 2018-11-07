@@ -1,4 +1,4 @@
-/*  $Id: FormalParameter.h,v 1.5 2016/09/15 03:34:57 sarrazip Exp $
+/*  $Id: FormalParameter.h,v 1.6 2017/07/22 01:54:11 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -37,6 +37,8 @@ public:
 
     virtual ~FormalParameter();
 
+    // Empty in the case of an unnamed function parameter.
+    //
     std::string getId() const;
 
     const std::vector<uint16_t> &getArrayDimensions() const;
@@ -47,7 +49,7 @@ public:
 
 private:
 
-    std::string paramId;
+    std::string paramId;  // allowed to be empty
     std::vector<uint16_t> arrayDimensions;
     std::string enumTypeName;  // used when parameter is of named enum type
 

@@ -1,4 +1,4 @@
-/*  $Id: TreeSequence.h,v 1.7 2016/09/15 03:34:57 sarrazip Exp $
+/*  $Id: TreeSequence.h,v 1.10 2017/12/25 21:47:41 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -27,12 +27,12 @@ class TreeSequence : public Tree
 {
 public:
 
-    // If 'tree' is not null, adds it to this sequence.
-    //
-    TreeSequence(Tree *tree = NULL);
+    TreeSequence();
 
     virtual ~TreeSequence();
 
+    // tree: Allowed to be null.
+    //
     void addTree(Tree *tree);
 
     size_t size() const;
@@ -44,6 +44,7 @@ public:
     std::vector<Tree *>::reverse_iterator rbegin();
     std::vector<Tree *>::const_reverse_iterator rend() const;
     std::vector<Tree *>::reverse_iterator rend();
+    void clear();
 
     virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
 
@@ -52,6 +53,8 @@ public:
     virtual void replaceChild(Tree *existingChild, Tree *newChild);
 
     virtual bool isLValue() const { return false; }
+
+    std::string toString() const;
 
 private:
     std::vector<Tree *> sequence;  // owns the Tree objects

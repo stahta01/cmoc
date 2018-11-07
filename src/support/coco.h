@@ -10,6 +10,11 @@
 #include <cmoc.h>
 
 
+#ifndef NULL
+#define NULL ((void *) 0)
+#endif
+
+
 enum { FALSE, TRUE };
 
 #ifndef _CMOC_BASIC_TYPES_
@@ -19,6 +24,8 @@ typedef unsigned char byte;
 typedef signed char   sbyte;
 typedef unsigned int  word;
 typedef signed int    sword;
+typedef unsigned long dword;
+typedef signed long   sdword;
 
 #endif
 
@@ -26,6 +33,8 @@ typedef unsigned char uint8_t;
 typedef signed char   int8_t;
 typedef unsigned int  uint16_t;
 typedef signed int    int16_t;
+typedef unsigned long uint32_t;
+typedef signed long   int32_t;
 
 
 #ifdef _COCO_BASIC_
@@ -212,16 +221,20 @@ void cls(byte color)
 }
 
 
-// Bits 0-2: background color (0-7)
-// Bits 3-5: foreground color (0-7)
-// Bits 6: underline if set.
-// Bits 7: blink if set.
+// foreColor: 0-7.
+// backColor: 0-7.
+// blink, underline: booleans.
 //
 byte attr(byte foreColor, byte backColor, byte blink, byte underline)
 {
     if (!isCoCo3)
         return FALSE;
 
+    // Bits 0-2: background color (0-7)
+    // Bits 3-5: foreground color (0-7)
+    // Bits 6: underline if set.
+    // Bits 7: blink if set.
+    //
     asm
     {
         ldb     foreColor
@@ -383,6 +396,153 @@ byte waitkey(byte blinkCursor)
         key = inkey();
         if (key)
             return key;
+    }
+}
+
+
+// Names for values that can be passed to isKeyPressed()
+// to test if a key is down or not.
+//
+enum KeyboardBits
+{
+    KEY_PROBE_AT        = 0xFE, KEY_BIT_AT        = 0x01,
+    KEY_PROBE_A         = 0xFD, KEY_BIT_A         = 0x01,
+    KEY_PROBE_B         = 0xFB, KEY_BIT_B         = 0x01,
+    KEY_PROBE_C         = 0xF7, KEY_BIT_C         = 0x01,
+    KEY_PROBE_D         = 0xEF, KEY_BIT_D         = 0x01,
+    KEY_PROBE_E         = 0xDF, KEY_BIT_E         = 0x01,
+    KEY_PROBE_F         = 0xBF, KEY_BIT_F         = 0x01,
+    KEY_PROBE_G         = 0x7F, KEY_BIT_G         = 0x01,
+    KEY_PROBE_H         = 0xFE, KEY_BIT_H         = 0x02,
+    KEY_PROBE_I         = 0xFD, KEY_BIT_I         = 0x02,
+    KEY_PROBE_J         = 0xFB, KEY_BIT_J         = 0x02,
+    KEY_PROBE_K         = 0xF7, KEY_BIT_K         = 0x02,
+    KEY_PROBE_L         = 0xEF, KEY_BIT_L         = 0x02,
+    KEY_PROBE_M         = 0xDF, KEY_BIT_M         = 0x02,
+    KEY_PROBE_N         = 0xBF, KEY_BIT_N         = 0x02,
+    KEY_PROBE_O         = 0x7F, KEY_BIT_O         = 0x02,
+    KEY_PROBE_P         = 0xFE, KEY_BIT_P         = 0x04,
+    KEY_PROBE_Q         = 0xFD, KEY_BIT_Q         = 0x04,
+    KEY_PROBE_R         = 0xFB, KEY_BIT_R         = 0x04,
+    KEY_PROBE_S         = 0xF7, KEY_BIT_S         = 0x04,
+    KEY_PROBE_T         = 0xEF, KEY_BIT_T         = 0x04,
+    KEY_PROBE_U         = 0xDF, KEY_BIT_U         = 0x04,
+    KEY_PROBE_V         = 0xBF, KEY_BIT_V         = 0x04,
+    KEY_PROBE_W         = 0x7F, KEY_BIT_W         = 0x04,
+    KEY_PROBE_X         = 0xFE, KEY_BIT_X         = 0x08,
+    KEY_PROBE_Y         = 0xFD, KEY_BIT_Y         = 0x08,
+    KEY_PROBE_Z         = 0xFB, KEY_BIT_Z         = 0x08,
+    KEY_PROBE_UP        = 0xF7, KEY_BIT_UP        = 0x08,
+    KEY_PROBE_DOWN      = 0xEF, KEY_BIT_DOWN      = 0x08,
+    KEY_PROBE_LEFT      = 0xDF, KEY_BIT_LEFT      = 0x08,
+    KEY_PROBE_RIGHT     = 0xBF, KEY_BIT_RIGHT     = 0x08,
+    KEY_PROBE_SPACE     = 0x7F, KEY_BIT_SPACE     = 0x08,
+    KEY_PROBE_0         = 0xFE, KEY_BIT_0         = 0x10,
+    KEY_PROBE_1         = 0xFD, KEY_BIT_1         = 0x10,
+    KEY_PROBE_2         = 0xFB, KEY_BIT_2         = 0x10,
+    KEY_PROBE_3         = 0xF7, KEY_BIT_3         = 0x10,
+    KEY_PROBE_4         = 0xEF, KEY_BIT_4         = 0x10,
+    KEY_PROBE_5         = 0xDF, KEY_BIT_5         = 0x10,
+    KEY_PROBE_6         = 0xBF, KEY_BIT_6         = 0x10,
+    KEY_PROBE_7         = 0x7F, KEY_BIT_7         = 0x10,
+    KEY_PROBE_8         = 0xFE, KEY_BIT_8         = 0x20,
+    KEY_PROBE_9         = 0xFD, KEY_BIT_9         = 0x20,
+    KEY_PROBE_COLON     = 0xFB, KEY_BIT_COLON     = 0x20,
+    KEY_PROBE_SEMICOLON = 0xF7, KEY_BIT_SEMICOLON = 0x20,
+    KEY_PROBE_COMMA     = 0xEF, KEY_BIT_COMMA     = 0x20,
+    KEY_PROBE_HYPHEN    = 0xDF, KEY_BIT_HYPHEN    = 0x20,
+    KEY_PROBE_PERIOD    = 0xBF, KEY_BIT_PERIOD    = 0x20,
+    KEY_PROBE_SLASH     = 0x7F, KEY_BIT_SLASH     = 0x20,
+    KEY_PROBE_ENTER     = 0xFE, KEY_BIT_ENTER     = 0x40,
+    KEY_PROBE_CLEAR     = 0xFD, KEY_BIT_CLEAR     = 0x40,
+    KEY_PROBE_BREAK     = 0xFB, KEY_BIT_BREAK     = 0x40,
+    KEY_PROBE_ALT       = 0xF7, KEY_BIT_ALT       = 0x40,
+    KEY_PROBE_CTRL      = 0xEF, KEY_BIT_CTRL      = 0x40,
+    KEY_PROBE_F1        = 0xDF, KEY_BIT_F1        = 0x40,
+    KEY_PROBE_F2        = 0xBF, KEY_BIT_F2        = 0x40,
+    KEY_PROBE_SHIFT     = 0x7F, KEY_BIT_SHIFT     = 0x40,
+};
+
+
+// Writes 'out' to $FF02 and tests the bit specified by 'testBit'.
+// Returns non-zero iff the designated key is currently pressed.
+// Example: isKeyPressed(0x7F, 0x08) checks for the space key.
+// For details, look for a CoCo keyboard grid diagram.
+//
+asm byte isKeyPressed(byte probe, byte testBit)
+{
+    asm
+    {
+        ldb     3,s     ; probe
+        stb     $FF02
+        ldb     $FF00
+        andb    5,s     ; testBit
+        eorb    5,s
+    }
+}
+
+
+// Indices into the POTVAL array whose address is returned
+// by readJoystickPositions().
+//
+enum
+{
+    JOYSTK_RIGHT_HORIZ = 0,
+    JOYSTK_RIGHT_VERT  = 1,
+    JOYSTK_LEFT_HORIZ  = 2,
+    JOYSTK_LEFT_VERT   = 3,
+};
+
+
+enum
+{
+    JOYSTK_MAX = 63,  // max value in a POTVAL entry (min is 0)
+};
+
+
+// Reads the joysticks and returns the address of a 4-byte array
+// that contains the 0..63 values that would be returned by
+// JOYSTK(0..3) in Color Basic.
+//
+asm const byte *readJoystickPositions()
+{
+    asm
+    {
+        pshs    u,y     ; protect against Color Basic
+        jsr     $A9DE   ; GETJOY
+        jsr     $A976   ; turn audio back on (GETJOY turns it off)
+        puls    y,u
+        ldd     #$015A  ; return POTVAL
+    }
+}
+
+
+// Bit names to be used on the value returned by readJoystickButtons().
+//
+enum
+{
+    JOYSTK_BUTTON_1_RIGHT = 0x01,
+    JOYSTK_BUTTON_2_RIGHT = 0x02,
+    JOYSTK_BUTTON_1_LEFT  = 0x04,
+    JOYSTK_BUTTON_2_LEFT  = 0x08,
+};
+
+
+// Reads the state of all 4 supported joystick buttons.
+// Returns a 4-bit value:
+// - bit 0: button 1 of right joystick;
+// - bit 1: button 2 of right joystick;
+// - bit 2: button 1 of left joystick;
+// - bit 3: button 2 of left joystick.
+//
+asm byte readJoystickButtons()
+{
+    asm
+    {
+        ldb     #$FF    ; set column strobe to check buttons
+        stb     $FF02   ; PIA0+2
+        ldb     $FF00   ; PIA0
+        andb    #$0F    ; return low 4 bits
     }
 }
 
@@ -583,6 +743,10 @@ byte waitkey(byte blinkCursor)
 
 
 #endif  /* !defined _COCO_BASIC_ */
+
+
+#define disableInterrupts() asm("ORCC",  "#$50")
+#define enableInterrupts()  asm("ANDCC", "#$AF")
 
 
 #endif  /* _coco3_h_ */

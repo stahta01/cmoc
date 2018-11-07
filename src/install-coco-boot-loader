@@ -1,6 +1,6 @@
 #!/usr/bin/perl -w
 #
-#   $Id: install-coco-boot-loader,v 1.1 2015/06/24 04:46:22 sarrazip Exp $
+#   $Id: install-coco-boot-loader,v 1.2 2018/03/18 17:03:52 sarrazip Exp $
 #
 #   install-coco-boot-loader - A tool to write a CoCo DECB .bin file
 #                              to track 34 of a DECB disk image.
@@ -42,13 +42,15 @@ __EOF__
 my $showUsage = 0;
 my $uninstall = 0;
 my $force = 0;
+my $verbose = 0;
 
 exit 1 unless GetOptions(
-	"help" => \$showUsage,
-	"version" => \$showUsage,
-        "uninstall" => \$uninstall,
-        "force" => \$force,
-        );
+    "help" => \$showUsage,
+    "version" => \$showUsage,
+    "uninstall" => \$uninstall,
+    "force" => \$force,
+    "verbose" => \$verbose,
+    );
 
 if ($showUsage)
 {
@@ -126,7 +128,7 @@ if ($install)
         }
 
         printf("Read block of \$%X (%u) bytes that loads at \$%04X\n",
-                $blockLen, $blockLen, $loadAddress);
+                $blockLen, $blockLen, $loadAddress) if $verbose;
         
         if (!defined $content && $loadAddress != 0x2600)
         {
@@ -150,7 +152,7 @@ if ($install)
             my $lastAddr = 0x2600 + length($content);
             my $paddingNeeded = $loadAddress - $lastAddr;
             printf("Padding with \$%X (%u) bytes to go from \$%04X to \$%04X\n",
-                    $paddingNeeded, $paddingNeeded, $lastAddr, $loadAddress); 
+                    $paddingNeeded, $paddingNeeded, $lastAddr, $loadAddress) if $verbose; 
             if ($paddingNeeded < 0)
             {
                 print "$0: $binFilename contains a block that overlaps another or goes before \$2600\n";
@@ -168,7 +170,7 @@ if ($install)
     close(BIN);
     
     printf("Read total of \$%X (%u) null bytes of content from %s\n",
-            length($content), length($content), $binFilename);
+            length($content), length($content), $binFilename) if $verbose;
 
     if (0)  # debugging: dump $contents in hex
     {
@@ -238,7 +240,7 @@ if ($install)
             print "$0: cannot install boot loader in disk image $dskFilename: track 34 is not free\n";
             exit 1;
         }
-        print "CAUTION: forcing installation despite track 34 being occupied\n";
+        print "CAUTION: forcing installation despite track 34 being occupied\n" if $verbose;
     }
 
     if (syswrite(DSK, pack("CC", 0xC0, 0xC0)) != 2)  # write 2 "occupied" values to FAT entries for granules 66 and 67
@@ -269,5 +271,5 @@ if (!close(DSK))
     exit 1;
 }
 
-print "Success.\n";
+print "Success.\n" if $verbose;
 exit 0;

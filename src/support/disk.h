@@ -2,10 +2,21 @@
 
     By Pierre Sarrazin <http://sarrazip.com/>.
     This file is in the public domain.
+
+    Version 0.1.1 - Fall 2017 - Now uses uint32_t (unsigned long).
+    Version 0.2.0 - January 2018 - MUST now call initdisk() first.
+                                   This file does not call sbrk() anymore.
 */
 
 #include "coco.h"
 #include "assert.h"
+
+
+// MUST be called before any other functions of this file.
+// newFATBuffer: Must be a non-null pointer to an area of MAX_NUM_GRANULES bytes.
+// Returns 1 on success, 0 on failure.
+// 
+byte initdisk(byte newFATBuffer[]);
 
 
 // DSKCON operation codes.
@@ -16,7 +27,7 @@
 
 byte findDirEntry(char *dirEntry, char *filename);
 byte *updateFAT();
-byte computeFileLength(word *dwLength, byte firstGran, word numBytesLastSector);
+byte computeFileLength(uint32_t dwLength, byte firstGran, word numBytesLastSector);
 void rewind(struct FileDesc *fd);
 word getGranuleLength(byte *fat, byte granule, word numBytesLastSector);
 byte *getCurrentlyAvailableBytes(struct FileDesc *fd, word *numAvailBytes);
@@ -122,11 +133,11 @@ struct FileDesc
     byte drive;
     byte firstGran;  // 0..67
     word numBytesLastSector;  // 0..256
-    word length[2];  // 32-bit word giving length of file
+    uint32_t length;  // length of file
     byte curGran;  // 0..67, 255 means at EOF
     byte curSec;  // 1..9 (relative to current granule)
-    word curGranLen;  // 0..2304
-    word offset[2];  // 32-bit reading/writing offset
+    word curGranLen;  // 0..GRANULE_SIZE
+    uint32_t offset;  // reading offset
     word secOffset;  // 0..256: index into curSector[] (256 means beyond sector)
     byte curSector[256];
     word curSectorAvailBytes;  // number valid bytes in curSector[] (0..256)
@@ -140,6 +151,19 @@ byte *fatBuffer = 0;  // will point to an array of MAX_NUM_GRANULES entries
 byte fatUpToDate = FALSE;  // when TRUE, fatBuffer[] does not need to be reloaded
 
 
+byte initdisk(byte newFATBuffer[])
+{
+    fatBuffer = newFATBuffer;
+    return 1;
+}
+
+
+// CAUTION: As of version 0.2.0 of this file, initdisk() MUST have been called
+//          before calling this or any other function of this file.
+//          Otherwise, a call to openfile() will fail.
+//          To force users of this file to be aware of the change, function open()
+//          has been renamed to openfile().
+//
 // Initializes a file descriptor with the given filename.
 // The filename must not contain a drive specification
 // (the drive used is the one set by setDefautlDriveNo()).
@@ -152,11 +176,11 @@ byte fatUpToDate = FALSE;  // when TRUE, fatBuffer[] does not need to be reloade
 // close() must be called with fileDesc to release the
 // underlying resources.
 //
-byte open(struct FileDesc *fd, char *filename)
+byte openfile(struct FileDesc *fd, const char *filename)
 {
-    if (fd == 0 || filename == 0)
-        return 0;  // invalid arguments
-    //printf("- open(0x%x, %s): fd->curSector=0x%x\n", fd, filename, fd->curSector);
+    if (fd == 0 || filename == 0 || fatBuffer == 0)
+        return 0;  // invalid arguments, or initdisk() not called
+    //printf("- openfile(0x%x, %s): fd->curSector=0x%x\n", fd, filename, fd->curSector);
     assert(fd->curSector != 0);
 
     char dirEntry[16];
@@ -193,8 +217,7 @@ void rewind(struct FileDesc *fd)
     fd->curGran = fd->firstGran;
     fd->curSec = 1;
     fd->curGranLen = getGranuleLength(fat, fd->firstGran, fd->numBytesLastSector);
-    fd->offset[0] = 0;
-    fd->offset[1] = 0;
+    fd->offset = 0;
     fd->secOffset = 0;
     fd->curSectorAvailBytes = 0;
 }
@@ -203,7 +226,7 @@ void rewind(struct FileDesc *fd)
 // Reads the current drive's FAT and returns the address of the
 // internal buffer that contains it.
 //
-// Returns 0 upon failure to allocate memory or to read the FAT sector.
+// Returns 0 if the FAT buffer pointer is null.
 // Reads the FAT sector the first time, but not the following times,
 // unless fatUpToDate is reset to 0.
 //
@@ -215,20 +238,12 @@ byte *updateFAT()
         return fatBuffer;
 
     if (!fatBuffer)
-    {
-        byte *p = (byte *) sbrk(MAX_NUM_GRANULES);
-        if (p == (byte *) -1)
-        {
-            printf("updateFAT: failed to allocate memory for FAT of drive %u\n", curDriveNo);
-            return (byte *) 0;
-        }
-        fatBuffer = p;
-    }
+        return (byte *) 0;
 
     byte fatSector[256];
     if (!readDiskSector(fatSector, curDriveNo, 17, 2))
     {
-        printf("updateFAT: failed to read FAT of drive %u\n", curDriveNo);
+        //printf("updateFAT: failed to read FAT of drive %u\n", curDriveNo);
         return (byte *) 0;
     }
 
@@ -296,58 +311,24 @@ word read(struct FileDesc *fd, char *buf, word numBytesRequested)
 }
 
 
-sbyte dwcompare(word *a, word *b)
-{
-    sbyte result;
-    asm
-    {
-        pshs    y       // must not use U, which serves to refer to 'a' and 'b'
-        ldx     :a
-        ldy     :b
-        ldd     ,x++            // compare MSBs
-        cmpd    ,y++
-        beq     dwcompare_equal
-        blo     dwcompare_lower
-dwcompare_greater
-        ldb     #1
-        stb     result
-        bra     dwcompare_end
-dwcompare_lower
-        ldb     #-1
-        stb     result
-        bra     dwcompare_end
-dwcompare_equal
-        ldd     ,x              // compare LSBs
-        cmpd    ,y
-        blo     dwcompare_lower
-        bhi     dwcompare_greater
-        clr     result
-dwcompare_end
-        puls    y
-    }
-    return result;
-}
+enum { GRANULE_SIZE = 2304 };
 
-
-#define GRANULE_SIZE 2304
 
 // newPos: 2-word position in bytes.
 // Returns 0 for success, -1 for failure.
 //
-sbyte seek(struct FileDesc *fd, word *newPos)
+sbyte seek(struct FileDesc *fd, uint32_t newPos)
 {
-    //printf("\n- seek(at %5u:%3u): start\n", newPos[0], newPos[1]);
+    //printf("\n- seek(at %lu): start\n", newPos);
     if (fd == 0)
         return -1;
 
     // If requested position is beyond end of file, clamp requested position.
     //
-    sbyte comp = dwcompare(newPos, fd->length);
-    if (comp > 0)
+    if (newPos > fd->length)
     {
         //printf("- seek: clamping\n");
-        newPos[0] = fd->length[0];
-        newPos[1] = fd->length[1];
+        newPos = fd->length;
     }
 
     // Compute granule index by dividing newPos by GRANULE_SIZE.
@@ -355,24 +336,17 @@ sbyte seek(struct FileDesc *fd, word *newPos)
     // it is not an index into the FAT.
     //
     byte granIndex = 0;
-    word pos[2];
-    pos[0] = newPos[0];
-    pos[1] = newPos[1];
-    //printf("- seek: before while: pos=(%5u:%5u) %2u\n", pos[0], pos[1], granIndex);
-    while (pos[0] || pos[1] >= GRANULE_SIZE)  // while pos >= 2304
+    uint32_t pos = newPos;
+    //printf("- seek: before while: pos=%lu granIndex=%2u\n", pos, granIndex);
+    while (pos >= GRANULE_SIZE)
     {
         ++granIndex;
-
-	// Substract GRANULE_SIZE from 32-bit 'pos'.
-        byte borrow = (pos[1] < GRANULE_SIZE);
-        pos[1] -= GRANULE_SIZE;
-        if (borrow)
-            --pos[0];
-        //printf("- seek:      pos=(%u, %u) %u\n", pos[0], pos[1], granIndex);
+        pos -= GRANULE_SIZE;
+        //printf("- seek:      pos=%lu granIndex=%2u\n", pos, granIndex);
     }
 
     // Here, pos[1] is the offset in the last granule.
-    word offsetInLastGranule = pos[1];
+    word offsetInLastGranule = (word) pos;
     assert(offsetInLastGranule < GRANULE_SIZE);
 
     // Determine the granule (0..67) from granIndex and the FAT.
@@ -404,11 +378,10 @@ sbyte seek(struct FileDesc *fd, word *newPos)
 
     fd->curSectorAvailBytes = 0;
 
-    fd->offset[0] = newPos[0];
-    fd->offset[1] = newPos[1];
-    //printf("- seek: %u %u %u %u:%u %u %u\n",
+    fd->offset = newPos;
+    //printf("- seek: %u %u %u %lu %u %u\n",
     //        fd->curGran, fd->curSec, fd->curGranLen,
-    //        fd->offset[0], fd->offset[1], fd->secOffset,
+    //        fd->offset, fd->secOffset,
     //        fd->curSectorAvailBytes);
 
     return 0;  // success
@@ -441,7 +414,7 @@ byte *getCurrentlyAvailableBytes(struct FileDesc *fd, word *numAvailBytes)
 
 void advanceOffset(struct FileDesc *fd, word numBytes)
 {
-    adddww(fd->offset, numBytes);
+    fd->offset += numBytes;
     fd->secOffset += numBytes;
 
     //printf("- advanceOffset: now 0x%04x%04x\n", fd->offset[0], fd->offset[1]);
@@ -552,12 +525,11 @@ byte isLastSectorOfFile(struct FileDesc *fd)
 }
 
 
-byte getFileLength(struct FileDesc *fd, word *dwLengthInBytes)
+byte getFileLength(struct FileDesc *fd, uint32_t dwLengthInBytes)
 {
-    if (!fd || !dwLengthInBytes)
+    if (!fd)
     {
-        dwLengthInBytes[0] = 0;
-        dwLengthInBytes[1] = 0;
+        dwLengthInBytes = 0;
         return FALSE;
     }
 
@@ -567,14 +539,13 @@ byte getFileLength(struct FileDesc *fd, word *dwLengthInBytes)
 
 
 //TODO: test this on file whose length is multiple of 256 bytes.
-byte computeFileLength(word *dwLength, byte firstGran, word numBytesLastSector)
+byte computeFileLength(uint32_t dwLength, byte firstGran, word numBytesLastSector)
 {
     if (dwLength == 0)
         return FALSE;
 
     // Presume error:
-    dwLength[0] = 0xFFFF;
-    dwLength[1] = 0xFFFF;
+    dwLength = 0xFFFFFFFFUL;
 
     if (firstGran > 67)
         return FALSE;
@@ -586,10 +557,10 @@ byte computeFileLength(word *dwLength, byte firstGran, word numBytesLastSector)
         return FALSE;
 
     byte curGran = fat[firstGran];
-    zerodw(dwLength);
+    dwLength = 0;
     while (curGran <= 0xC0)
     {
-        adddww(dwLength, 2304);
+        dwLength += GRANULE_SIZE;
         curGran = fat[curGran];
     }
 
@@ -599,7 +570,7 @@ byte computeFileLength(word *dwLength, byte firstGran, word numBytesLastSector)
     asm("STD", numBytesLastGran);
     numBytesLastGran += numBytesLastSector;
 
-    adddww(dwLength, numBytesLastGran);  // add numBytesLastGran to dwLength[0]:dwLength[1]
+    dwLength += numBytesLastGran;  // add numBytesLastGran to dwLength[0]:dwLength[1]
 
     return TRUE;
 }
@@ -620,13 +591,13 @@ word getGranuleLength(byte *fat, byte granule, word numBytesLastSector)
     if (entry >= 0xC1)
         return ((word) entry - 0xC1) * 256 + numBytesLastSector;
 
-    return 2304;  // this entry points to a following granule, so 'granule' is full
+    return GRANULE_SIZE;  // this entry points to a following granule, so 'granule' is full
 }
 
 
 // dirEntry: 16-byte region
 //
-byte findDirEntry(char *dirEntry, char *filename)
+byte findDirEntry(char *dirEntry, const char *filename)
 {
     char normalizedFilename[12];
     normalizeFilename(normalizedFilename, filename);
@@ -669,9 +640,9 @@ byte findDirEntry(char *dirEntry, char *filename)
 // Writes 11 non-null characters to the destination buffer,
 // followed by a terminating '\0' character.
 //
-void normalizeFilename(char *dest, char *src)
+void normalizeFilename(char *dest, const char *src)
 {
-    char *reader = src;
+    const char *reader = src;
     byte i;
     for (i = 0; i < 8; ++i)  // copy filename until period
     {
@@ -736,7 +707,10 @@ byte setDefaultDriveNo(byte no)
 }
 
 
-byte getDefautlDriveNo()
+#define getDefautlDriveNo() getDefaultDriveNo()  /* oops */
+
+
+byte getDefaultDriveNo()
 {
     return curDriveNo;
 }

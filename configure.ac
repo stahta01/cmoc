@@ -1,8 +1,8 @@
-# $Id: configure.ac,v 1.70 2016/09/18 01:51:44 sarrazip Exp $
+# $Id: configure.ac,v 1.113 2018/10/04 17:49:58 sarrazip Exp $
 
 AC_PREREQ(2.54)
 
-AC_INIT(cmoc, 0.1.33)
+AC_INIT(cmoc, 0.1.54)
 AC_CONFIG_SRCDIR(src/lexer.ll)
 AM_INIT_AUTOMAKE
 
@@ -13,17 +13,19 @@ AC_SUBST(PACKAGE_FULL_NAME)
 AC_SUBST(PACKAGE_SUMMARY_EN)
 AC_SUBST(PACKAGE_SUMMARY_FR)
 
-MANUAL_DATE_EN="October 23rd, 2016"; AC_SUBST(MANUAL_DATE_EN)
+MANUAL_DATE_EN="October 4th, 2018"; AC_SUBST(MANUAL_DATE_EN)
 
 AC_PROG_CXX
 AC_LANG_CPLUSPLUS
 AC_COMPILE_WARNINGS
 
 AC_CHECK_PROG(GREP, grep, grep)
+AC_CHECK_PROG(EGREP, egrep, egrep)
 AC_CHECK_PROG(ENV, env, env)
 AC_CHECK_PROG(HEAD, head, head)
 AC_CHECK_PROG(TAIL, tail, tail)
-AC_CHECK_PROG(OD, od, od)
+AC_CHECK_PROG(HEXDUMP, hexdump, hexdump)
+AC_CHECK_PROG(STRINGS, strings, strings)
 
 AC_PROG_PERL_MODULES(strict)
 
@@ -44,10 +46,10 @@ else
 fi
 
 
-# Check for a 6809 assembler.
+# Check for LWTOOLS.
 #
-AC_CHECK_PROG(HAVE_LWASM, lwasm, yes, no)
-if test "$HAVE_LWASM" = no; then
+AC_CHECK_PROG(LWASM, lwasm, lwasm, no)
+if test "$LWASM" = no; then
 	AC_MSG_ERROR([The LWTOOLS lwasm assembler (>= 4.11) is required. See the CMOC home page.])
 else
 	AC_MSG_CHECKING([lwasm --version])
@@ -61,6 +63,22 @@ else
 		AC_MSG_RESULT([no])
 		AC_MSG_ERROR([The LWTOOLS lwasm assembler (>= 4.11) is required: must accept --pragma=forwardrefmax])
 	fi
+fi
+
+AC_CHECK_PROG(LWAR, lwar, lwar, no)
+if test "$LWAR" = no; then
+	AC_MSG_ERROR([The LWTOOLS lwar archiver (>= 4.11) is required. See the CMOC home page.])
+else
+	AC_MSG_CHECKING([lwar --version])
+	lwar --version
+fi
+
+AC_CHECK_PROG(LWLINK, lwlink, lwlink, no)
+if test "$LWLINK" = no; then
+	AC_MSG_ERROR([The LWTOOLS lwlink archiver (>= 4.11) is required. See the CMOC home page.])
+else
+	AC_MSG_CHECKING([lwlink --version])
+	lwlink --version
 fi
 
 
@@ -114,7 +132,8 @@ AC_CONFIG_FILES([
 	Makefile
 	src/Makefile
 	src/support/Makefile
-	src/support/vectrex/Makefile
+	src/stdlib/Makefile
+	src/float/Makefile
 	src/usim-0.91-cmoc/Makefile
 	macros/Makefile
 	doc/Makefile

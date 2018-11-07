@@ -1,5 +1,5 @@
 %{
-/*  $Id: parser.yy,v 1.37 2016/10/08 18:15:06 sarrazip Exp $
+/*  $Id: parser.yy,v 1.78 2018/05/23 03:34:13 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -20,6 +20,8 @@
 
 #include "DeclarationSequence.h"
 #include "WordConstantExpr.h"
+#include "RealConstantExpr.h"
+#include "DWordConstantExpr.h"
 #include "IdentifierExpr.h"
 #include "VariableExpr.h"
 #include "FunctionCallExpr.h"
@@ -45,6 +47,7 @@
 #include "ConditionalExpr.h"
 #include "DeclarationSpecifierList.h"
 #include "Pragma.h"
+#include "CommaExpr.h"
 
 #include <string.h>
 #include <time.h>
@@ -60,19 +63,18 @@ extern string sourceFilename;  // defined in lexer.ll
 extern int lineno;  // defined in lexer.ll
 int numErrors = 0;  // error counter for yyerror()
 int numWarnings = 0;
+static bool doubleTypeWarningIssued = false;
 
-void rejectTypeKeyword(const char *keyword)
-{
-    errormsg("unsupported type keyword `%s'", keyword);
-}
+void _PARSERTRACE(int parserLineNo, const char *fmt, ...);
+#define PARSERTRACE(...) _PARSERTRACE(__LINE__, __VA_ARGS__)
 
 %}
 
-%expect 15  /* 1 shift/reduce conflict expected for if-else */
+%expect 20  /* 1 shift/reduce conflict expected for if-else */
 
 %union {
     char *str;
-    char character;
+    signed char character;
     double real;
     int integer;
     BasicType basicType;
@@ -87,7 +89,6 @@ void rejectTypeKeyword(const char *keyword)
     DeclarationSequence *declarationSequence;
     Declarator *declarator;
     std::vector<Declarator *> *declaratorVector;
-    Declaration *declaration;
     BinaryOpExpr::Op binop;
     UnaryOpExpr::Op unop;
     Scope *scope;
@@ -99,6 +100,7 @@ void rejectTypeKeyword(const char *keyword)
     std::vector<ClassDef::ClassMember *> *classMemberList;
     Enumerator *enumerator;
     std::vector<Enumerator *> *enumeratorList;
+    TypeQualifierBitFieldVector *typeQualifierBitFieldVector;
 }
 
 %token <str> ID STRLIT PRAGMA
@@ -107,7 +109,7 @@ void rejectTypeKeyword(const char *keyword)
 %token <typeDesc> TYPE_NAME
 %token INT CHAR SHORT LONG FLOAT DOUBLE SIGNED UNSIGNED VOID PLUS_PLUS MINUS_MINUS IF ELSE WHILE DO FOR
 %token EQUALS_EQUALS BANG_EQUALS LOWER_EQUALS GREATER_EQUALS AMP_AMP PIPE_PIPE
-%token LT_LT GT_GT BREAK CONTINUE RETURN ASM VERBATIM_ASM STRUCT UNION THIS
+%token LT_LT GT_GT BREAK CONTINUE RETURN ASM NORTS VERBATIM_ASM STRUCT UNION THIS
 %token PLUS_EQUALS MINUS_EQUALS ASTERISK_EQUALS SLASH_EQUALS PERCENT_EQUALS LT_LT_EQUALS GT_GT_EQUALS
 %token CARET_EQUALS AMP_EQUALS PIPE_EQUALS
 %token RIGHT_ARROW INTERRUPT SIZEOF ELLIPSIS TYPEDEF ENUM SWITCH CASE DEFAULT REGISTER GOTO EXTERN STATIC CONST VOLATILE AUTO
@@ -116,23 +118,24 @@ void rejectTypeKeyword(const char *keyword)
 %type <tree> expr expr_opt logical_or_expr logical_and_expr rel_expr add_expr mul_expr
 %type <tree> inclusive_or_expr exclusive_or_expr and_expr
 %type <tree> if_cond while_cond assignment_expr equality_expr shift_expr conditional_expr constant_expr
-%type <tree> unary_expr cast_expr postfix_expr primary_expr initializer for_init
+%type <tree> unary_expr cast_expr postfix_expr primary_expr initializer for_init subscript
 %type <declarationSequence> declaration
 %type <compoundStmt> compound_stmt stmt_list stmt_list_opt
-%type <treeSequence> expr_list_opt expr_list translation_unit
-%type <formalParamList> parameter_list parameter_type_list parameter_type_list_opt
+%type <treeSequence> expr_list_opt expr_list translation_unit arg_expr_list
+%type <formalParamList> parameter_list parameter_type_list parameter_type_list_opt function_pointer_cast function_pointer_cast_opt
 %type <formalParameter> parameter_declaration
-%type <treeSequence> initializer_list
+%type <treeSequence> initializer_list subscript_list
 %type <declaratorVector> init_declarator_list struct_declarator_list
 %type <declarator> init_declarator declarator direct_declarator struct_declarator
 %type <functionDef> function_definition
 %type <binop> add_op mul_op rel_op equality_op assignment_op
 %type <unop> unary_op
-%type <integer> save_line_no pointer abstract_declarator struct_or_union
-%type <typeDesc> basic_type non_void_basic_type type_name struct_or_union_specifier unsupported_basic_type
+%type <typeQualifierBitFieldVector> pointer abstract_declarator
+%type <integer> save_line_no struct_or_union
+%type <typeDesc> basic_type non_void_basic_type type_name struct_or_union_specifier
 %type <typeSpecifier> type_specifier enum_specifier
 %type <declarationSpecifierList> declaration_specifiers specifier_qualifier_list
-%type <integer> storage_class_specifier
+%type <integer> storage_class_specifier type_qualifier type_qualifier_list
 %type <str> save_src_fn strlit_seq
 %type <classDef> struct_declaration_list struct_declaration_list_opt
 %type <classMemberList> struct_declaration
@@ -143,6 +146,7 @@ void rejectTypeKeyword(const char *keyword)
 
 goal:
       translation_unit          { TranslationUnit::instance().setDefinitionList($1); }
+    |                           { TranslationUnit::instance().setDefinitionList(NULL); }
     ;
 
 translation_unit:
@@ -164,6 +168,7 @@ external_declaration:
       function_definition       { $$ = $1; }
     | declaration               { $$ = $1; }  // can be null in the case of a typedef
     | PRAGMA                    { $$ = new Pragma($1); free($1); }
+    | ';'                       { $$ = NULL; }  // tolerate semi-colon after function body
     ;
 
 function_definition:
@@ -176,6 +181,10 @@ function_definition:
                 {
                     errormsg("enum with enumerated names is not supported in a function's return type");
                     dsl->detachEnumeratorList();
+                }
+                if (dsl->isStaticDeclaration() && dsl->isExternDeclaration())
+                {
+                    errormsg("function definition must not be both static and extern");
                 }
 
                 // Example: In byte **f() {}, dsl represents "byte" and
@@ -199,14 +208,14 @@ parameter_type_list:
                                           error message in FunctionDef::declareFormalParams(). */
     ;
 
-parameter_list
-    : parameter_declaration          { $$ = new FormalParamList(); if ($1) $$->addTree($1); }
+parameter_list:
+      parameter_declaration          { $$ = new FormalParamList(); if ($1) $$->addTree($1); }
     | parameter_list ',' parameter_declaration
                                      { $$ = $1; if ($3) $$->addTree($3); }
     ;
 
-parameter_declaration
-    : declaration_specifiers declarator
+parameter_declaration:
+      declaration_specifiers declarator
                 {
                     DeclarationSpecifierList *dsl = $1;
                     $$ = $2->createFormalParameter(*dsl);
@@ -216,10 +225,28 @@ parameter_declaration
     ;
 
 type_name:
-      specifier_qualifier_list                      { $$ = $1->getTypeDesc(); delete $1; }
-    | specifier_qualifier_list abstract_declarator
+      specifier_qualifier_list function_pointer_cast_opt
                 {
-                    $$ = TranslationUnit::getTypeManager().getPointerTo($1->getTypeDesc(), size_t($2));
+                    if ($2)
+                    {
+                        $$ = TranslationUnit::getTypeManager().getFunctionPointerType($1->getTypeDesc(), *$2, $1->isInterruptServiceFunction());
+                        delete $2;
+                    }
+                    else
+                        $$ = $1->getTypeDesc();
+                    delete $1;
+                }
+    | specifier_qualifier_list abstract_declarator function_pointer_cast_opt
+                {
+                    const TypeDesc *td = TranslationUnit::getTypeManager().getPointerTo($1->getTypeDesc(), *$2);
+                    if ($3)
+                    {
+                        $$ = TranslationUnit::getTypeManager().getFunctionPointerType(td, *$3, $1->isInterruptServiceFunction());
+                        delete $3;
+                    }
+                    else
+                        $$ = td;
+                    delete $2;  /* originally created by 'pointer' rule */
                     delete $1;
                 }
     ;
@@ -228,14 +255,28 @@ abstract_declarator:
       pointer           { $$ = $1; }
     ;
 
+function_pointer_cast_opt:
+      /* empty */                               { $$ = NULL; }
+    | function_pointer_cast                     { $$ = $1; }
+    ;
+
+function_pointer_cast:
+      '(' '*' ')' '(' parameter_type_list ')'   { $$ = $5; }
+    | '(' '*' ')' '(' ')'                       { $$ = new FormalParamList(); }
+    ;
+
 pointer:
-      '*'               { $$ = 1; }
-    | '*' pointer       { $$ = $2 + 1; }
+      '*'                               { $$ = new TypeQualifierBitFieldVector(); $$->push_back(0); }  /* add pointer level with neither CONST_BIT nor VOLATILE_BIT */
+    | '*' type_qualifier_list           { $$ = new TypeQualifierBitFieldVector(); $$->push_back(TypeQualifierBitField($2)); }  /* add pointer level with CONST_BIT and/or VOLATILE_BIT */
+    | '*' pointer                       { $$ = $2; $$->push_back(0); }
+    | '*' type_qualifier_list pointer   { $$ = $3; $$->push_back($2); }
     ;
 
 specifier_qualifier_list:
       type_specifier specifier_qualifier_list   { $$ = $2; $$->add(*$1); delete $1; }
     | type_specifier                            { $$ = new DeclarationSpecifierList(); $$->add(*$1); delete $1; }
+    | type_qualifier specifier_qualifier_list   { $$ = $2; if ($1 != -1) $$->add(DeclarationSpecifierList::Specifier($1)); }
+    | type_qualifier                            { $$ = new DeclarationSpecifierList(); if ($1 != -1) $$->add(DeclarationSpecifierList::Specifier($1)); }
     ;
 
 compound_stmt:
@@ -272,12 +313,17 @@ declaration_specifiers:
             { $$ = new DeclarationSpecifierList(); $$->add(*$1); delete $1; }
     | type_specifier declaration_specifiers
             { $$ = $2; $$->add(*$1); delete $1; }
+    | type_qualifier
+            { $$ = new DeclarationSpecifierList(); if ($1 != -1) $$->add(DeclarationSpecifierList::Specifier($1)); }
+    | type_qualifier declaration_specifiers
+            { $$ = $2; if ($1 != -1) $$->add(DeclarationSpecifierList::Specifier($1)); }
     ;
 
 storage_class_specifier:
       INTERRUPT     { $$ = DeclarationSpecifierList::INTERRUPT_SPEC; }
     | TYPEDEF       { $$ = DeclarationSpecifierList::TYPEDEF_SPEC; }
     | ASM           { $$ = DeclarationSpecifierList::ASSEMBLY_ONLY_SPEC; }
+    | NORTS         { $$ = DeclarationSpecifierList::NO_RETURN_INSTRUCTION; }
     | REGISTER      { $$ = -1; /* not supported, ignored */ }
     | AUTO          { $$ = -1; /* not supported, ignored */ }          
     | STATIC        { $$ = DeclarationSpecifierList::STATIC_SPEC; }
@@ -290,8 +336,19 @@ type_specifier:
     | struct_or_union ID            { const TypeDesc *td = TranslationUnit::getTypeManager().getClassType($2, $1 == UNION, true);
                                       $$ = new TypeSpecifier(td, "", NULL);
                                       free($2); }
+    | struct_or_union TYPE_NAME     { $$ = new TypeSpecifier($2, "", NULL); }
     | enum_specifier                { $$ = $1; }  /* already a TypeSpecifier */
     | TYPE_NAME                     { $$ = new TypeSpecifier($1, "", NULL); }
+    ;
+
+type_qualifier:
+      CONST                         { $$ = DeclarationSpecifierList::CONST_QUALIFIER; }
+    | VOLATILE                      { $$ = DeclarationSpecifierList::VOLATILE_QUALIFIER; TranslationUnit::instance().warnAboutVolatile(); }
+    ;
+
+type_qualifier_list:  /* bit field made of CONST_BIT, VOLATILE_BIT */
+      type_qualifier                        { $$ = ($1 == DeclarationSpecifierList::CONST_QUALIFIER ? CONST_BIT : VOLATILE_BIT); }
+    | type_qualifier_list type_qualifier    { $$ = $1 | ($2 == DeclarationSpecifierList::CONST_QUALIFIER ? CONST_BIT : VOLATILE_BIT); } 
     ;
 
 struct_or_union_specifier:
@@ -354,7 +411,7 @@ enumerator_list:
 
 enumerator
     : ID                                    { $$ = new Enumerator($1, NULL, getSourceLineNo()); free($1); }
-    | ID '=' expr                           { $$ = new Enumerator($1, $3,   getSourceLineNo()); free($1); }
+    | ID '=' constant_expr                  { $$ = new Enumerator($1, $3,   getSourceLineNo()); free($1); }
     ;
 
 comma_opt:
@@ -368,14 +425,20 @@ non_void_basic_type:
     | SHORT     { $$ = TranslationUnit::getTypeManager().getIntType(WORD_TYPE, true); }
     | SIGNED    { $$ = TranslationUnit::getTypeManager().getSizelessType(true);  }
     | UNSIGNED  { $$ = TranslationUnit::getTypeManager().getSizelessType(false); }
-    | unsupported_basic_type
-    ;
-
-/* To avoid bison warning re: "Terminals unused in grammar". */
-unsupported_basic_type:
-      LONG      { rejectTypeKeyword("long");   $$ = TranslationUnit::getTypeManager().getLongType(true);   }
-    | FLOAT     { rejectTypeKeyword("float");  $$ = TranslationUnit::getTypeManager().getFloatType(false); }
-    | DOUBLE    { rejectTypeKeyword("double"); $$ = TranslationUnit::getTypeManager().getFloatType(true);  }
+    | LONG      { $$ = TranslationUnit::getTypeManager().getLongType(true); }
+    | FLOAT     {
+                    TranslationUnit::instance().warnIfFloatUnsupported();
+                    $$ = TranslationUnit::getTypeManager().getRealType(false);
+                }
+    | DOUBLE    {
+                    TranslationUnit::instance().warnIfFloatUnsupported();
+                    $$ = TranslationUnit::getTypeManager().getRealType(false);
+                    if (!doubleTypeWarningIssued)
+                    {
+                        warnmsg("`double' is an alias for `float' for this compiler");
+                        doubleTypeWarningIssued = true;
+                    }
+                }
     ;
 
 basic_type:
@@ -396,7 +459,7 @@ init_declarator_list:
     | init_declarator_list ',' init_declarator	{ $$ = $1; $$->push_back($3); }
     ;
 
-// Declarator with initializer.
+// Declarator with optional initializer.
 //
 init_declarator:
       declarator                        { $$ = $1; }  // Declarator *
@@ -406,8 +469,7 @@ init_declarator:
 declarator:
       pointer declarator                {
                                             $$ = $2;
-                                            for (int i = 0; i < $1; ++i)
-                                                $$->incPointerLevel();
+                                            $$->setPointerLevel($1);  // ownership of $1 transfered to the Declarator
                                         }
     | direct_declarator                 { $$ = $1; }
     ;
@@ -425,6 +487,7 @@ direct_declarator:
     | direct_declarator '[' expr_opt ']'
             {
                 $$ = $1;
+                $$->checkForFunctionReturningArray();
                 $$->addArraySizeExpr($3);
             }
     | direct_declarator '(' parameter_type_list ')'
@@ -438,7 +501,6 @@ direct_declarator:
                 $$->setFormalParamList(new FormalParamList());
             }
     | direct_declarator '(' VOID ')'
-    
             {
                 $$ = $1;
                 $$->setFormalParamList(new FormalParamList());
@@ -446,33 +508,50 @@ direct_declarator:
     | '(' '*' ID ')' '(' parameter_type_list_opt ')'  /* function pointer variable */
             {
                 $$ = new Declarator($3, sourceFilename, lineno);
-                $$->setAsFunctionPointer();
+                $$->setAsFunctionPointer($6);  // takes ownership of FormalParamList
                 free($3);
                 TranslationUnit::checkForEllipsisWithoutNamedArgument($6);
-                delete $6;
             }
     | '(' '*' ')' '(' parameter_type_list_opt ')'  /* unnamed function pointer variable */
             {
                 $$ = new Declarator(string(), sourceFilename, lineno);
-                $$->setAsFunctionPointer();
+                $$->setAsFunctionPointer($5);  // takes ownership of FormalParamList
                 TranslationUnit::checkForEllipsisWithoutNamedArgument($5);
-                delete $5;
             }
+    | '(' '*' ID subscript_list ')' '(' parameter_type_list_opt ')'  /* array of function pointer variables */
+            {
+                $$ = new Declarator($3, sourceFilename, lineno);
+                $$->setAsArrayOfFunctionPointers($7, $4);  // takes ownership of FormalParamList ($7), deletes $4
+                free($3);
+                TranslationUnit::checkForEllipsisWithoutNamedArgument($7);
+            }
+    ;
+
+/* Returns a non-null TreeSequence *.*/
+subscript_list:
+      subscript                      { $$ = new TreeSequence(); $$->addTree($1); }
+    | subscript_list subscript       { $$ = $1; $$->addTree($2); }
+    ;
+    
+subscript:
+      '[' expr_opt ']'               { $$ = $2; }
     ;
 
 parameter_type_list_opt:
       /* empty */                    { $$ = new FormalParamList(); }
-    | parameter_type_list            { $$ = $1;   }
+    | parameter_type_list            { $$ = $1; }
     ;
 
 initializer:
       assignment_expr                { $$ = $1; }
     | '{' initializer_list '}'       { $$ = $2; }
     | '{' initializer_list ',' '}'   { $$ = $2; }
+    | '{' '}'       { $$ = new TreeSequence(); }
+    | '{' ',' '}'   { $$ = new TreeSequence(); }
     ; 
 
 initializer_list:
-      initializer                           { $$ = new TreeSequence($1); }
+      initializer                           { $$ = new TreeSequence(); $$->addTree($1); }
     | initializer_list ',' initializer      { $$ = $1; $$->addTree($3); }
     ;
 
@@ -485,15 +564,21 @@ struct_declaration_list:
       struct_declaration
                 {
                     $$ = new ClassDef();
-                    for (std::vector<ClassDef::ClassMember *>::iterator it = $1->begin(); it != $1->end(); ++it)
-                        $$->addDataMember(*it);
+                    if ($1)
+                        for (std::vector<ClassDef::ClassMember *>::iterator it = $1->begin(); it != $1->end(); ++it)
+                            $$->addDataMember(*it);
+                    else
+                        assert(0);
                     delete $1;  // destroy the std::vector<ClassDef::ClassMember *>
                 }
     | struct_declaration_list struct_declaration
                 {
                     $$ = $1;
-                    for (std::vector<ClassDef::ClassMember *>::iterator it = $2->begin(); it != $2->end(); ++it)
-                        $$->addDataMember(*it);
+                    if ($2)
+                        for (std::vector<ClassDef::ClassMember *>::iterator it = $2->begin(); it != $2->end(); ++it)
+                            $$->addDataMember(*it);
+                    else
+                        assert(0);
                     delete $2;  // destroy the std::vector<ClassDef::ClassMember *>
                 }
     ;
@@ -503,14 +588,20 @@ struct_declaration:
     ;
 
 struct_declarator_list:
-      struct_declarator                             { $$ = new std::vector<Declarator *>(); $$->push_back($1); }
-    | struct_declarator_list ',' struct_declarator  { $$ = $1; $$->push_back($3); }
+      struct_declarator                             { $$ = new std::vector<Declarator *>(); if ($1) $$->push_back($1); }
+    | struct_declarator_list ',' struct_declarator  { $$ = $1; if ($3) $$->push_back($3); }
     ;
 
+/* May return a null pointer if the member declarator is ignored. */
 struct_declarator:
-      declarator        { $$ = $1; }
-
-    /* This is where bit fields would be supported. */
+      declarator                        { $$ = $1; }
+    | ':' conditional_expr              { $$ = NULL; }  // unnamed bit field member ignored
+    | declarator ':' conditional_expr   // named bit field (dimension ignored, except to choose between char/int/long)
+                {
+                    $$ = $1;
+                    $$->setBitFieldWidth(*$3);  // emits error if $3 is not constant expression
+                    delete $3;
+                }
     ;
 
 stmt_list:
@@ -571,6 +662,22 @@ expr_opt:
 
 expr:
       assignment_expr           { $$ = $1; }
+    | expr ',' assignment_expr  {
+                                    Tree *left = $1;
+                                    Tree *right = $3;
+                                    if (CommaExpr *ts = dynamic_cast<CommaExpr *>(left))
+                                    {
+                                        ts->addTree(right);
+                                        $$ = ts;
+                                    }
+                                    else
+                                        $$ = new CommaExpr(left, right);
+                                }
+    ;
+
+arg_expr_list:
+      assignment_expr                       { $$ = new TreeSequence(); $$->addTree($1); }
+    | arg_expr_list ',' assignment_expr     { $1->addTree($3); $$ = $1; }
     ;
 
 assignment_expr:
@@ -680,7 +787,26 @@ mul_op:
 
 unary_expr:
       postfix_expr              { $$ = $1; }
-    | unary_op cast_expr        { $$ = new UnaryOpExpr($1, $2); }
+    | unary_op cast_expr        {
+                                    RealConstantExpr *rce;
+                                    DWordConstantExpr *dwce;
+                                    if ($1 == UnaryOpExpr::NEG && (rce = dynamic_cast<RealConstantExpr *>($2)) != NULL)
+                                    {
+                                        // We have the negation of a real constant.
+                                        // Simplify by negating the value in the RealConstantExpr and getting rid of the negation operator.
+                                        rce->negateValue();
+                                        $$ = rce;
+                                    }
+                                    else if ($1 == UnaryOpExpr::NEG && (dwce = dynamic_cast<DWordConstantExpr *>($2)) != NULL)
+                                    {
+                                        dwce->negateValue();
+                                        $$ = dwce;
+                                    }
+                                    else
+                                    {
+                                        $$ = new UnaryOpExpr($1, $2);
+                                    }
+                                }
     | PLUS_PLUS unary_expr      { $$ = new UnaryOpExpr(UnaryOpExpr::PREINC, $2); }
     | MINUS_MINUS unary_expr    { $$ = new UnaryOpExpr(UnaryOpExpr::PREDEC, $2); }
     | SIZEOF '(' type_name ')'  { $$ = new UnaryOpExpr($3); }
@@ -706,7 +832,7 @@ postfix_expr:
     | postfix_expr save_src_fn save_line_no '(' ')'
                         { $$ = new FunctionCallExpr($1, new TreeSequence());
                           free($2); }
-    | postfix_expr save_src_fn save_line_no '(' expr_list ')'
+    | postfix_expr save_src_fn save_line_no '(' arg_expr_list ')'
                         { $$ = new FunctionCallExpr($1, $5);
                           free($2); }
     | postfix_expr '[' expr ']'
@@ -724,7 +850,24 @@ postfix_expr:
 primary_expr:
       ID                { $$ = new IdentifierExpr($1); free($1); }
     | THIS              { $$ = new IdentifierExpr("this"); }
-    | REAL              { $$ = new WordConstantExpr($1, true, $1 <= 0x7FFF); }  /* all integer constants are int or unsigned int, since version 0.1.8 */
+    | REAL              {
+                            bool isHexOrBin = (yytext[0] == '0' && (tolower(yytext[1]) == 'x' || tolower(yytext[1]) == 'b'));
+                            double value = $1;
+                            if (!isHexOrBin
+                                    && (strchr(yytext, '.') || strchr(yytext, 'e') || strchr(yytext, 'E')))  // if point or exponential
+                            {
+                                $$ = new RealConstantExpr(value, yytext);
+                            }
+                            else if (strchr(yytext, 'l') || strchr(yytext, 'L') || value > 65535.0 || value <= -32769.0)
+                            {
+                                bool uSuffix = (strchr(yytext, 'u') || strchr(yytext, 'U'));
+                                $$ = new DWordConstantExpr(value, !uSuffix && value <= 0x7FFFFFFFUL);
+                            } 
+                            else
+                            {
+                                $$ = new WordConstantExpr(value, yytext);
+                            }
+                        }
     | CHARLIT           { $$ = new WordConstantExpr((int8_t) $1, false, true); }  /* char literal always signed */
     | strlit_seq        { $$ = new StringLiteralExpr($1); free($1); }
     | '(' expr ')'      { $$ = $2; }
@@ -746,7 +889,7 @@ expr_list_opt:
     ;
 
 expr_list:
-      expr                      { $$ = new TreeSequence($1); }
+      expr                      { $$ = new TreeSequence(); $$->addTree($1); }
     | expr_list ',' expr        { $$ = $1; $$->addTree($3); }
     ;
 
@@ -796,3 +939,16 @@ for_stmt:
     ;
 
 %%
+
+#if 0
+void _PARSERTRACE(int parserLineNo, const char *fmt, ...)
+{
+    printf("# P%d U%d: ", parserLineNo, lineno);
+    va_list ap;
+    va_start(ap, fmt);
+    vprintf(fmt, ap);
+    va_end(ap);
+    putchar('\n');
+    fflush(stdout);
+}
+#endif

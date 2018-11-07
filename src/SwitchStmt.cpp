@@ -1,7 +1,7 @@
-/*  $Id: SwitchStmt.cpp,v 1.10 2016/06/18 18:14:20 sarrazip Exp $
+/*  $Id: SwitchStmt.cpp,v 1.14 2018/03/30 01:23:57 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2017 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -25,6 +25,19 @@
 #include "LabeledStmt.h"
 
 using namespace std;
+
+
+bool SwitchStmt::isJumpModeForced = false;
+SwitchStmt::JumpMode SwitchStmt::forcedJumpMode = IF_ELSE;
+
+
+// static
+void
+SwitchStmt::forceJumpMode(JumpMode _forcedJumpMode)
+{
+    isJumpModeForced = true;
+    forcedJumpMode = _forcedJumpMode;
+}
 
 
 SwitchStmt::SwitchStmt(Tree *_expression, Tree *_statement)
@@ -59,6 +72,12 @@ SwitchStmt::checkSemantics(Functor & /*f*/)
     if (cases.size() == 0)
     {
         statement->errormsg("switch() statement has no `case' or `default' statement");
+        return;
+    }
+    if (expression->isRealOrLong())
+    {
+        statement->errormsg("switch() expression of type `%s' is not supported",
+                            expression->getTypeDesc()->toString().c_str());
         return;
     }
 }
@@ -172,6 +191,53 @@ SwitchStmt::compileLabeledStatements(TreeSequence &statements)
 }
 
 
+bool
+SwitchStmt::signedCaseValueComparator(const CaseValueAndIndexPair &a, const CaseValueAndIndexPair &b)
+{
+    return int16_t(a.first) < int16_t(b.first);
+}
+
+
+bool
+SwitchStmt::unsignedCaseValueComparator(const CaseValueAndIndexPair &a, const CaseValueAndIndexPair &b)
+{
+    return a.first < b.first;
+}
+
+
+// CaseValueType: int16_t or uint16_t.
+//
+template <typename CaseValueType>
+static void
+emitJumpTableEntries(ASMText &out,
+                     const vector<SwitchStmt::CaseValueAndIndexPair> &caseValues,
+                     const vector<string> &caseLabels,
+                     CaseValueType minValue,
+                     CaseValueType maxValue,
+                     const string &tableLabel,
+                     const string &defaultLabel)
+{
+    assert(minValue <= maxValue);  // at least one table entry to emit
+
+    size_t vectorIndex = 0;
+    for (CaseValueType value = minValue; ; ++value)
+    {
+        CaseValueType currentCaseValue = (CaseValueType) caseValues[vectorIndex].first;
+        if (value < currentCaseValue)
+            out.ins("FDB", defaultLabel + "-" + tableLabel);
+        else
+        {
+            out.ins("FDB", caseLabels[caseValues[vectorIndex].second] + "-" + tableLabel);
+            ++vectorIndex;
+        }
+
+        // 'value' might be highest valid value for CaseValueType, so test before incrementing
+        if (value == maxValue)
+            break;
+    }
+}
+
+
 /*virtual*/
 CodeStatus
 SwitchStmt::emitCode(ASMText &out, bool lValue) const
@@ -191,44 +257,109 @@ SwitchStmt::emitCode(ASMText &out, bool lValue) const
     bool exprIsByte = (expression->getType() == BYTE_TYPE);
     const char *cmpInstr = (exprIsByte ? "CMPB" : "CMPD");
 
+    // Generate a label for each case and for the default case.
     vector<string> caseLabels;
     string defaultLabel;
-
-    // Emit a series of comparisons and conditional branches:
-    //      CMPr #caseValue1
-    //      LBEQ label1
-    //      etc.
-    //
     for (SwitchCaseList::const_iterator it = cases.begin(); it != cases.end(); ++it)
     {
         const SwitchCase &c = *it;
 
         string caseLabel = TranslationUnit::instance().generateLabel('L');
-
-        if (!c.isDefault)
-        {
-            if (exprIsByte && int16_t(c.caseValue) > 0xFF)
-                ;  // no match possible: don't generate CMP+LBEQ
-            else
-            {
-                uint16_t caseValue = c.caseValue;
-                if (exprIsByte)
-                    caseValue &= 0xFF;
-                out.ins(cmpInstr, "#" + wordToString(caseValue, true), "case " + wordToString(caseValue, false));
-                out.ins("LBEQ", caseLabel);
-            }
-        }
-
         caseLabels.push_back(caseLabel);
         if (c.isDefault)
             defaultLabel = caseLabel;
     }
+
     assert(caseLabels.size() == cases.size());
 
     if (defaultLabel.empty())  // if no default seen:
         defaultLabel = endSwitchLabel;
 
-    out.ins("LBRA", defaultLabel, "switch default");
+    // Get an ordered list of non-default case values, each with the corresponding index in caseLabels[].
+    vector<CaseValueAndIndexPair> caseValues;
+    for (SwitchCaseList::const_iterator it = cases.begin(); it != cases.end(); ++it)
+        if (!it->isDefault)
+            caseValues.push_back(make_pair(it->caseValue, it - cases.begin()));
+    sort(caseValues.begin(), caseValues.end(),
+         expression->isSigned() ? signedCaseValueComparator : unsignedCaseValueComparator);
+
+    size_t ifElseCost = computeJumpModeCost(IF_ELSE, caseValues);
+    size_t jumpTableCost = computeJumpModeCost(JUMP_TABLE, caseValues);
+
+    JumpMode jumpMode = (isJumpModeForced ? forcedJumpMode : (ifElseCost <= jumpTableCost ? IF_ELSE : JUMP_TABLE));
+
+    // Override isJumpModeForced if jump table cost is way higher.
+    if (jumpTableCost > ifElseCost && jumpTableCost - ifElseCost >= 256)
+        jumpMode = IF_ELSE;
+
+    out.emitComment("Switch at " + expression->getLineNo() + ": IF_ELSE=" + dwordToString(uint32_t(ifElseCost)) + ", JUMP_TABLE=" + dwordToString(uint32_t(jumpTableCost)));
+
+    // Emit the switching code.
+    //
+    switch (jumpMode)
+    {
+    case IF_ELSE:
+    {
+        // Emit a series of comparisons and conditional branches:
+        //      CMPr #caseValue1
+        //      LBEQ label1
+        //      etc.
+        //
+        for (SwitchCaseList::const_iterator it = cases.begin(); it != cases.end(); ++it)
+        {
+            const SwitchCase &c = *it;
+
+            if (!c.isDefault)
+            {
+                if (exprIsByte && int16_t(c.caseValue) > 0xFF)
+                    ;  // no match possible: don't generate CMP+LBEQ
+                else
+                {
+                    uint16_t caseValue = c.caseValue;
+                    if (exprIsByte)
+                        caseValue &= 0xFF;
+                    out.ins(cmpInstr, "#" + wordToString(caseValue, true), "case " + wordToString(caseValue, false));
+                    out.ins("LBEQ", caseLabels[it - cases.begin()]);
+                }
+            }
+        }
+
+        out.ins("LBRA", defaultLabel, "switch default");
+        break;
+    }
+    case JUMP_TABLE:
+    {
+        if (exprIsByte)
+            out.ins(expression->getConvToWordIns());  // always use a word expression
+        string tableLabel = TranslationUnit::instance().generateLabel('L');
+        out.ins("LEAX", tableLabel + ",PCR", "jump table for switch at " + expression->getLineNo());
+        const char *routine = expression->isSigned() ? "signedJumpTableSwitch" : "unsignedJumpTableSwitch";
+        out.emitImport(routine);
+        TranslationUnit::instance().registerNeededUtility(routine);  // for monolith mode
+        out.ins("LBRA", routine);
+
+        // Pre-table data: minimum and maximum case value, default label offset.
+        // Offsets are used instead of directly using the label, to preserve
+        // the relocatability of the program.
+        uint16_t minValue = 0, maxValue = 0;
+        if (expression->isSigned())
+            getSignedMinAndMaxCaseValues(minValue, maxValue);
+        else
+            getUnsignedMinAndMaxCaseValues(minValue, maxValue);
+        out.ins("FDB", expression->isSigned() ? intToString(minValue) : wordToString(minValue), "minimum case value");
+        out.ins("FDB", expression->isSigned() ? intToString(maxValue) : wordToString(maxValue), "maximum case value");
+        out.ins("FDB", defaultLabel + "-" + tableLabel, "default label");
+
+        out.emitLabel(tableLabel);
+
+        // Emit an offset for each case in the interval going from minValue to maxValue.
+        if (expression->isSigned())
+            emitJumpTableEntries(out, caseValues, caseLabels, int16_t(minValue), int16_t(maxValue), tableLabel, defaultLabel);
+        else
+            emitJumpTableEntries(out, caseValues, caseLabels, minValue, maxValue, tableLabel, defaultLabel);
+        break;
+    }
+    }
 
     pushScopeIfExists();
     tu.pushBreakableLabels(endSwitchLabel, "");  // continue statement is not supported in a switch
@@ -258,6 +389,79 @@ SwitchStmt::emitCode(ASMText &out, bool lValue) const
 
     out.emitLabel(endSwitchLabel, "end of switch");
     return true;
+}
+
+
+void
+SwitchStmt::getSignedMinAndMaxCaseValues(uint16_t &minValue, uint16_t &maxValue) const
+{
+    int16_t m = 32767, M = -32768;
+    for (SwitchCaseList::const_iterator it = cases.begin(); it != cases.end(); ++it)
+    {
+        const SwitchCase &c = *it;
+        m = std::min(m, int16_t(c.caseValue));
+        M = std::max(M, int16_t(c.caseValue));
+    }
+    minValue = uint16_t(m);
+    maxValue = uint16_t(M);
+}
+
+
+void
+SwitchStmt::getUnsignedMinAndMaxCaseValues(uint16_t &minValue, uint16_t &maxValue) const
+{
+    minValue = 0xFFFF, maxValue = 0;
+    for (SwitchCaseList::const_iterator it = cases.begin(); it != cases.end(); ++it)
+    {
+        const SwitchCase &c = *it;
+        minValue = std::min(minValue, c.caseValue);
+        maxValue = std::max(maxValue, c.caseValue);
+    }
+}
+
+
+// caseValues: Must be sorted by case value.
+//
+size_t
+SwitchStmt::computeJumpModeCost(JumpMode jumpMode,
+                                const vector<CaseValueAndIndexPair> &caseValues) const
+{
+    assert(caseValues.size() > 0);
+
+    switch (jumpMode)
+    {
+    case IF_ELSE:
+        {
+            // Cost of CMPB/CMPD with immediate argument (assumes either byte or word):
+            size_t cmpCost = (expression->getType() == BYTE_TYPE ? 2 : 4);
+
+            // LBEQ takes 4 bytes. LBRA (for default case) takes 3.
+            return caseValues.size() * (cmpCost + 4) + 3;
+        }
+    case JUMP_TABLE:
+        {
+            uint16_t minValue = caseValues.front().first;
+            uint16_t maxValue = caseValues.back().first;
+            uint16_t numTableEntries = 1;
+            if (expression->isSigned())
+                numTableEntries += uint16_t(int16_t(maxValue) - int16_t(minValue));
+            else
+                numTableEntries += maxValue - minValue;
+
+            // LEAX takes 4 bytes. LBRA takes 3. Each table entry is 2 bytes.
+            // 3 entries are added for the minimum value, maximum value, and default case offset.
+            // The cost of the signedJumpTableSwitch/unsignedJumpTableSwitch routine is difficult
+            // to factor in because that cost is spread among all the switches, across the whole
+            // program, that use a jump table. Since we may be compiling only one module of a
+            // program, we cannot know the total number of switches.
+            // Here, we blindly guess that there will be 5 switches and that the routine is 30 bytes,
+            // so we add 6 as a fudge factor.
+            //
+            size_t promotionCost = (expression->getType() == BYTE_TYPE ? 1 : 0);  // CLRA/SEX if needed
+            return promotionCost + 4 + 3 + 2 * (3 + numTableEntries) + 6;
+        }
+    }
+    return 0;
 }
 
 

@@ -1,7 +1,7 @@
-/*  $Id: FormalParamList.h,v 1.2 2015/05/31 23:43:24 sarrazip Exp $
+/*  $Id: FormalParamList.h,v 1.5 2017/12/25 22:36:17 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2017 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -26,25 +26,17 @@
 class FormalParamList : public TreeSequence
 {
 public:
-    FormalParamList()
-    :   TreeSequence(),
-        ellipsis(false)
-    {
-    }
+    FormalParamList();
 
-    virtual ~FormalParamList()
-    {
-    }
+    virtual ~FormalParamList();
 
-    void endWithEllipsis()
-    {
-        ellipsis = true;
-    }
+    void endWithEllipsis();
 
-    bool endsWithEllipsis() const
-    {
-        return ellipsis;
-    }
+    bool endsWithEllipsis() const;
+
+    bool hasSingleVoidParam() const;
+
+    bool isAcceptableNumberOfArguments(size_t numArguments) const;
 
 private:
     bool ellipsis;

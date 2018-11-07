@@ -1,4 +1,4 @@
-/*  $Id: DeclarationSpecifierList.cpp,v 1.10 2016/08/27 00:53:50 sarrazip Exp $
+/*  $Id: DeclarationSpecifierList.cpp,v 1.14 2018/03/11 06:29:10 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -29,8 +29,11 @@ DeclarationSpecifierList::DeclarationSpecifierList()
     isTypeDef(false),
     isISR(false),
     asmOnly(false),
+    noReturnInstruction(false),
     isExtern(false),
     isStatic(false),
+    isConst(false),
+    isVolatile(false),
     enumTypeName(),
     enumeratorList(NULL)
 {
@@ -55,6 +58,11 @@ DeclarationSpecifierList::add(const TypeSpecifier &tsToAdd)
     if (!typeDesc)
     {
         typeDesc = tsToAdd.typeDesc;
+
+        // See similar case in add(Specifier).
+        if (isISR && !typeDesc->isInterruptServiceRoutine())
+            typeDesc = TranslationUnit::getTypeManager().getInterruptType(typeDesc);
+
         enumTypeName = tsToAdd.enumTypeName;
         assert(!enumeratorList);
         enumeratorList = tsToAdd.enumeratorList;
@@ -97,15 +105,32 @@ DeclarationSpecifierList::add(Specifier specifier)
         break;
     case INTERRUPT_SPEC:
         isISR = true;
+
+        // If we already know the type, convert it to an interrupt type.
+        // This case here is needed when the program says "interrupt int".
+        // When the program says "int interrupt", then 'typeDesc' is null here
+        // and add(const TypeSpecifier &) handles that case.
+        //
+        if (typeDesc)
+            typeDesc = TranslationUnit::getTypeManager().getInterruptType(typeDesc);
         break;
     case ASSEMBLY_ONLY_SPEC:
         asmOnly = true;
+        break;
+    case NO_RETURN_INSTRUCTION:
+        noReturnInstruction = true;
         break;
     case EXTERN_SPEC:
         isExtern = true;
         break;
     case STATIC_SPEC:
         isStatic = true;
+        break;
+    case CONST_QUALIFIER:
+        isConst = true;
+        break;
+    case VOLATILE_QUALIFIER:
+        isVolatile = true;
         break;
     default:
         assert(!"specifier not handled");
@@ -118,13 +143,18 @@ DeclarationSpecifierList::getTypeDesc() const
 {
     TypeManager &tm = TranslationUnit::getTypeManager();
 
+    const TypeDesc *resultTD = NULL;
     if (!typeDesc)  // if no type_specifier given
-        return tm.getIntType(WORD_TYPE, true);  // sword is default type (as int in C)
+        resultTD = tm.getIntType(WORD_TYPE, true);  // signed int is default type
+    else if (typeDesc->type == SIZELESS_TYPE)  // if type described only with 'signed' or 'unsigned', it is an int
+        resultTD =tm.getIntType(WORD_TYPE, typeDesc->isSigned);
+    else
+        resultTD = typeDesc;
 
-    if (typeDesc->type == SIZELESS_TYPE)  // if type described only with 'signed' or 'unsigned', it is a word
-        return tm.getIntType(WORD_TYPE, typeDesc->isSigned);
+    if (isConstant())
+        resultTD = tm.getConst(resultTD);
 
-    return typeDesc;
+    return resultTD;
 }
 
 
@@ -139,6 +169,13 @@ bool
 DeclarationSpecifierList::isAssemblyOnly() const
 {
     return asmOnly;
+}
+
+
+bool
+DeclarationSpecifierList::hasNoReturnInstruction() const
+{
+    return noReturnInstruction;
 }
 
 
@@ -160,6 +197,13 @@ bool
 DeclarationSpecifierList::isStaticDeclaration() const
 {
     return isStatic;
+}
+
+
+bool
+DeclarationSpecifierList::isConstant() const
+{
+    return isConst;
 }
 
 
@@ -189,5 +233,5 @@ DeclarationSpecifierList::detachEnumeratorList()
 bool
 DeclarationSpecifierList::isModifierLegalOnVariable() const
 {
-    return !isISR && !asmOnly;
+    return !isISR && !asmOnly && !noReturnInstruction;
 }

@@ -1,4 +1,4 @@
-/*  $Id: ObjectMemberExpr.cpp,v 1.10 2016/10/11 01:23:50 sarrazip Exp $
+/*  $Id: ObjectMemberExpr.cpp,v 1.11 2017/10/15 00:30:54 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -116,7 +116,7 @@ ObjectMemberExpr::emitCode(ASMText &out, bool lValue) const
                 return false;
 
             if (checkNullPtr)
-                out.ins("LBSR", "check_null_ptr_x");
+                callUtility(out, "check_null_ptr_x");
 
             if (!lValue || offset > 0)
                 out.ins(opcode, arg + ",X", memberComment);
@@ -135,7 +135,7 @@ ObjectMemberExpr::emitCode(ASMText &out, bool lValue) const
         }
 
         if (checkNullPtr)
-            out.ins("LBSR", "check_null_ptr_x");
+            callUtility(out, "check_null_ptr_x");
 
         if (!lValue || offset > 0)
             out.ins(opcode, arg + ",X", memberComment);

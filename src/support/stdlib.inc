@@ -5,17 +5,6 @@
 
 stdlib_start:
 
-#if defined(VECTREX)
-* /*
-* The Vectrex is limited in RAM space and shares the stack with freely availbale memory. 
-*  $C880 - $CBEA is user RAM (874 bytes)
-*  $CBEA is Vec_Default_Stk Default top-of-stack
-* */
-*
-stack_space	EQU	256	    This value should be made as small as posible.	
-#else  
-stack_space	EQU	1024		number of bytes reserved for system stack
-#endif
 
 #if defined(OS9)
 #define DAT Y  /* CMOC uses Y to point to the data segment of the current process. */
@@ -35,6 +24,7 @@ I$WritLn	equ	$8C	Write Line of ASCII Data
 
 * /*
 * Initialize the standard library.
+; Input: D = minus the number of bytes for the stack space (e.g., -1024 for 1k stack).
 * Saves the initial stack for use by exit().
 * Initializes internal variables used by sbrk().
 * Initializes the seed of the random number generator with a fixed value.
@@ -43,10 +33,24 @@ I$WritLn	equ	$8C	Write Line of ASCII Data
 * Initializes the global variables.
 * */
 *
-INILIB	LEAX	2,S			X = initial stack pointer
+INILIB
+	IFNDEF OS9
+; Zero out "BSS" segment.
+; Must be done first, because code that follows initializes INISTK, etc.
+        LDX     #bss_end-bss_start      ; number of bytes in "bss" section
+        BEQ     @done
+        LEAU    bss_start,pcr           ; address of "bss" section
+@loop
+        CLR     ,U+
+        LEAX    -1,X
+        BNE     @loop
+@done
+        ENDC
+
+	LEAX	2,S			X = initial stack pointer
 	STX	INISTK,DAT		save this for exit()
 
-	LEAX	-stack_space,X		point to top of stack space
+	LEAX	D,X			point to top of stack space
 	STX	end_of_sbrk_mem,DAT	sbrk() will not allocate past this
 	LEAX	program_end,PCR		end of generated code
 	STX	program_break,DAT	initial Unix-like "program break" (cf sbrk)
@@ -80,7 +84,9 @@ INILIB	LEAX	2,S			X = initial stack pointer
 
 * void exit(int exitStatus);
 *
-* Clean up before returning control to CoCo DECB.
+* Clean up before returning control to the host environment.
+* That environment does not necessarily use the exit status.
+* It may only use the low byte.
 *
 * MUST be called by BSR, LBSR or JSR, not jumped to with BRA, LBRA or JMP,
 * so that 2,S can be used to get 'exitStatus'.
@@ -99,9 +105,6 @@ EXIT10	CLR	,X+
 	BLO	EXIT10
 
 #endif
-
-	LDD	2,S		get exit() argument
-	JSR	$B4F4		use as USR() return value, in case USR() is the caller
 
 	LDS	INISTK,DAT	retrieve stack pointer saved at beginning
 	RTS
@@ -623,22 +626,35 @@ _zerodw
 * void adddww(word *dw, word w)
 *
 _adddww
-	pshs	u
-	tfr	s,u
-
-	ldx	4,u	load dw to point to double word
+	ldx	2,s	load dw to point to double word
 	ldd	2,x	low word of dword
-	addd	6,u	add w: affects carry flag
+	addd	4,s	add w: affects carry flag
 	std	2,x	store low word of result (does not affect carry flag)
 	ldd	,x	load high word of dword (does not affect carry flag)
 	adcb	#0	add possible carry from add of low word with w
 	adca	#0	add possible carry from adcb
 	std	,x
-
-	tfr	u,s
-	puls	u,pc
+	rts
 
 #endif  /* _CMOC_NEED_adddww_ */
+
+
+#ifdef _CMOC_NEED_subdww_
+
+* void subdww(word *dw, word w)
+*
+_subdww
+	ldx	2,s	load dw to point to double word
+	ldd	2,x	low word of dword
+	subd	4,s	sub w: affects carry flag
+	std	2,x	store low word of result (does not affect carry flag)
+	ldd	,x	load high word of dword (does not affect carry flag)
+	sbcb	#0	sub possible borrow from subd
+	sbca	#0	sub possible borrow from sbcb
+	std	,x
+	rts
+
+#endif  /* _CMOC_NEED_subdww_ */
 
 
 #ifdef _CMOC_NEED_SDIV16_
@@ -667,7 +683,7 @@ SDIV16_10
 SDIV16_20
 	LDD	2,S		reload divisor
 	LDX	4,S		reload dividend
-	BSR	DIV16
+	LBSR	DIV16
 
 * Counter is 0, 1 or 2. Quotient negative if counter is 1.
 	LSR	1,S		check bit 0 of counter (1 -> negative quotient)
@@ -746,7 +762,7 @@ SDIV8_10
 	INC	1,S		increment counter of negative arguments
 	NEGA			negate dividend
 SDIV8_20
-	BSR	DIV8
+	LBSR	DIV8
 
 * Counter is 0, 1 or 2. Quotient negative if counter is 1.
 	LSR	1,S		check bit 0 of counter (1 -> negative quotient)
@@ -894,13 +910,14 @@ DIV16BY10_020
 #endif  /* _CMOC_NEED_DIV16BY10_ */
 
 
-#ifdef _CMOC_NEED_div328_
+#ifdef _CMOC_NEED_divdwb_
 
-* void div328(byte *dividend, byte divisor)
+* void divdwb(unsigned dividend[2], unsigned char divisor)
 *
-* Writes quotient into dividend[0..3].
+* Writes quotient into dividend[0..1].
 * Does nothing if divisor is zero.
 *
+_divdwb
 _div328
 	pshs	u
 	tfr	s,u
@@ -919,7 +936,7 @@ _div328
 	pshs	b		-5,u is loop counter
 
 	clra			dividend will be shifted left into D
-	clrb
+	clrb                    (only low 9 bits are significant)
 
 div328_loop
 	lsl	3,x		shift dividend left
@@ -931,7 +948,7 @@ div328_loop
 	cmpd	6,u		does divisor fit into D?
 	blo	div328_nofit	if not
 
-	subd	6,u
+	subd	6,u             sub 8-bit divisor from 9-bit accumulator
 	orcc	#1		set carry
 	bra	div328_rolq
 
@@ -958,6 +975,108 @@ div328_900
 	puls	u,pc
 
 #endif  /* _CMOC_NEED_div328_ */
+
+
+#if defined(_CMOC_NEED_divdww_)
+
+* void divdww(unsigned dividend[2], unsigned divisor)
+*
+* Writes quotient into dividend[0..1].
+* Does nothing if divisor is zero.
+*
+_divdww
+_div3216
+	pshs	u
+	tfr	s,u
+
+	ldd	6,u		load divisor
+	beq	div3216_900	division by zero: do nothing
+
+	clra			push 32-bit zero
+	clrb
+	pshs	b,a
+	pshs	b,a		-4,u will be 32-bit quotient
+
+	ldx	4,u		X points to 4-byte dividend
+
+	ldb	#32		one iteration per bit in the dividend
+	pshs	b		-5,u is loop counter
+
+* Dividend will be shifted left into a 17-bit accumulator.
+* The low 16 bits are in D, and the low bit of -6,u is bit 16.
+* Bits 1..7 of -6,u are ignored.
+	clra			
+	clrb
+	clr	,-s		-6,u
+
+div3216_loop
+	lsl	3,x		shift dividend left
+	rol	2,x
+	rol	1,x
+	rol	,x		MSB of dividend now in carry
+	rolb
+	rola
+	rol	-6,u		17th bit of accumulator
+	bsr	div3216_tryfit	does divisor fit into accumulator?
+	blo	div3216_nofit	if not
+
+	bsr	div3216_sub	substract divisor from accumulator
+	orcc	#1		set carry
+	bra	div3216_rolq
+
+div3216_nofit
+	andcc	#$fe		reset carry
+
+div3216_rolq
+	rol	-1,u		shift carry into quotient
+	rol	-2,u
+	rol	-3,u
+	rol	-4,u
+
+	dec	-5,u		dec loop counter
+	bne	div3216_loop
+
+* Copy quotient into dividend space.
+	ldd	-4,u
+	std	,x
+	ldd	-2,u
+	std	2,x
+
+div3216_900
+	tfr	u,s
+	puls	u,pc
+
+* Determines if divisor fits into accumulator.
+* Input:
+*   6,u = 16-bit divisor
+*   -6,u and D = 17-bit accumulator
+* Output:
+*   C = 0 iff divisor fits into accumulator.
+* Preserves all registers.
+div3216_tryfit
+	pshs	b
+	ldb	-6,u		bit 16 of acc
+	andb	#1
+	bne	@fit		bit 16 high, so acc > divisor
+	puls	b
+* Acc is just D, so compare directly with divisor.
+	cmpd	6,u
+	rts
+@fit
+	andcc	#0		return C = 0
+	puls	b,pc
+
+* Subtracts divisor from accumulator.
+* Assumes result NOT negative.
+* Same interface as div3216_tryfit.
+div3216_sub
+	subd	6,u
+	bcc	@noBorrow
+	dec	-6,u		bit 16, assumed to 1, becomes 0
+@noBorrow
+	rts
+
+#endif  /* _CMOC_NEED_div3216_ */
 
 
 #ifdef _CMOC_NEED_shiftLeft_
@@ -1195,6 +1314,30 @@ shiftByteRightSigned_end
 #endif /* _CMOC_NEED_shiftByteRightSigned_ */
 
 
+#ifdef _CMOC_NEED_cmpdww_
+
+* char cmpdww(unsigned left[2], unsigned right)
+*
+_cmpdww
+        ldx     2,s             left
+        ldd     ,x              high word of left
+        bne     @leftGreater
+        ldd     2,x             low word of left
+        cmpd    4,s             compare with right
+        bhi     @leftGreater
+        blo     @leftSmaller
+        clrb                    left == right
+        rts
+@leftSmaller
+        ldb     #-1             left < right
+        rts
+@leftGreater
+        ldb     #1              left > right
+        rts
+
+#endif /* _CMOC_NEED_cmpdww_ */
+
+
 #ifdef _CMOC_NEED_setConsoleOutHook_
 
 * void *setConsoleOutHook(void *routine)
@@ -1208,16 +1351,21 @@ _setConsoleOutHook
 #endif  /* _CMOC_NEED_setConsoleOutHook_ */
 
 
-#if defined(_CMOC_NEED_putchar_) || defined(_CMOC_NEED_putstr_) || defined(_CMOC_NEED_sprintf_) || defined(_CMOC_NEED_printf_)
+#if defined(_CMOC_NEED_putchar_)
 
 * void putchar(byte c)
 *
 * Converts LF ($0A) into CR ($0D) before calling CHROUT.
 *
-#if defined(_CMOC_NEED_putchar_)
 _putchar
 	lda	3,s
+
 #endif
+
+#if    defined(_CMOC_NEED_putchar_) \
+    || defined(_CMOC_NEED_putstr_) \
+    || defined(_CMOC_NEED_sprintf_) \
+    || defined(_CMOC_NEED_printf_)
 
 * putchar_a should be called by the other routines (printf, etc.)
 * whenever the character to be printed might be a newline.
@@ -1249,7 +1397,7 @@ putstr:
 	ldu	4,s	address of string to write
 putstr_100:
 	lda	,u+
-	bsr     putchar_a
+	lbsr     putchar_a
 	leax    -1,x
 	bne	putstr_100
 putstr_900:
@@ -1283,7 +1431,7 @@ _sprintf
 	ldx	,s++			remove destination buffer
 	stx	chrtomem_writer,DAT	make chrtomem write to destination buffer
 
-	bsr	_printf			print into destination buffer via chrtomem
+	lbsr	_printf			print into destination buffer via chrtomem
 
 	clr	[chrtomem_writer,DAT]	terminate resulting string
 
@@ -1297,7 +1445,9 @@ _sprintf
 #endif  /* _CMOC_NEED_sprintf_ */
 
 
-#ifdef _CMOC_NEED_printf_
+#if defined(_CMOC_NEED_printf_) || defined(_CMOC_NEED_sprintf_)
+
+PRINTF_FLOAT_SIZE	EQU	5	size of a %f argument
 
 * void printf(const char *fmt, ...)
 *
@@ -1411,7 +1561,180 @@ PTF540	CMPA	#$63		%c?
 	TFR     B,A
 	LBSR    putchar_a
 	LBRA	PTF010
-PTF550	CMPA	#$25		%%?
+PTF550	CMPA	#$66		%f?
+	BNE	PTF555
+	LBSR	printReal
+	LEAU	PRINTF_FLOAT_SIZE,U	pass the float
+	LBRA	PTF010
+PTF555	CMPA	#'l		%lu, %ld or %lx?
+	LBNE	PTF559
+	LDA	,X+		check letter that follows %l
+	CMPA	#'u
+	BEQ	@ulong
+	CMPA	#'d
+	BEQ	@slong
+	CMPA	#'x
+	LBEQ	@xlong
+	CMPA	#'X
+	LBEQ	@xlong
+	LEAX	-1,X		neither: tolerate %l as alias for %ld
+	CLRA			indicates that no minus sign must be printed
+@slong
+* If the (big endian) dword at ,U is negative, negate it and
+* print a minus sign.
+	TST	,U
+	BPL	@longNotNeg
+	EXG	U,X
+	LBSR	negateDWord
+	EXG	U,X
+	LDA	#'-
+@longNotNeg
+@ulong
+*
+* Here, A is '-' iff a minus sign must be printed before the number.
+* Also, 16-bit width is in ,S, padding char in 2,S
+*
+* Call dwtoa().
+	PSHS	X,A		X trashed by _dwtoa, A indicates if minus sign needed
+	LEAS	-11,S		buffer for dwtoa
+	LDD	,U		high word
+	LDX	2,U		low word
+	PSHS	X,B,A		pushes 4 bytes for _dwtoa
+	LEAX	4,S		point to 11-byte buffer
+	PSHS	X		pass address to _dwtoa
+	LBSR	_dwtoa
+	LEAS	6,S		discard arguments
+	TFR	D,X		point to first digit to print
+* Here, 16-bit width is in 14,S, padding char in 16,S, minus sign indicator in 11,S
+*
+* Print minus sign BEFORE padding IF padding char is NOT space.
+	LDA	16,S		padding char
+	CMPA	#$20		is space?
+	BEQ	@checkPadding
+	LDA	11,S		load minus sign indicator
+	CMPA	#'-
+	BNE	@checkPadding	no minus sign to print
+	LDA	#'-
+	JSR	[CHROUT,DAT]	print it
+*
+@checkPadding
+*
+	LBSR	@decPadding
+*
+* Print minus sign AFTER padding IF padding char is space.
+	LDA	16,S		padding char
+	CMPA	#$20		is space?
+	BNE	@printCond
+	LDA	11,S		load minus sign indicator
+	CMPA	#'-
+	BNE	@printCond	no minus sign to print
+	LDA	#'-
+	JSR	[CHROUT,DAT]	print it
+	BRA	@printCond
+*
+@printLoop
+	JSR	[CHROUT,DAT]	print it
+@printCond
+	LDA	,X+		load digit
+	BNE	@printLoop	if not '\0'
+	LEAS	11,S		discard buffer
+	PULS	A,X		restore X (points into printf format string)
+	LEAU	4,U		pass the 32-bit long
+	LBRA	PTF010
+;
+;
+; Input: U => dword to be printed in hex.
+; Output: D => number of hex digits needed to print dword (1..8).
+; Preserves X and U.
+;
+@countHexDigitsInDWord
+	CLRB
+@nextDWordByte
+	LDA	B,U		get byte from dword
+	BNE	@nonNullByte	found 1st non-null byte
+	INCB			count another null byte
+	CMPB	#4		if reached 4, all bytes null
+	BEQ	@oneDigitNeeded
+	BRA	@nextDWordByte
+@nonNullByte			; B is index (0..3) of 1st non null byte
+	LSLB
+	NEGB
+	ADDB	#8		number of digits needed is B or B-1
+	BITA	#$F0		is high nybble null?
+	BNE	@highNybbleNotNull
+	DECB			one less digit needed
+@highNybbleNotNull	
+	CLRA
+	RTS
+@oneDigitNeeded
+	LDB	#1		A is already 0
+@done
+	RTS
+;
+;
+@xlong
+; Pad if required.
+* Here, 16-bit width is in ,S, padding char in 2,S
+	BSR	@countHexDigitsInDWord		uses U; result in D
+	SUBD	,S				subtract width
+	BHS	@noHexPadding
+	PSHS	X
+	TFR	D,X				use X as upwards counter
+@hexPad
+	LDA	4,S				padding char
+	JSR	[CHROUT,DAT]
+	LEAX	1,X
+	BNE	@hexPad
+	PULS	X
+@noHexPadding
+	LDD	,U		high word
+	BEQ	@highWordZero   if no digit to print
+	LBSR	PRNTWH		print high word
+; Print low word, padded with zeroes to a width of 4.
+	LDB	#'0		padding char for PADHEX
+	PSHS	B
+	LDD	#4		print 2nd word as 4 digits
+	PSHS	B,A		pass to PADHEX
+	LDD	2,U		low word
+	LBSR	PADHEX		preserves D and X
+	LEAS	3,S
+@highWordZero
+	LDD	2,U		low word
+	LBSR	PRNTWH		print D (low word)
+	LEAU	4,U		pass the 32-bit long
+	LBRA	PTF010		done with %lx
+;
+; Input: S (before call) => 11-digit buffer;
+;        X => first digit to print in the 11-digit buffer;
+;        16-bit width is in 14,S, padding char in 16,S, minus sign indicator in 11,S.
+; Preserves X. Trashes D.
+;
+@decPadding
+	PSHS	X
+; Here, 16-bit width is in 18,S, padding char in 20,S, minus sign indicator in 15,S.
+	TFR	S,D
+	ADDD	#2+2+10		addr of NUL-terminating byte of buffer (written by _dwtoa)
+	PSHS	X
+	SUBD	,S++		D minus addr of 1st digit to print = # of digits to print
+	PSHS	A
+	LDA	16,S		get minus sign indicator
+	CMPA	#'-		minus needed?
+	PULS	A
+	BNE	@noMinusNeeded
+	ADDD	#1		count minus as 1 more char to print
+@noMinusNeeded
+	SUBD	18,S		compare with width; negative result means padding needed
+	BHS	@noPadding	if width matched or exceeded, no padding
+	TFR	D,X		use X as upwards counter (must reach up to 0)
+@decPadPrint
+	LDA	20,S		padding char
+	JSR	[CHROUT,DAT]
+	LEAX	1,X
+	BNE	@decPadPrint
+@noPadding
+	PULS	X,PC
+
+PTF559	CMPA	#$25		%%?
 	BNE	PTF560
 	JSR	[CHROUT,DAT]
 	LBRA	PTF010
@@ -1493,7 +1816,7 @@ PADSTR_PRE
 PADSTR_050
 	TFR	D,X		use X as padding counter
 PADSTR_100
-	LDA	#' '		use space as padding char
+	LDA	#32		use space as padding char
 	JSR	[CHROUT,DAT]
 	LEAX	-1,X
 	BNE	PADSTR_100
@@ -1517,6 +1840,7 @@ PADSTR_POST
 
 * Input: D = number to write.
 *        Before call, ,S must contain 16-bit width in chars
+*        and 2,S must contain padding char.
 *
 PADHEX	PSHS	X,B,A
 	LDX	6,S		width of the number
@@ -1544,10 +1868,14 @@ PHX900	CLR	6,S		clear width for next time
 	PULS	A,B,X,PC
 
 
+; Prints D in hex.
+; Preserves D and X.
+; Uses HEXDIG.
+;
 PRNTWH	PSHS	X,B,A
-	CMPD	#0		handle special case
+	SUBD	#0		handle special case
 	BNE	PRWH10
-	LDA	#$30
+	LDA	#'0
 	JSR	[CHROUT,DAT]
 	BRA	PRWH99
 PRWH10	CLR	,-S		create 4-character buffer for 4 hex digits
@@ -1576,11 +1904,11 @@ PRWH10	CLR	,-S		create 4-character buffer for 4 hex digits
 	LDB	B,X
 	STB	3,S
 
-	TFR	S,X		have X point to 4-char buffer
+	LEAX	,S		have X point to 4-char buffer
 	LDB	#5		char counter
 PRWH30	LDA	,X+		search for first non-'0' character
 	DECB
-	CMPA	#$30
+	CMPA	#'0
 	BEQ	PRWH30
 
 	LEAX	-1,X		go back to first non-'0'
@@ -1668,6 +1996,40 @@ PRS020	LDA	,X+
 	BNE	PRS010
 	PULS	A,B,X,PC
 
+* Input: U => packed real number.
+printReal
+#ifdef _COCO_BASIC_
+	PSHS	U,Y,X
+	LEAU	,S		; stack frame pointer
+	LEAS	-38,S		; buffer to write ASCII string to
+
+	LDX	4,U		; address of packed number (saved U)
+	JSR	$BC14		; unpack into Basic's FPA0
+
+	PSHS	U		; save frame pointer
+	LEAU	-38,U		; address of ASCII buffer
+	JSR	$BDDC		; convert FPA0 to ASCII
+	PULS	U
+
+	LEAX	-38,U		; address of ASCII buffer
+	LDA	,X
+	CMPA	#32		; is 1st char space?
+	BNE	@print
+	LEAX	1,X		; skip space
+@print
+	LDA	,X+
+	BEQ	@donePrinting
+	JSR	[CHROUT,DAT]
+	BRA	@print
+@donePrinting
+	LEAS	,U
+	PULS	X,Y,U,PC
+
+#else  /* This platform does not support printing reals. */
+	LDA	#'!
+	JMP	[CHROUT,DAT]
+#endif
+
 #endif  /* _CMOC_NEED_printf_ */
 
 
@@ -1683,7 +2045,10 @@ _readword
 #endif  /* _CMOC_NEED_readword_ */
 
 _
-#if defined(_CMOC_NEED_printf_) || defined(_CMOC_NEED_readword_) || defined(_CMOC_NEED_atoi_) || defined(_CMOC_NEED_atoui_)
+#if    defined(_CMOC_NEED_printf_) \
+    || defined(_CMOC_NEED_readword_) \
+    || defined(_CMOC_NEED_atoi_) \
+    || defined(_CMOC_NEED_atoui_)
 
 * Convert unsigned decimal integer pointed by X into word returned in D.
 * Upon return, X points to character where conversion stopped.
@@ -1726,15 +2091,15 @@ MUL168	PSHS	X,B,A		acc A pushed to create temp byte at ,S
 	RTS
 
 
-#endif  /* defined(_CMOC_NEED_printf_) || defined(_CMOC_NEED_readword_) */
+#endif
 
 
 #if defined(_CMOC_NEED_atoui_)
 
 * unsigned atoui(char *s);
 _atoui
-        ldx     2,s             s
-        bra     ATOW
+        ldx     2,s             argument 's'
+        lbra    ATOW
 
 #endif  /* defined(_CMOC_NEED_atoui_) */
 
@@ -1746,12 +2111,12 @@ _atoi
         ldx     2,s             s
         clr     ,-s             sign byte: 0 = positive
         ldb     ,x              1st char
-        cmpb    #'-'            minus sign?
+        cmpb    #'-             minus sign?
         bne     atoi_010        no
         com     ,s              $FF = negative
         leax    1,x             pass minus sign
 atoi_010
-        bsr     ATOW            convert rest of s
+        lbsr    ATOW            convert rest of s
         tst     ,s+             apply sign byte
         beq     atoi_020        positive
         coma
@@ -1761,6 +2126,76 @@ atoi_020
         rts
 
 #endif  /* defined(_CMOC_NEED_atoi_) */
+
+
+#if defined(_CMOC_NEED_strtoul_)
+
+; unsigned long strtoul(char *nptr, char **endptr);
+;
+; A hidden first argument is passed to point to the 32-bit return value slot.
+;
+_strtoul
+	pshs	u
+	leau	,s
+	clr	,-s		-1,U: boolean: string contains negative number
+
+	ldx	4,u		address of return value slot
+	clra
+	clrb
+	std	,x		clear return value (accumulator)
+	std	2,x
+
+	ldx	6,u		nptr
+	ldb	,x
+	cmpb	#'-		negative number?
+	bne	@loop		no
+	inc	-1,u
+	leax	1,x		pass minus sign
+@loop
+	LDB	,X+		read next char from ASCII buffer
+	CMPB	#'0
+	BLO	@done		stop reading at non-digit char
+	CMPB	#'9
+	BHI	@done		stop reading at non-digit char
+	SUBB	#'0		convert from ASCII '0'..'9' to 0..9
+	CLRA
+	pshs	x,b		preserve char reader, new digit
+; Call mulDWordUnsignedInt to multiply accumulator by 10.
+	ldb	#10
+	pshs	b,a
+	ldx	4,u		address of return value slot
+	pshs	x
+	lbsr	mulDWordUnsignedInt	preserves X, trashes D
+	leas	4,s
+;
+	puls	b		restore new digit
+; Add B to accumulator.
+	clra
+	ldx	4,u		address of return value slot
+	addd	2,x		add low word of acc, sets carry
+	std	2,x
+	ldd	,x		get high word of acc
+	adcb	#0		add carry
+	adca	#0
+	std	,x
+;
+	puls	x		restore char reader
+	bra	@loop
+@done
+	leax	-1,x		go back to last non-digit char
+	stx	[8,U]		return that address in *endptr
+
+	ldx	4,u		address of return value slot
+
+; Negate the result if minus sign was read.
+	tst	-1,u
+	beq	@notNeg
+	lbsr	negateDWord
+@notNeg
+	leas	,u
+	puls	u,pc
+
+#endif
 
 
 #ifdef _CMOC_NEED_srand_
@@ -1797,8 +2232,8 @@ RAND	LDD	SEED,DAT
 	ADDD	,S++	D = SEED * (256 + 128)
 	ADDD	,S++	D = SEED * (256 + 128 + 1)
 	ADDD	#1
+        EORB    #$40            ; improves distribution of this bit 
 	STD	SEED,DAT
-	EXG	A,B
 	ANDA	#$7F	15-bit result
 	RTS
 
@@ -2069,11 +2504,12 @@ _memset_cond
 
 * Preserves X and U. Trashes D.
 *
+memcpy
 _memcpy pshs	u,x
 	ldx	6,s		destination string
 	ldu	8,s		source string
 	tfr	u,d
-	addd	10,s		end of destination region
+	addd	10,s		end of source region
 	pshs	b,a
 	bra	_memcpy_100
 _memcpy_050
@@ -2086,6 +2522,135 @@ _memcpy_100
 	leas	2,s		dispose of end address
 	ldd	6,s		return start address
 	puls	x,u,pc
+
+#endif  /* _CMOC_NEED_memcpy_ */
+
+
+#ifdef _CMOC_NEED_copyMem_
+
+; Like memcpy, but with only one argument passed on the stack.
+; Input: X => Desination address.
+;        D => Number of bytes to copy.
+;        Pushed argument => Source address.
+; Does not return anything.
+; Does not preserve X or D.
+; Preserves U and Y.
+;
+copyMem
+	pshs	u		preserve frame pointer
+	ldu	4,s		source address
+	leau	d,u		end of source region
+	pshs	u		store for loop condition
+	ldu	6,s		source address
+	bra	@cond
+@loop
+	lda	,u+
+	sta	,x+
+@cond
+	cmpu	,s		compare with end address
+	bne	@loop
+
+	puls	x,u,pc		pull end address in X instead of leas 2,s
+
+#endif  /* _CMOC_NEED_copyMem_ */
+
+
+#ifdef _CMOC_NEED_initSingleFromSingle_
+
+; Interface of routines named initXXXFromSingle:
+; Input: D = Address of packed single-precision real to use as source.
+;        X = Address of location to be initialized, of type XXX.
+;
+initSingleFromSingle
+#ifdef _COCO_BASIC_
+	pshs	u
+	tfr	d,u
+	ldd	,u
+	std	,x
+	ldd	2,u
+	std	2,x
+	ldb	4,u
+	stb	4,x
+	puls	u,pc
+#else
+	rts
+#endif
+
+#endif  /* _CMOC_NEED_initSingleFromSingle_ */
+
+
+#ifdef _CMOC_NEED_push4ByteStruct_
+
+; Copies a 4-byte region of memory into the stack.
+; X: Address of the 4-byte region to read.
+; S: Address where to copy the region to.
+; Example:
+;       LEAX    destination,PCR
+;       LEAS    -4,S
+;       LBSR    push4ByteStruct
+; Preserves X. Trashes D. Returns nothing.
+;
+push4ByteStruct
+	ldd	,x
+	std	2,s
+	ldd	2,x
+	std	4,s
+	rts
+
+#endif  /* _CMOC_NEED_push4ByteStruct_ */
+
+
+#ifdef _CMOC_NEED_push5ByteStruct_
+
+; Copies a 5-byte region of memory into the stack.
+; X: Address of the 5-byte region to read.
+; S: Address where to copy the region to.
+; Example:
+;       LEAX    destination,PCR
+;       LEAS    -5,S
+;       LBSR    push5ByteStruct
+; Preserves X. Trashes D. Returns nothing.
+;
+push5ByteStruct
+	ldd	,x
+	std	2,s
+	ldd	2,x
+	std	4,s
+	ldb	4,x
+	stb	6,s
+	rts
+
+#endif  /* _CMOC_NEED_push5ByteStruct_ */
+
+
+#ifdef _CMOC_NEED_pushStruct_
+
+; Copies a region of memory into the stack.
+; X: Address of the region to read.
+; D: Size in bytes of the region. Must not be zero.
+; S: Address where to copy the region to.
+; Example:
+;       LEAX    destination,PCR
+;       LDD     #17
+;       LEAS    -17,S
+;       LBSR    pushStruct
+; Preserves U, Y. Trashes D, X. Returns nothing.
+;
+pushStruct
+        pshs	u
+	leau    4,s             destination (past pushed U and return address)
+        leas    -2,s
+	pshs    x               preserve source address
+        leax    d,x             compute end of source region
+        stx     2,s             preserve end
+	puls    x               restore source address; ,s is now end
+@copyByte
+	lda	,x+
+	sta	,u+
+	cmpx	,s		compare with end address
+	bne	@copyByte
+	leas	2,s		dispose of end address
+	puls	u,pc
 
 #endif  /* _CMOC_NEED_memcpy_ */
 
@@ -2211,7 +2776,7 @@ _strcat_010
 	leax	-1,x		point back to '\0'
 	pshs	x		pass as destination string to _strcpy
 
-	bsr	_strcpy
+	lbsr	_strcpy
 
 	leas	4,s		dispose of _strcpy arguments
 	ldd	4,s		return original destination address
@@ -2321,7 +2886,16 @@ _tolower_done
 #endif  /* _CMOC_NEED_tolower_ */
 
 
-#ifdef _CMOC_NEED_dwtoa_
+#if    defined(_CMOC_NEED_dwtoa_) \
+    || defined(_CMOC_NEED_printf_) \
+    || defined(_CMOC_NEED_sprintf_) \
+    || defined(_CMOC_NEED_divDWordDWord_) \
+    || defined(_CMOC_NEED_divDWordUnsignedInt_) \
+    || defined(_CMOC_NEED_divUnsignedIntDWord_) \
+    || defined(_CMOC_NEED_signedDivDWordDWord_) \
+    || defined(_CMOC_NEED_divModUnsignedIntDWord_) \
+    || defined(_CMOC_NEED_divUnsignedIntDWord_) \
+    || defined(_CMOC_NEED_modUnsignedIntDWord_)
 
 * Subtract 32-bit unsigned integer from another.
 * In: X => first integer, U => second integer.
@@ -2329,45 +2903,45 @@ _tolower_done
 *      carry bit reflects subtraction.
 * Preserves: all, except CC
 *
-_sub32	pshs	b,a
+sub32xu	pshs	b,a
 
 	ldd	2,x		low word of first
 	subd	2,u		low word of second
-	pshs	cc		preserve carry bit
 	std	2,x		store in low word of first
 
 	ldd	,x		high word of first
-	puls	cc		restore carry bit from 1st sub
 	sbcb	1,u
 	sbca	,u
-	pshs	cc		preserve carry bit
 	std	,x
-	puls	cc		restore carry bit from last sub
 
 	puls	a,b,pc		carry bit from last sub returned
 
+#endif
+
+
+#if defined(_CMOC_NEED_dwtoa_) || defined(_CMOC_NEED_printf_) || defined(_CMOC_NEED_sprintf_)
 
 * byte sub32(word *hi, word h, word l)
 * Subtracts 32-bit integer h:l from 32-bit unsigned integer
 * pointed by 'hi'.
-* Returns carry of the subtraction.
+* Returns carry of the subtraction in B.
 *
 sub32:
 	PSHS	U	
-	TFR	S,U	
-	LEAS	-1,S	
+	LEAU	,S
+	LEAS	-1,S		variable carry
 	pshs	x,b
 	pshs	u
 	ldx	4,U		variable hi
 	leau	6,U		variable h
-	lbsr	_sub32
+	lbsr	sub32xu
 	puls	u
 	tfr	cc,b
 	andb	#1
 	stb	-1,U		variable carry
 	puls	b,x
 	LDB	-1,U		variable carry
-	TFR	U,S	
+	LEAS	,U
 	PULS	U,PC	
 
 
@@ -2396,7 +2970,7 @@ doDigit_010:
 	LDD	6,U		variable h
 	PSHS	B,A		argument 2 of sub32()
 	PSHS	X		'hi': argument 1 of sub32()
-	BSR	sub32		sub32(): returns carry in B
+	LBSR	sub32		sub32(): returns carry in B
 	LEAS	6,S	
 	TSTB
 	BEQ	doDigit_020	no carry: continue subtracting
@@ -2433,12 +3007,13 @@ doDigit_030:
 * terminated by a '\0' character.
 * The resulting buffer always receives a 10-character string
 * and is zero padded at the left.
-* Returns the address of the first non-'0' character in the
+* Returns (in D) the address of the first non-'0' character in the
 * resulting buffer, or of the last '0' character if the given
 * value was zero.
+* Preserves U. Trashes X.
 *
 _dwtoa	PSHS	U	
-	TFR	S,U	
+	LEAU	,S
 	LEAS	-5,S	
 * Line 125: init of variable dest
 	LDD	4,U		variable buffer
@@ -2511,7 +3086,7 @@ dwtoa_030:
 dwtoa_040:
 	tfr	x,d		return address of 1st non-0 digit, or of last 0 if value is 0
 
-	TFR	U,S	
+	LEAS	,U
 	PULS	U,PC	
 
 * Powers of ten as 32-bit integers, in descending order.
@@ -2564,11 +3139,11 @@ check_null_ptr_x:
 _set_stack_overflow_handler:
 	LDD	2,S	first argument
 	STD	stack_overflow_handler,DAT
-no_stack_overflow:
 	RTS
 
 check_stack_overflow:
-	LDX	stack_overflow_handler,DAT	is there a handler?
+        PSHS    B,A
+	LDD	stack_overflow_handler,DAT	is there a handler?
 	BEQ	no_stack_overflow		no
 	CMPS    end_of_sbrk_mem,DAT
 	BLO     stack_overflow_detected
@@ -2581,14 +3156,16 @@ stack_overflow_detected:
 	TFR	D,X	preserve handler address in X, for the JSR
 
 	TFR	S,D	pass out-of-range stack ptr as 2nd argument to handler
-	ADDD	#2	don't count current routine call
+	ADDD	#4	don't count current routine call
 	PSHS	B,A
-	LDD	2,S	return address of LBSR that led to this routine
+	LDD	4,S	return address of LBSR that led to this routine
 	SUBD	#3	point to LBSR instruction
 	PSHS	B,A
 	JSR	,X	handler does not have to return
 stack_overflow_freeze:
-	BRA	stack_overflow_freeze	freeze in handler returned
+	BRA	stack_overflow_freeze	freeze if handler returned
+no_stack_overflow:
+        PULS    A,B,PC
 
 #endif  /* _CMOC_CHECK_STACK_OVERFLOW_ */
 
@@ -2612,7 +3189,7 @@ stack_overflow_freeze:
 * The following system variables are initialized by INILIB.
 *
 _sbrk
-	bsr	_sbrkmax		D = max number of allocatable bytes
+	lbsr	_sbrkmax		D = max number of allocatable bytes
 	cmpd	2,s			compare with 'increment'
 	bhs	sbrk_success		increment not too large: allocate
 	ldd	#-1			fail
@@ -2648,14 +3225,1695 @@ _sbrkmax_non_neg
 #endif  /* defined(_CMOC_NEED_sbrkmax_) || defined(_CMOC_NEED_sbrk_) */
 
 
-#if defined(_CMOC_NEED_initSingleFromSWord_)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; Support for the "long" type.
+;
 
-* Initializes the single-precision float at X with the signed word in D.
-*
-initSingleFromSWord
-	rts				; not implemented
+#if    defined(_CMOC_NEED_copyDWord_) \
+    || defined(_CMOC_NEED_signedDivOrModOnDWord_)
 
-#endif  /* defined(_CMOC_NEED_initSingleFromSWord_) */
+; Input: X = destination address; D = source address.
+; Preserves X. Trashes D.
+;
+copyDWord
+	pshs	u
+	tfr     d,u		; source address
+	ldd	,u		; high word
+	std	,x
+	ldd	2,u		; low word
+	std	2,x
+	puls	u,pc
+
+#endif
+
+
+#if    defined(_CMOC_NEED_copyDWordFromXToD_)
+
+; Copies a 4-byte region of memory.
+; X: Address of the 4 bytes to read.
+; D: Address where to copy the bytes to.
+; Preserves X. Trashes D. Returns nothing.
+;
+copyDWordFromXToD
+        pshs    u
+        tfr     d,u
+	ldd	,x
+	std	,u
+	ldd	2,x
+	std	2,u
+	puls    u,pc
+
+#endif
+
+
+#if    defined(_CMOC_NEED_negateDWord_) \
+    || defined(_CMOC_NEED_testAndRemoveSignOnDWord_) \
+    || defined(_CMOC_NEED_testAndRemoveSignOnWord_) \
+    || defined(_CMOC_NEED_signedDivDWordDWord_) \
+    || defined(_CMOC_NEED_printf_) \
+    || defined(_CMOC_NEED_strtoul_) \
+    || defined(_CMOC_NEED_strtol_) \
+    || defined(_CMOC_NEED_initDWordFromSingle_)
+
+; Input: X => Long to negate.
+; Preserves X. Trashes D.
+;
+negateDWord
+	com	3,x
+	com	2,x
+	com	1,x
+	com	,x
+	ldd	2,x		; low word
+	addd	#1		; sets carry value
+	std	2,x
+	ldd	,x		; high word
+	adcb	#0		; add carry
+	adca	#0
+	std	,x
+	rts
+
+#endif
+
+
+#if    defined(_CMOC_NEED_cmpDWordDWord_) \
+    || defined(_CMOC_NEED_cmpDWordSignedInt_) \
+    || defined(_CMOC_NEED_cmpSignedIntDWord_) \
+    || defined(_CMOC_NEED_cmpDWordUnsignedInt_) \
+    || defined(_CMOC_NEED_cmpUnsignedIntDWord_) \
+    || defined(_CMOC_NEED_divModDWordDWord_) \
+    || defined(_CMOC_NEED_divDWordDWord_) \
+    || defined(_CMOC_NEED_modDWordDWord_) \
+    || defined(_CMOC_NEED_divDWordUnsignedInt_) \
+    || defined(_CMOC_NEED_divUnsignedIntDWord_) \
+    || defined(_CMOC_NEED_signedDivDWordDWord_) \
+    || defined(_CMOC_NEED_divModUnsignedIntDWord_) \
+    || defined(_CMOC_NEED_divUnsignedIntDWord_) \
+    || defined(_CMOC_NEED_modUnsignedIntDWord_) \
+    || defined(_CMOC_NEED_signedDivOrModOnDWord_)
+
+; Input: Stacked arguments: address of left dword, address of right dword.
+; Output: Sets N, Z, V, C.
+; Preserves X, Y, U. Trashes D.
+;
+cmpDWordDWord
+	pshs	u,x
+	ldx	6,s		; left long
+	ldu	8,s		; right long
+	leas	-5,s		; locals
+; ,s (4 bytes): temp long
+; 4,s: temp flags
+;
+	bsr	sub32Stack	; *X - *U in ,s; sets N, V, C
+	tfr	cc,b
+	andb	#$FB		; reset Z (Z to be computed separatedly)
+	stb	4,s		; preserve CC from sub32Stack
+
+	bsr	isLongZeroStack	; checks 4 bytes at ,s
+	tfr	cc,a
+	anda	#4		; keep only Z
+	ora	4,s		; add flags from CC obtained from sub32Stack
+
+	tfr	a,cc
+	leas	5,s
+	puls	x,u,pc
+
+; Pushed long receives *X - *U (unsigned).
+; Sets N, V, C. Trashes D.
+;
+sub32Stack
+	ldd	2,x
+	subd	2,u
+	std	4,s	; low word of result
+	ldd	,x	
+	sbcb	1,u
+	sbca	,u
+	pshs	cc	; preserve flags to be returned
+	std	3,s	; high word of result
+	puls	cc,pc
+
+; Checks if pushed long is zero. Sets Z flag.
+; Preserves registers.
+;
+isLongZeroStack
+	tst	2,s
+	bne	@done
+	tst	3,s
+	bne	@done
+	tst	4,s
+	bne	@done
+	tst	5,s
+@done	rts
+
+#endif
+
+
+#if defined(_CMOC_NEED_isDWordZero_)
+
+; Input: X => long.
+; Output: Z flag.
+; Preserves X and D.
+;
+isDWordZero
+	tst	,x
+	bne	@done
+	tst	1,x
+	bne	@done
+	tst	2,x
+	bne	@done
+	tst	3,x
+@done	rts
+
+#endif
+
+
+#if defined(_CMOC_NEED_cmpDWordSignedInt_)
+
+; Input: 2 pushed arguments.
+; Preserves X and U. Trashes D.
+;
+cmpDWordSignedInt
+	pshs	u,x
+	ldx	6,s		; address of dword
+	ldd	8,s		; signed int
+	pshs	b,a		; create temp dword in stack
+	tfr	a,b
+	sex			; sign extend int into A
+	pshs	a
+	pshs	a		; pushed dword version of int
+	leau	,s		; point to dword (right side)
+	pshs	u,x
+	lbsr	cmpDWordDWord
+	leas	8,s		; clean up pushed U and X, and temp long
+	puls	x,u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_cmpSignedIntDWord_)
+
+cmpSignedIntDWord
+	pshs	u,x
+	ldu	8,s		; address of dword
+	ldd	6,s		; signed int
+	pshs	b,a		; create temp dword in stack
+	tfr	a,b
+	sex			; sign extend int into A
+	pshs	a
+	pshs	a		; pushed dword version of int
+	leax	,s		; point to dword (left side)
+	pshs	u,x
+	lbsr	cmpDWordDWord
+	leas	8,s		; clean up pushed U and X, and temp long
+	puls	x,u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_cmpDWordUnsignedInt_)
+
+cmpDWordUnsignedInt
+	pshs	u,x
+	ldx	6,s		; address of dword
+	ldd	8,s		; unsigned int
+	pshs	b,a		; create temp dword in stack
+	clr	,-s
+	clr	,-s		; pushed dword version of int
+	leau	,s		; point to dword (right side)
+	pshs	u,x
+	lbsr	cmpDWordDWord
+	leas	8,s		; clean up pushed U and X, and temp long
+	puls	x,u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_cmpUnsignedIntDWord_)
+
+cmpUnsignedIntDWord
+	pshs	u,x
+	ldu	8,s		; address of dword
+	ldd	6,s		; signed int
+	pshs	b,a		; create temp dword in stack
+	clr	,-s
+	clr	,-s		; pushed dword version of int
+	leau	,s		; point to dword (left side)
+	pshs	u,x
+	lbsr	cmpDWordDWord
+	leas	8,s		; clean up pushed U and X, and temp long
+	puls	x,u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_addDWordDWord_)
+
+; Input: pushed addresses: left dword, right dword.
+;        X => destination dword.
+; Output: Result at X.
+; Preserves X. Trashes D.
+;
+addDWordDWord
+	pshs	u,y
+	ldu	6,s		; left
+	ldy	8,s		; right
+
+	ldd	2,u		; low word
+	addd	2,y
+	std	2,x
+
+	ldd	,u		; high word
+	adcb	1,y
+	adca	,y
+	std	,x
+
+	puls	y,u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_addDWordUnsignedInt_)
+
+; Input: Pushed arguments: address of dword, value of unsigned int.
+;        X => destination dword.
+; Preserves X.
+;
+addDWordUnsignedInt
+	pshs	u
+	ldu	4,s		; source dword
+	ldd	6,s		; word to add
+	addd	2,u		; add to low word of source dword; sets carry
+	std	2,x		; store in low word of result dword
+	ldd	,u		; load high word of source dword
+	adcb	#0		; add carry of low word add
+	adca	#0
+	std	,x
+	puls	u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_addUnsignedIntDWord_)
+
+; Input: Pushed arguments: value of unsigned int, address of dword.
+;        X => destination dword.
+; Preserves X.
+;
+addUnsignedIntDWord
+	pshs	u
+	ldu	6,s		; source dword
+	ldd	4,s		; word to add
+	addd	2,u		; add to low word of source dword; sets carry
+	std	2,x		; store in low word of result dword
+	ldd	,u		; load high word of source dword
+	adcb	#0		; add carry of low word add
+	adca	#0
+	std	,x
+	puls	u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_addDWordInt_)
+
+; Input: Pushed arguments: address of dword, value of signed int.
+;        X => destination dword.
+; Preserves X.
+;
+addDWordInt
+	pshs	u
+	ldu	4,s		; source dword
+	ldd	6,s		; word to add
+	addd	2,u		; add to low word of source dword; sets carry
+	std	2,x		; store in low word of result dword
+	ldd	,u		; load high word of source dword
+	adcb	#0		; add carry of low word add
+	adca	#0
+	tst	6,s		; test sign bit of high word of int
+	bpl	@intNotNeg
+	addd	#$FFFF		; as if int had been sign-extended to 32 bits
+@intNotNeg
+	std	,x
+	puls	u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_addIntDWord_)
+
+; Input: Pushed arguments: value of signed int, address of dword.
+;        X => destination dword.
+; Preserves X.
+;
+addIntDWord
+	pshs	u
+	ldu	6,s		; source dword
+	ldd	4,s		; word to add
+	addd	2,u		; add to low word of source dword; sets carry
+	std	2,x		; store in low word of result dword
+	ldd	,u		; load high word of source dword
+	adcb	#0		; add carry of low word add
+	adca	#0
+	tst	4,s		; test sign bit of high word of int
+	bpl	@intNotNeg
+	addd	#$FFFF		; as if int had been sign-extended to 32 bits
+@intNotNeg
+	std	,x
+	puls	u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_subDWordDWord_)
+
+subDWordDWord
+	pshs	u,y
+	ldu	6,s		; left
+	ldy	8,s		; right
+
+	ldd	2,u		; low word
+	subd	2,y
+	std	2,x
+
+	ldd	,u		; high word
+	sbcb	1,y
+	sbca	,y
+	std	,x
+
+	puls	y,u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_subDWordUnsignedInt_)
+
+; Input: Pushed arguments: address of dword, value of unsigned int.
+;        X => destination dword.
+; Preserves X.
+;
+subDWordUnsignedInt
+	pshs	u
+	ldu	4,s		; source dword
+	ldd	2,u		; load low word of source dword
+	subd	6,s		; subtract right side
+	std	2,x		; store in low word of result dword
+	ldd	,u		; load high word of source dword
+	sbcb	#0		; sub carry of low word sub
+	sbca	#0
+	std	,x
+	puls	u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_subUnsignedIntDWord_)
+
+; Input: Pushed arguments: value of unsigned int, address of dword.
+;        X => destination dword.
+; Preserves X.
+;
+subUnsignedIntDWord
+	pshs	u
+	ldd	4,s		; left side
+	ldu	6,s		; source dword
+	subd	2,u		; sub low word of source dword
+	std	2,x		; store in low word of result dword
+	ldd	#0		; zero-extend left side (clra & clrb would clear C)
+	sbcb	1,u		; sub carry of low word sub from zero-extension
+	sbca	,u
+	std	,x
+	puls	u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_subDWordInt_)
+
+; Input: Pushed arguments: address of dword, value of unsigned int.
+;        X => destination dword.
+; Preserves X.
+;
+subDWordInt
+	pshs	u
+	ldu	4,s		; source dword
+	ldd	2,u		; load low word of source dword
+	subd	6,s		; subtract right side
+	std	2,x		; store in low word of result dword
+	ldd	,u		; load high word of source dword
+	sbcb	#0		; sub carry of low word sub
+	sbca	#0
+	tst	6,s		; test sign bit of high word of int
+	bpl	@intNotNeg
+	subd	#$FFFF		; as if int had been sign-extended to 32 bits
+@intNotNeg
+	std	,x
+	puls	u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_subIntDWord_)
+
+; Input: Pushed arguments: value of unsigned int, address of dword.
+;        X => destination dword.
+; Preserves X.
+;
+subIntDWord
+	pshs	u
+	ldd	4,s		; left side
+	ldu	6,s		; source dword
+	subd	2,u		; sub low word of source dword
+	std	2,x		; store in low word of result dword
+	ldd	#0		; zero-extend left side (clra & clrb would clear C)
+	sbcb	1,u		; sub carry of low word sub from zero-extension
+	sbca	,u
+	tst	4,s		; test sign bit of high word of int
+	bpl	@intNotNeg
+	subd	#1
+@intNotNeg
+	std	,x
+	puls	u,pc
+
+#endif
+
+
+#if    defined(_CMOC_NEED_mulDWordDWord_) \
+    || defined(_CMOC_NEED_mulDWordUnsignedInt_) \
+    || defined(_CMOC_NEED_mulUnsignedIntDWord_) \
+    || defined(_CMOC_NEED_mulDWordInt_) \
+    || defined(_CMOC_NEED_mulIntDWord_) \
+    || defined(_CMOC_NEED_strtoul_) \
+    || defined(_CMOC_NEED_strtol_)
+
+; Multiplies the two unsigned longs whose addresses are in X (left)
+; and U (right). Stores the result in the unsigned long at Y.
+; Synopsis:
+;	pshs	y
+; 	leax	left,pcr
+;	leau	right,pcr
+;	leay	product,pcr
+;	lbsr	MUL32
+;	puls	y
+; Preserves X, U and Y. Trashes D.
+;
+MUL32
+;
+; Let L0,L1,L2,L3 be the 4 bytes of the left operand.
+; Let R0,R1,R2,R3 be the 4 bytes of the right operand.
+; The product is
+;	         L3 * (R0,R1,R2,R3)
+;	+ 2^8  * L2 * (R0,R1,R2,R3)
+;	+ 2^16 * L1 * (R0,R1,R2,R3)
+;	+ 2^24 * L0 * (R0,R1,R2,R3)
+; But some parts of this formula overflow the resulting 32-bit word.
+; The the 32-bit result is
+;	         L3 * (R0,R1,R2,R3)
+;	+ 2^8  * L2 * (R1,R2,R3)
+;	+ 2^16 * L1 * (R2,R3)
+;	+ 2^24 * L0 * R3.
+; 
+; Let P3,P2,P1,P0 be the product to be computed in the result buffer.
+;
+	lda	3,x		; L3
+	ldb	3,u		; R3
+	mul
+	std	2,y		; store in P2,P3
+
+	lda	3,x		; L3
+	ldb	2,u		; R2
+	mul
+	addb	2,y		; add P2
+	adca	#0
+	std	1,y		; store in P1,P2
+
+	lda	3,x		; L3
+	ldb	1,u		; R1
+	mul
+	addb	1,y		; add P1
+	adca	#0
+	std	,y		; store in P0,P1
+
+	lda	3,x		; L3
+	ldb	,u		; R0
+	mul
+	addb	,y		; add P0
+	stb	,y		; store in P0
+
+; Done with L3.
+
+	lda	2,x		; L2
+	ldb	3,u		; R3
+	mul
+	addb	2,y		; add P2
+	adca	1,y		; add P1
+	std	1,y		; store in P1,P2
+	ldb	,y		; add carry to P0
+	adcb	#0
+	stb	,y
+
+	lda	2,x		; L2
+	ldb	2,u		; R2
+	mul
+	addb	1,y		; add P1
+	adca	,y		; add P0
+	std	,y		; store in P0,P1
+
+	lda	2,x		; L2
+	ldb	1,u		; R1
+	mul
+	addb	,y		; add P0
+	stb	,y		; store in P0
+
+; Done with L2.
+
+	lda	1,x		; L1
+	ldb	3,u		; R3
+	mul
+	addb	1,y		; add P1
+	adca	,y		; add P0
+	std	,y		; store in P0,P1
+
+	lda	1,x		; L1
+	ldb	2,u		; R2
+	mul
+	addb	,y		; add P0
+	stb	,y		; store in P0
+
+; Done with L1.
+
+	lda	,x		; L0
+	ldb	3,u		; R3
+	mul
+	addb	,y		; add P0
+	stb	,y		; store in P0
+
+; Done with L0.
+
+	rts
+
+#endif
+
+
+#if defined(_CMOC_NEED_mulDWordDWord_)
+
+; Input: pushed arguments: addresses of left and right dwords
+;        X => destination dword: X is allowed to be the same address
+;             as that of the left dword.
+; Output: product at X.
+; Preserves X. Trashes D.
+;
+mulDWordDWord
+	pshs	u,y,x
+	leas	-4,s		; temp result
+	leay	,s		; make MUL32 store result at ,s
+	ldx	12,s		; left address
+	ldu	14,s		; right address
+	lbsr	MUL32
+	ldx	4,s		; original X points to destination
+    	ldd	,y		; copy MUL32 result to original X
+	std	,x
+	ldd	2,y
+	std	2,x
+	leas	4,s
+	puls	x,y,u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_mulDWordUnsignedInt_) \
+    || defined(_CMOC_NEED_strtoul_) \
+    || defined(_CMOC_NEED_strtol_)
+
+; Input: Pushed arguments: address of dword, value of unsigned int.
+;        X => destination dword: X is allowed to be the same address
+;             as that of the left dword.
+; Preserves X.
+;
+mulDWordUnsignedInt
+	pshs	u,y,x
+	leas	-4,s		; temp result
+	leay	,s		; make MUL32 store result at ,s
+	ldx	12,s		; left address
+	ldd	14,s		; right side
+	pshs	b,a
+	clr	,-s
+	clr	,-s
+	leau	,s		; point to zero-extended right side
+	lbsr	MUL32
+	ldx	8,s		; original X points to destination
+    	ldd	,y		; copy MUL32 result to original X
+	std	,x
+	ldd	2,y
+	std	2,x
+	leas	8,s
+	puls	x,y,u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_mulUnsignedIntDWord_)
+
+; Input: Pushed arguments: value of unsigned int, address of dword.
+;        X => destination dword.
+; Preserves X.
+;
+mulUnsignedIntDWord
+	pshs	u,y,x
+	tfr	x,y		; result address
+	ldd	8,s		; left side
+	ldx	10,s		; right address
+	pshs	b,a
+	clr	,-s
+	clr	,-s
+	leau	,s		; point to zero-extended left side
+	lbsr	MUL32
+	leas	4,s
+	puls	x,y,u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_mulDWordInt_)
+
+; Input: Pushed arguments: address of dword, value of signed int.
+;        X => destination dword: X is allowed to be the same address
+;             as that of the left dword.
+; Preserves X.
+;
+mulDWordInt
+	pshs	u,y,x
+	leas	-4,s		; temp result
+	leay	,s		; make MUL32 store result at ,s	
+	ldx	12,s		; left address
+	ldd	14,s		; right side
+	pshs	b,a
+	tfr	a,b
+	sex
+	pshs	a
+	pshs	a
+	leau	,s		; point to sign-extended right side
+	lbsr	MUL32
+	ldx	8,s		; original X points to destination
+    	ldd	,y		; copy MUL32 result to original X
+	std	,x
+	ldd	2,y
+	std	2,x
+	leas	8,s
+	puls	x,y,u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_mulIntDWord_)
+
+; Input: Pushed arguments: value of unsigned int, address of dword.
+;        X => destination dword.
+; Preserves X.
+;
+mulIntDWord
+	pshs	u,y,x
+	tfr	x,y		; result address
+	ldd	8,s		; left side
+	ldx	10,s		; right address
+	pshs	b,a
+	tfr	a,b
+	sex
+	pshs	a
+	pshs	a
+	leau	,s		; point to zero-extended left side
+	lbsr	MUL32
+	leas	4,s	
+	puls	x,y,u,pc
+
+#endif
+
+
+#if    defined(_CMOC_NEED_divModDWordDWord_) \
+    || defined(_CMOC_NEED_divDWordDWord_) \
+    || defined(_CMOC_NEED_modDWordDWord_) \
+    || defined(_CMOC_NEED_divDWordUnsignedInt_) \
+    || defined(_CMOC_NEED_divUnsignedIntDWord_) \
+    || defined(_CMOC_NEED_signedDivDWordDWord_) \
+    || defined(_CMOC_NEED_divModUnsignedIntDWord_) \
+    || defined(_CMOC_NEED_divUnsignedIntDWord_) \
+    || defined(_CMOC_NEED_modUnsignedIntDWord_) \
+    || defined(_CMOC_NEED_signedDivOrModOnDWord_)
+
+; Divides the unsigned long at X by the one at U.
+; Stores the quotient in the unsigned long at Y
+; and the remainder in the unsigned long at 4,Y.
+; The 8 bytes at Y must not overlap the dividend or divisor.
+; Synopsis:
+;	pshs	y
+; 	leax	dividend,pcr
+;	leau	divisor,pcr
+;	leay	eightByteBuffer,pcr
+;	lbsr	DIV32
+;	puls	y
+; Preserves the divisor, X, Y, U. Trashes the dividend and D.
+;
+DIV32
+	ldb	#32
+	pshs	b
+; 0,s: loop counter.
+	clra
+	clrb
+	std	,y		; clear quotient
+	std	2,y
+	std	4,y		; clear accumulator (finishes as the remainder)
+	std	6,y
+@loop	lsl	3,x		; shift high bit of dividend into carry
+	rol	2,x
+	rol	1,x
+	rol	,x
+	rol	7,y		; shift that bit into bit 0 of acc
+	rol	6,y
+	rol	5,y
+	rol	4,y
+	bsr	@doesDivisorFitAcc
+	blo	@noFit		; if not
+	bsr	@subDivisorFromAcc
+	orcc	#1		; set carry
+	bra	@carryToQuotient
+@noFit
+	andcc	#$FE		; reset carry
+@carryToQuotient
+	rol	3,y		; shift carry into quotient
+	rol	2,y
+	rol	1,y
+	rol	,y
+	dec	,s		; another bit of the dividend to process?
+	bne	@loop		; if yes
+	puls	b,pc
+;
+; Input: U => divisor, 4,Y => accumulator.
+; Output: C=1 if accumulator < divisor, C=0 otherwise (i.e., divisor goes into acc).
+;
+@doesDivisorFitAcc
+	pshs	x		; preserve X
+	leax	4,y
+	pshs	u,x
+	lbsr	cmpDWordDWord	; sets C
+	leas	4,s
+	puls	x,pc
+;
+; Input: U => divisor, 4,Y => accumulator.
+;
+@subDivisorFromAcc
+	pshs	x		; preserve X
+	leax	4,y
+	lbsr	sub32xu		; *X -= *U
+	puls	x,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_divModDWordDWord_) \
+    || defined(_CMOC_NEED_divDWordDWord_) \
+    || defined(_CMOC_NEED_modDWordDWord_)
+
+; Input: pushed addresses of dividend and divisor;
+;        X => address of result (quotient or remainder);
+;        B => 0 for division, 1 for remainder.
+; Preserves X, Y, U. Trashes D.
+;
+divModDWordDWord
+	pshs	u,y,x,b
+	leas	-12,s
+; 0,s: Copy of dividend (to avoid modifying the caller's).
+; 4,s: Quotient received from DIV32.
+; 8,s: Remainder received from DIV32.
+	ldx	21,s		; address of dividend
+	ldd	,x		; copy to 0,s
+	std	,s
+	ldd	2,x
+	std	2,s
+	leax	,s		; point to dividend
+	ldu	23,s		; point to divisor
+	leay	4,s		; point to quotient and remainder (8 bytes)
+	lbsr	DIV32
+	ldx	13,s		; retrieve destination address for quotient
+	tst	12,s		; caller wants quotient or remainder?
+	bne	@remainder
+	leau	4,s
+	bra	@copy
+@remainder
+	leau	8,s
+@copy
+	ldd	,u		; copy result to X
+	std	,x
+	ldd	2,u
+	std	2,x
+	leas	12,s
+	puls	b,x,y,u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_divDWordDWord_)
+
+divDWordDWord
+	clrb
+	lbra	divModDWordDWord
+
+#endif
+
+
+#if defined(_CMOC_NEED_modDWordDWord_)
+
+modDWordDWord
+	ldb	#1
+	lbra	divModDWordDWord
+
+#endif
+
+
+#if defined(_CMOC_NEED_divModDWordUnsignedInt_) \
+    || defined(_CMOC_NEED_divDWordUnsignedInt_) \
+    || defined(_CMOC_NEED_modDWordUnsignedInt_)
+
+; Input: Pushed arguments: address of dword, value of unsigned int.
+;        X => destination dword.
+; Preserves X.
+;
+divModDWordUnsignedInt
+	pshs	u,y,x,b
+	leas	-16,s
+; 0,s: Copy of dividend (to avoid modifying the caller's).
+; 4,s: Extension of divisor to 32 bits.
+; 8,s: Quotient received from DIV32.
+; 12,s: Remainder received from DIV32.
+	ldx	25,s		; address of dividend
+	ldd	,x		; copy to 0,s
+	std	,s
+	ldd	2,x
+	std	2,s
+	leax	,s		; point to dividend
+	ldd	27,s		; value of divisor
+	std	6,s		; extend divisor to 32 bits
+	clr	5,s
+	clr	4,s
+	leau	4,s		; point to 32-bit divisor
+	leay	8,s		; point to quotient and remainder (8 bytes)
+	lbsr	DIV32
+	ldx	17,s		; retrieve destination address for quotient
+	tst	16,s		; caller wants quotient or remainder?
+	bne	@remainder
+	leau	8,s
+	bra	@copy
+@remainder
+	leau	12,s
+@copy
+	ldd	,u		; copy quotient to X
+	std	,x
+	ldd	2,u
+	std	2,x
+	leas	16,s
+	puls	b,x,y,u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_divDWordUnsignedInt_)
+
+divDWordUnsignedInt
+	clrb
+	lbra	divModDWordUnsignedInt
+
+#endif
+
+
+#if defined(_CMOC_NEED_modDWordUnsignedInt_)
+
+modDWordUnsignedInt
+	ldb	#1
+	lbra	divModDWordUnsignedInt
+
+#endif
+
+
+#if defined(_CMOC_NEED_divModUnsignedIntDWord_) \
+    || defined(_CMOC_NEED_divUnsignedIntDWord_) \
+    || defined(_CMOC_NEED_modUnsignedIntDWord_)
+
+; Input: Pushed arguments: value of unsigned int, address of dword.
+;        X => destination dword.
+; Preserves X.
+;
+divModUnsignedIntDWord
+	pshs	u,y,x,b
+	leas	-12,s
+; 0,s: Dividend extended to 32 bits.
+; 4,s: Quotient received from DIV32.
+; 8,s: Remainder received from DIV32.
+	ldd	21,s		; value of dividend
+	std	2,s		; extend to 32 bits
+	clr	1,s
+	clr	,s
+	leax	,s		; point to dividend
+	ldu	23,s		; address of divisor
+	leay	4,s		; point to quotient and remainder (8 bytes)
+	lbsr	DIV32
+	ldx	13,s		; retrieve destination address for quotient
+	tst	12,s		; caller wants quotient or remainder?
+	bne	@remainder
+	leau	4,s
+	bra	@copy
+@remainder
+	leau	8,s
+@copy
+	ldd	,u		; copy quotient to X
+	std	,x
+	ldd	2,u
+	std	2,x
+	leas	12,s
+	puls	b,x,y,u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_divUnsignedIntDWord_)
+
+divUnsignedIntDWord
+	clrb
+	lbra	divModUnsignedIntDWord
+
+#endif
+
+
+#if defined(_CMOC_NEED_modUnsignedIntDWord_)
+
+modUnsignedIntDWord
+	ldb	#1
+	lbra	divModUnsignedIntDWord
+
+#endif
+
+
+#if    defined(_CMOC_NEED_testAndRemoveSignOnDWord_) \
+    || defined(_CMOC_NEED_signedDivOrModOnDWord_)
+
+; Input: pushed address => dword to test;
+;        X => destination to copy absolute value of dword to;
+; Output: non-negative dword at X;
+;         N is 1 if input dword was negative, 0 otherwise.
+; Preserves X. Trashes D.
+;
+testAndRemoveSignOnDWord
+	pshs	u
+	ldu	4,s		; address of input dword
+	ldd	2,u		; copy input dword to destination
+	std	2,x
+	ldd	,u
+	std	,x
+	bpl	@done		; branch if high bit of high word is 0
+; Input dword is negative: remove sign of destination dword.
+	lbsr	negateDWord
+	orcc	#8		; set N = 1
+@done
+	puls	u,pc
+#endif
+
+
+#if defined(_CMOC_NEED_testAndRemoveSignOnWord_) \
+    || defined(_CMOC_NEED_signedDivOrModOnDWord_)
+
+; Input: pushed word => signed word to test;
+;        X => dword that receives absolute value of word.
+; Output: non-negative dword at X;
+;         N is 1 if input word was negative, 0 otherwise.
+; Preserves X. Trashes D.
+;
+testAndRemoveSignOnWord
+	ldd	2,s		; pushed argument
+	std	2,x
+	tfr	a,b		; sign extension
+	sex
+	sta	1,x
+	sta	,x
+	bpl	@done
+	lbsr	negateDWord	; dword at X is < 0; make is positive
+	orcc	#8		; set N = 1
+@done
+	rts
+
+#endif
+
+
+#if    defined(_CMOC_NEED_copyWordToDWord_) \
+    || defined(_CMOC_NEED_signedDivOrModOnDWord_)
+
+; Input: pushed word => input word;
+;        X => destination dword.
+; Output: Zero-extended dword at X.
+; Preserves X. Trashes D.
+;
+copyWordToDWord
+	ldd	2,s
+	std	2,x
+	clr	1,x
+	clr	,x
+	rts
+
+#endif
+
+
+#if    defined(_CMOC_NEED_signExtWordToDWord_) \
+    || defined(_CMOC_NEED_signedDivOrModOnDWord_)
+
+; Input: pushed word => input signed word;
+;        X => destination dword.
+; Output: Sign-extended dword at X.
+; Preserves X. Trashes D.
+;
+signExtWordToDWord
+	ldd	2,s
+	std	2,x
+	tfr	a,b
+	sex
+	sta	1,x
+	sta	,x
+	rts
+
+#endif
+
+
+#if defined(_CMOC_NEED_signedDivOrModOnDWord_)
+
+; Input: bit 3 of B: sign to give to the quotient.
+;        X => 2 unsigned dwords (dividend, divisor).
+; Output: quotient written in place of dividend; remainder in place of divisor
+; Preserves B. Trashes A and X.
+; 
+signedDivDWordDWord
+	pshs	u,y,b
+	leas	-8,s		; result of DIV32
+
+	leau	4,x		; point to divisor
+	leay	,s		; point to result dwords
+	lbsr	DIV32
+
+	ldd	,y		; copy quotient over dividend
+	std	,x
+	ldd	2,y
+	std	2,x
+	ldd	4,y		; copy remainder over divisor
+	std	4,x
+	ldd	6,y
+	std	6,x
+
+	ldb	8,s		; look at input B: is quotient negative?
+	bitb	#8		; N flag
+	beq	@notNeg		; branche if quotient non-negative
+	lbsr	negateDWord	; negative quotient (at X)
+@notNeg
+	leas	8,s
+	puls	b,y,u,pc
+
+; Input: push word: address of source dword;
+;        X => address of destination dword;
+;        bit 3 or B: sign to give to the destination dword.
+; Preserves X.
+;
+copyModuloDWord
+	pshs	u,b
+	ldu	5,s		; address of source dword
+	ldd	,u
+	std	,x
+	ldd	2,u
+	std	2,x
+	ldb	,s		; check N in flags received in B
+	bitb	#8
+	beq	@done
+	lbsr	negateDWord
+@done
+	puls	b,u,pc
+
+
+; Output: X => destination dword; B = flag byte.
+; Trashes D.
+;
+signedDivOrModOnDWord
+	pshs	u
+	leau	,s
+	leas	-10,s
+	pshs	b
+; Arguments:
+; 4,U: address of destination dword.
+; 6,U: dividend (address if dword; word value if short integral).
+; 8,U: divisor (address if dword; word value if short integral).
+; Locals:
+; -4,U: 2nd temp dword (divisor as dword)
+; -8,U: 1st temp dword (dividend as dword)
+; -9,U: CC of divisor.
+; -10,U: CC of dividend.
+; -11,U: flag byte received from caller in B:
+;            bit 0 ($01): operation flag (0 = modulo, 1 = division)
+;            bit 1 ($02): quotient signedness flag (0 = unsigned, 1 = signed)
+;            bit 2 ($04): dividend size flag (0 = word, 1 = dword)
+;            bit 3 ($08): dividend signedness flag
+;            bit 4 ($10): divisor size flag
+;            bit 5 ($20): divisor signedness flag
+;
+; Convert divisor to non-negative.
+	
+	ldx	8,u	; divisor
+	pshs	x	; pass to utility routine
+	leax	-4,u	; 2nd temp word
+	ldb	-11,u	; flag byte
+	andb	#$22	; divisor and quotient signedness flags
+	cmpb	#$22
+	bne	@noSignToRemoveOnDivisor
+; Remove sign on divisor.
+	ldb	-11,u		; flag byte
+	bitb	#$10		; is divisor word or dword?
+	beq	@wordDivisor_0
+	lbsr	testAndRemoveSignOnDWord
+	bra	@divisorSignRemoved
+@wordDivisor_0
+	lbsr	testAndRemoveSignOnWord
+@divisorSignRemoved
+	tfr	cc,b		; preserve N flag for divisor
+	stb	-9,u
+	bra	@divisorNowDWord
+;
+@noSignToRemoveOnDivisor
+; Copy divisor to 2nd temp dword.
+	ldb	-11,u		; flag byte
+	bitb	#$10		; is divisor word or dword?
+	beq	@wordDivisor_1
+        ldd     ,s              ; address of word to copy
+	lbsr	copyDWord
+	bra	@nullN
+@wordDivisor_1
+	bitb	#$20		; divisor signedness
+	beq	@unsignedWordDivisor
+	lbsr	signExtWordToDWord
+	bra	@nullN
+@unsignedWordDivisor
+	lbsr	copyWordToDWord
+@nullN
+	clr	-9,u		; null N flag for divisor
+;
+@divisorNowDWord
+	leas	2,s		; discard arg of utility routine
+;
+; Convert dividend to non-negative.
+	ldx	6,u	; dividend
+	pshs	x	; pass to utility routine
+	leax	-8,u	; 1st temp dword
+	ldb	-11,u	; flag byte
+	andb	#$0A	; dividend and quotient signedness
+	cmpb	#$0A
+	bne	@noSignToRemoveOnDividend
+; Remove sign on dividend.
+	ldb	-11,u	; flag byte
+	bitb	#$04	; is dividend word or dword?
+	beq	@wordDividend_0
+	lbsr	testAndRemoveSignOnDWord
+	bra	@dividendSignRemoved
+@wordDividend_0
+	lbsr	testAndRemoveSignOnWord
+@dividendSignRemoved
+	bra	@dividendNowDWord
+;
+@noSignToRemoveOnDividend
+; Copy dividend to 1st temp dword.
+	ldb	-11,u	; flag byte
+	bitb	#$04	; is dividend word or dword?
+	beq	@wordDividend_1
+        ldd     ,s             ; address of word to copy
+	lbsr	copyDWord
+	bra	@andcc
+@wordDividend_1
+	bitb	#$08	; dividend signedness
+	beq	@unsignedWordDividend
+	lbsr	signExtWordToDWord
+	bra	@andcc
+@unsignedWordDividend
+	lbsr	copyWordToDWord
+@andcc
+	andcc	#$F7		; null N flag for dividend
+;
+@dividendNowDWord
+	leas	2,s		; discard arg of utility routine
+;
+; Here, the N flag represents the sign of the left side.
+; Call the division routine.
+	tfr	cc,b		; N flag in B
+	stb	-10,u		; preserve sign of dividend
+	eorb	-9,u		; XOR with sign of divisor
+	leax	-8,u		; point to the 2 temp dwords
+	lbsr	signedDivDWordDWord
+;
+; Resulting dword is one of temp dwords, depending on operation.
+;
+	leax	-8,u		; 1st temp dword (contains quotient)
+	ldb	-11,u	; flag byte
+	bitb	#$01		; operation
+	bne	@division_0
+	leax	4,x		; 2nd temp dword (contains modulo)
+@division_0
+	pshs	x		; address to dword to copy
+	ldx	4,u		; address of destination dword
+	bitb	#$01		; operation
+	bne	@division_1
+	ldb	-10,u		; sign of dividend
+	lbsr	copyModuloDWord	; preserves X
+	bra	@done
+@division_1
+        ldd     ,s              ; address of word to copy
+	lbsr	copyDWord	; preserves X
+@done
+	leas	,u		; discards arg pushed to copy*DWord
+	puls	u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_initDWordFromSignedWord_)
+
+; Input: X => dword to initialize. D => signed word to initialize the dword with.
+; Preserves X. Trashes D.
+;
+initDWordFromSignedWord
+	std	2,x		; low word
+	tfr	a,b
+	sex
+	sta	1,x
+	sta	,x
+	rts
+
+#endif
+
+
+#if defined(_CMOC_NEED_initDWordFromUnsignedWord_)
+
+; Input: X => dword to initialize. D => unsigned word to initialize the dword with.
+; Preserves X.
+;
+initDWordFromUnsignedWord
+	std	2,x		; low word
+	clr	1,x
+	clr	,x
+	rts
+
+#endif
+
+
+#if defined(_CMOC_NEED_initWordFromDWord_)
+
+; Input: X => destination word; D => source dword.
+; Preserves X. Trashes D.
+;
+initWordFromDWord
+	pshs	u
+	tfr	d,u
+	ldd	2,u		; low word of source dword
+	std	,x
+	puls	u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_initByteFromDWord_)
+
+; Input: X => destination byte; D => source dword.
+; Preserves X. Trashes D.
+;
+initByteFromDWord
+	pshs	u
+	tfr	d,u
+	ldb	3,u		; low byte of source dword
+	stb	,x
+	puls	u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_incrementDWord_)
+
+; Preserves X. 
+;
+incrementDWord
+	ldd	2,x		; low word
+	addd	#1
+	std	2,x
+	ldd	,x
+	adcb	#0
+	adca	#0
+	std	,x
+	rts
+
+#endif
+
+
+#if defined(_CMOC_NEED_decrementDWord_)
+
+; Preserves X. 
+;
+decrementDWord
+	ldd	2,x		; low word
+	subd	#1
+	std	2,x
+	ldd	,x
+	sbcb	#0
+	sbca	#0
+	std	,x
+	rts
+
+#endif
+
+
+#if defined(_CMOC_NEED_leftShiftDWord_)
+
+; Input: Z must reflect B.
+; Preserves X. Trashes D.
+;
+leftShiftDWordAtXByB
+	beq	@done
+	cmpb	#8	; at least 8 bits to shift?
+	blo	@bitLoop
+@byteLoop
+	lda	1,x
+	sta	,x
+	lda	2,x
+	sta	1,x
+	lda	3,x
+	sta	2,x
+	clr	3,x
+	subb	#8
+	beq	@done
+	cmpb	#8
+	bhs	@byteLoop
+@bitLoop
+	lsl	3,x
+	rol	2,x
+	rol	1,x
+	rol	,x
+	decb
+	bne	@bitLoop
+@done
+	rts
+
+#endif
+
+
+#if defined(_CMOC_NEED_leftShiftDWord_)
+
+; Input: 1st pushed argument: address of dword;
+;        2nd pushed argument: byte containing number of bits to shift;
+;        X => destination dword (may point to left dword).
+; Output: Result at X.
+; Preserves X. Trashes D.
+;
+leftShiftDWord
+	pshs	u
+	ldb	6,s		; number of bits to shift
+	cmpb	#32
+	bhs	@resultZero	; all bits of left dword get shifted out
+	ldu	4,s		; address of left dword
+	ldd	,u		; copy left dword to destination
+	std	,x
+	ldd	2,u
+	std	2,x
+	ldb	6,s		; number of bits to shift
+	lbsr	leftShiftDWordAtXByB	; preserves X
+	bra	@done
+@resultZero
+	clr	,x
+	clr	1,x
+	clr	2,x
+	clr	3,x
+@done
+	puls	u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_rightShiftDWord_)
+
+; Input: A: 0 = zero-extend, $FF = sign-extend;
+;        B: number of bits to shift;
+;        X => dword to shift (in place).
+; Preserves X. Trashes D.
+;
+rightShiftDWordAtXByB
+	pshs	a
+	tstb
+	beq	@done
+	cmpb	#8	; at least 8 bits to shift?
+	blo	@bitLoop
+@byteLoop
+	lda	2,x
+	sta	3,x
+	lda	1,x
+	sta	2,x
+	lda	,x
+	sta	1,x
+	bmi	@useExtByte	; if high bit of dword is 1
+	clra
+	bra	@storeExtByte
+@useExtByte
+	lda	,s		; zero/sign extension byte
+@storeExtByte
+	sta	,x
+	subb	#8
+	beq	@done
+	cmpb	#8
+	bhs	@byteLoop
+@bitLoop
+	tst	,s		; zero or sign extension?
+	beq	@zeroExtBitLoop
+@signExtBitLoop
+	asr	,x
+	ror	1,x
+	ror	2,x
+	ror	3,x
+	decb
+	bne	@signExtBitLoop
+	bra	@done
+@zeroExtBitLoop
+	lsr	,x
+	ror	1,x
+	ror	2,x
+	ror	3,x
+	decb
+	bne	@zeroExtBitLoop
+@done
+	puls	a,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_rightShiftDWord_)
+
+; Input: 1st pushed argument: address of dword;
+;        2nd pushed argument: byte containing sign extension flag
+;                             (0 = zero-extended; $FF = sign-extend);
+;        3rd pushed argument: byte containing number of bits to shift;
+;        X => destination dword (may point to left dword).
+; Output: Result at X.
+; Preserves X. Trashes D.
+;
+rightShiftDWord
+	pshs	u
+	ldb	7,s		; number of bits to shift
+	cmpb	#32
+	bhs	@shiftAll	; all bits of left dword get shifted out
+	ldu	4,s		; address of left dword
+	ldd	,u		; copy left dword to destination
+	std	,x
+	ldd	2,u
+	std	2,x
+	ldd	6,s		; A = sign extension flag, B = number of bits to shift
+	lbsr	rightShiftDWordAtXByB	; preserves X
+	bra	@done
+@shiftAll
+	ldb	6,s		; sign extension flag
+	beq	@allZeroes
+	tst	[4,s]		; test high byte of input dword
+	bmi	@fillWithB
+@allZeroes
+	clrb			; fill with 0's b/c zero-extend or signed dword >= 0
+@fillWithB
+	stb	,x
+	stb	1,x
+	stb	2,x
+	stb	3,x
+@done
+	puls	u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_orDWordDWord_)
+
+; Input: Pushed arguments: addresses of left and right dword;
+;        X => destination dword (may be same as address of left dword).
+; Preserves X. Trashes D.
+;
+orDWordDWord
+	pshs	u,y
+	ldu	6,s		; left dword
+	ldy	8,s		; right dword
+	ldd	,u		; high word
+	ora	,y
+	orb	1,y
+	std	,x
+	ldd	2,u		; low word
+	ora	2,y
+	orb	3,y
+	std	2,x
+	puls	y,u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_orDWordWord_)
+
+; Input: Pushed arguments: addresses of left dword, value of right word;
+;        X => destination dword (may be same as address of left dword).
+; Preserves X. Trashes D.
+;
+orDWordWord
+	pshs	u
+	ldu	4,s		; left dword
+	ldd	,u		; high word
+	std	,x		; unchanged
+	ldd	2,u		; low word
+	ora	6,s		; right word is at S+6
+	orb	7,s
+	std	2,x
+	puls	u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_xorDWordDWord_)
+
+; Input: Pushed arguments: addresses of left and right dword;
+;        X => destination dword (may be same as address of left dword).
+; Preserves X. Trashes D.
+;
+xorDWordDWord
+	pshs	u,y
+	ldu	6,s		; left dword
+	ldy	8,s		; right dword
+	ldd	,u		; high word
+	eora	,y
+	eorb	1,y
+	std	,x
+	ldd	2,u		; low word
+	eora	2,y
+	eorb	3,y
+	std	2,x
+	puls	y,u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_xorDWordWord_)
+
+; Input: Pushed arguments: addresses of left dword, value of right word;
+;        X => destination dword (may be same as address of left dword).
+; Preserves X. Trashes D.
+;
+xorDWordWord
+	pshs	u
+	ldu	4,s		; left dword
+	ldd	,u		; high word
+	std	,x		; unchanged
+	ldd	2,u		; low word
+	eora	6,s		; right word is at S+6
+	eorb	7,s
+	std	2,x
+	puls	u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_andDWordDWord_)
+
+; Input: Pushed arguments: addresses of left and right dword;
+;        X => destination dword (may be same as address of left dword).
+; Preserves X. Trashes D.
+;
+andDWordDWord
+	pshs	u,y
+	ldu	6,s		; left dword
+	ldy	8,s		; right dword
+	ldd	,u		; high word
+	anda	,y
+	andb	1,y
+	std	,x
+	ldd	2,u		; low word
+	anda	2,y
+	andb	3,y
+	std	2,x
+	puls	y,u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_andDWordWord_)
+
+; Input: Pushed arguments: addresses of left dword, value of right word;
+;        X => destination dword (may be same as address of left dword).
+; Preserves X. Trashes D.
+;
+andDWordWord
+	pshs	u
+	clr	,x		; high word becomes 0
+	clr	1,x
+	ldu	4,s		; left dword
+	ldd	2,u		; low word
+	anda	6,s		; right word is at S+6
+	andb	7,s
+	std	2,x
+	puls	u,pc
+
+#endif
+
+
+#if defined(_CMOC_NEED_signedJumpTableSwitch_) \
+ || defined(_CMOC_NEED_unsignedJumpTableSwitch_)
+
+; Input: X => Table of 16-bit offsets, one for each non-default case.
+;        D => Switch expression.
+; Table: -6,X = minimum case value; -4,X: max value; -2,X: offset for default case.
+;
+; An offset is to be added to the address of the table (in X) to obtain
+; the effective address of the case code to jump to.
+;
+signedJumpTableSwitch
+        cmpd    -4,x        ; higher than max?
+        bgt     @default
+        subd    -6,x        ; switch value lower than minimum case value?
+        blt     @default
+        bra     @useTable
+unsignedJumpTableSwitch
+        cmpd    -4,x        ; higher than max?
+        bhi     @default
+        subd    -6,x        ; switch value lower than minimum case value?
+        blo     @default
+@useTable
+        lslb                ; 2 bytes per address in table
+        rola
+        ldd     d,x         ; get offset from table
+        jmp     d,x         ; add table address to offset to get absolute address to jump to
+@default
+        ldd     -2,x        ; get offset of default routine
+        jmp     d,x
+
+#endif
+
+
+; Floating-point is only supported in the Extended Color Basic environment.
+;
+#ifdef _COCO_BASIC_
+#include "float-ecb.inc"
+#endif
 
 
 stdlib_end:

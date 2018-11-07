@@ -1,4 +1,4 @@
-/*  $Id: IdentifierExpr.cpp,v 1.7 2016/07/24 23:03:06 sarrazip Exp $
+/*  $Id: IdentifierExpr.cpp,v 1.9 2017/08/06 02:06:00 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -22,6 +22,7 @@
 #include "VariableExpr.h"
 #include "TranslationUnit.h"
 #include "WordConstantExpr.h"
+#include "StringLiteralExpr.h"
 
 using namespace std;
 
@@ -29,7 +30,8 @@ using namespace std;
 IdentifierExpr::IdentifierExpr(const char *id)
   : Tree(),
     identifier(id),
-    variableExpr(NULL)
+    variableExpr(NULL),
+    functionNameStringLiteral(NULL)
 {
 }
 
@@ -37,6 +39,7 @@ IdentifierExpr::IdentifierExpr(const char *id)
 /*virtual*/
 IdentifierExpr::~IdentifierExpr()
 {
+    delete functionNameStringLiteral;
     delete variableExpr;
 }
 
@@ -69,6 +72,29 @@ IdentifierExpr::getVariableExpr() const
 }
 
 
+const Declaration *
+IdentifierExpr::getDeclaration() const
+{
+    return variableExpr ? variableExpr->getDeclaration() : NULL;
+}
+
+
+StringLiteralExpr *
+IdentifierExpr::setFunctionNameStringLiteral(const std::string &newName)
+{
+    delete functionNameStringLiteral;
+    functionNameStringLiteral = new StringLiteralExpr(newName);
+    return functionNameStringLiteral;
+}
+
+
+const StringLiteralExpr *
+IdentifierExpr::getFunctionNameStringLiteral() const
+{
+    return functionNameStringLiteral;
+}
+
+
 bool
 IdentifierExpr::isFuncAddrExpr() const
 {
@@ -95,6 +121,9 @@ IdentifierExpr::emitCode(ASMText &out, bool lValue) const
 {
     if (variableExpr)
         return variableExpr->emitCode(out, lValue);
+
+    if (functionNameStringLiteral != NULL)
+        return functionNameStringLiteral->emitCode(out, lValue);
 
     uint16_t enumValue = 0;
     if (TranslationUnit::getTypeManager().getEnumeratorValue(identifier, enumValue))

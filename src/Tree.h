@@ -1,7 +1,7 @@
-/*  $Id: Tree.h,v 1.17 2016/09/15 03:34:57 sarrazip Exp $
+/*  $Id: Tree.h,v 1.29 2018/03/11 06:29:11 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -62,6 +62,8 @@ public:
 
     void setLineNo(const std::string &srcFilename, int no);
     std::string getLineNo() const;
+    void setIntLineNo(int no) { lineno = no; }
+    int getIntLineNo() const { return lineno; }
     void copyLineNo(const Tree &tree);
 
     void writeLineNoComment(ASMText &out, const std::string &text = "") const;
@@ -74,13 +76,21 @@ public:
     int16_t getFinalArrayElementTypeSize() const;
     bool isSigned() const { assert(typeDesc); return typeDesc->isSigned; }
     bool isUnsignedOrPositiveConst() const;
+    bool isNumerical() const { assert(typeDesc); return typeDesc->isNumerical(); }
+    bool isIntegral() const { assert(typeDesc); return typeDesc->isIntegral(); }
+    bool isReal() const { assert(typeDesc); return typeDesc->isReal(); }
+    bool isSingle() const { assert(typeDesc); return typeDesc->isSingle(); }
+    bool isDouble() const { assert(typeDesc); return typeDesc->isDouble(); }
+    bool isLong() const { assert(typeDesc); return typeDesc->isLong(); }
+    bool isRealOrLong() const { assert(typeDesc); return isReal() || isLong(); }
+    bool isConst() const { assert(typeDesc); return typeDesc->isConstant(); }
     const char *getConvToWordIns() const { return isSigned() ? "SEX" : "CLRA"; }
     const char *getLoadIns() const  { return getType() == BYTE_TYPE ? "LDB" : "LDD"; }
     const char *getStoreIns() const { return getType() == BYTE_TYPE ? "STB" : "STD"; }
 
     /** Returns an empty string if there is no class name.
     */
-    std::string getClassName() const;
+    const std::string &getClassName() const;
 
     void setTypeDesc(const TypeDesc *td);
     void setTypeToPointedType(const Tree &tree);
@@ -96,6 +106,10 @@ public:
     // The ExpressionTypeSettings must already have been run on this tree.
     //
     bool evaluateConstantExpr(uint16_t &result) const;
+
+    // True if this tree is a long literal, a real literal, or if evaluateConstantExpr() succeeds.
+    //
+    bool isNumericalLiteral() const;
 
     // Returns true iff this tree is a constant according to evaluateConstantExpr()
     // and this constant fits in a byte (even is the tree's type is not BYTE_TYPE).
@@ -114,6 +128,16 @@ public:
 
     void errormsg(const char *fmt, ...) const;
     void warnmsg(const char *fmt, ...) const;
+
+    // Issues the error message on optionalTree if not null, otherwise uses
+    // globals sourceFilename and lineno.
+    //
+    static void errormsg(const Tree *optionalTree, const char *fmt, ...);
+
+    // Issues the warning message on optionalTree if not null, otherwise uses
+    // globals sourceFilename and lineno.
+    //
+    static void warnmsg(const Tree *optionalTree, const char *fmt, ...);
 
     // In general, this should be the only way to cast a Tree * to VariableExpr *,
     // because it checks for the case where the Tree is an IdentifierExpr that
@@ -135,6 +159,7 @@ protected:
 private:
 
     uint16_t evaluateConstantExpr() const;  // may throw int
+    bool isCastToMultiByteType() const;
 
     // Forbidden:
     Tree(const Tree &);

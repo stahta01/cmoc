@@ -1,4 +1,4 @@
-/*  $Id: VariableExpr.cpp,v 1.12 2016/07/24 23:03:07 sarrazip Exp $
+/*  $Id: VariableExpr.cpp,v 1.15 2017/12/17 06:51:09 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -133,6 +133,10 @@ VariableExpr::emitCode(ASMText &out, bool lValue) const
             errormsg("reference to unknown function %s()", id.c_str());
             return true;
         }
+
+        if (!fd->hasInternalLinkage())
+            out.emitImport(fd->getLabel().c_str());
+
         out.ins("LEAX", fd->getLabel() + ",PCR", "address of " + id + "(), defined at " + fd->getLineNo());
         if (!lValue)
             out.ins("TFR", "X,D", "as r-value");
@@ -155,8 +159,8 @@ VariableExpr::emitCode(ASMText &out, bool lValue) const
     }
     else if (getType() == CLASS_TYPE && !lValue)
     {
-        errormsg("cannot use variable `%s', of type struct `%s', as an r-value",
-                getId().c_str(), getTypeDesc()->className.c_str());
+        errormsg("cannot use variable `%s', of type `%s', as an r-value",
+                 getId().c_str(), getTypeDesc()->toString().c_str());
         return true;
     }
 

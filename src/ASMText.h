@@ -1,7 +1,7 @@
-/*  $Id: ASMText.h,v 1.38 2016/05/27 04:23:02 sarrazip Exp $
+/*  $Id: ASMText.h,v 1.59 2018/05/23 23:16:52 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
     Copyright (C) 2016 Jamie Cho <https://github.com/jamieleecho>
 
     This program is free software: you can redistribute it and/or modify
@@ -46,6 +46,13 @@ public:
     void emitComment(const std::string &text);
     void emitSeparatorComment();
     void emitInclude(const std::string &filename);
+    void startSection(const char *sectionName);
+    void endSection();
+    void emitExport(const char *label);
+    void emitExport(const std::string &label) { emitExport(label.c_str()); }
+    void emitImport(const char *label);
+    void emitImport(const std::string &label) { emitImport(label.c_str()); }
+    void emitEnd();
 
     void optimizeWholeFunctions();
     void peepholeOptimize(bool useStage2Optims);
@@ -54,7 +61,7 @@ public:
     // Does not close 'out'.
     // Returns out.good().
     //
-    bool writeFile(std::ostream &out);
+    bool writeFile(std::ostream &out, bool monolithMode);
 
     // ins: Comparison is case-insensitive. Long branches are also recognized.
     //      BRA and BRN are not considered to be conditional branches.
@@ -66,9 +73,12 @@ private:
     static std::string listRegisters(uint8_t registers);
     static uint8_t parseRegName(const std::string &name);
 
+    enum { INSTR_NAME_BUFSIZ = 8 };  // length in bytes of an array that contains an instruction name
+
     // An 'Element' is an instruction, a label line, a comment line, etc.
     //
-    enum Type { INSTR, LABEL, INLINE_ASM, COMMENT, SEPARATOR, INCLUDE, FUNCTION_START, FUNCTION_END };
+    enum Type { INSTR, LABEL, INLINE_ASM, COMMENT, SEPARATOR, INCLUDE,
+                FUNCTION_START, FUNCTION_END, SECTION_START, SECTION_END, EXPORT, IMPORT, END };
 
     struct Element
     {
@@ -77,6 +87,7 @@ private:
         uint8_t liveRegs;       // registers that are live BEFORE this element (bit field based on register enum)
 
         Element() : type(COMMENT), fields(), liveRegs(0) {}
+        bool isCommentLike() const { return type != INSTR && type != LABEL && type != INLINE_ASM && type != INCLUDE; }
     };
 
     // Effects of an instruction on some registers.
@@ -98,13 +109,13 @@ private:
     void addElement(Type type, const std::string &field0 = "", const std::string &field1 = "", const std::string &field2 = "");
 
     // Actual assembly writing methods:
-    void writeElement(std::ostream &out, const Element &e);
+    void writeElement(std::ostream &out, const Element &e, bool monolithMode);
     void writeIns(std::ostream &out, const Element &e);
     void writeLabel(std::ostream &out, const Element &e);
     void writeInlineAssembly(std::ostream &out, const Element &e);
     void writeComment(std::ostream &out, const Element &e);
     void writeSeparatorComment(std::ostream &out, const Element &e);
-    void writeInclude(std::ostream &out, const Element &e);
+    void writeInclude(std::ostream &out, const Element &e, bool monolithMode);
 
     // Optimization names:
     bool branchToNextLocation(size_t index);
@@ -135,6 +146,8 @@ private:
     bool optimizeStackOperations1(size_t index);
     bool optimizeStackOperations2(size_t index);
     bool optimizeStackOperations3(size_t index);
+    bool optimizeStackOperations4(size_t index);
+    bool optimizeStackOperations5(size_t index);
     bool removeClr(size_t index);
     bool removeAndOrMulAddSub(size_t index);
     bool optimizeLoadDX(size_t index);
@@ -161,6 +174,17 @@ private:
     bool transformPshsXPshsX(size_t index);
     bool optimizePshsOps(size_t index);
     bool optimize16BitCompares(size_t index);
+    bool combineConsecutiveOps(size_t index);
+    bool removeConsecutivePshsPul(size_t index);
+    bool coalesceConsecutiveLeax(size_t index);
+    bool optimizeLeaxLdx(size_t index);
+    bool optimizeLeaxLdd(size_t index);
+    bool optimizeLdx(size_t index);
+    bool optimizeLeax(size_t index);
+    bool removeUselessTfr1(size_t index);
+    bool removeUselessTfr2(size_t index);
+    bool removeUselessClrb(size_t index);
+    bool optimizeDXAliases(size_t index);
 
     // Whole-function optimizer:
     bool isBasicBlockEndingInstruction(const Element &e) const;
@@ -174,22 +198,24 @@ private:
     bool isInstrAnyArg(size_t index, const char *ins) const;
     bool isInstrWithImmedArg(size_t index, const char *ins) const;
     bool isInstrWithVarArg(size_t index, const char *ins) const;
-    std::string getInstr(size_t index) const;
-    std::string getInstrArg(size_t index) const;
-    bool isConditionalBranch(size_t index, std::string &inverseBranchInstr) const;
-    bool isRelativeSizeConditionalBranch(size_t index, std::string &inverseBranchInstr) const;
+    const char *getInstr(size_t index) const;
+    const char *getInstrArg(size_t index) const;
+    bool isConditionalBranch(size_t index, char inverseBranchInstr[8]) const;
+    bool isRelativeSizeConditionalBranch(size_t index, char invertedOperandsBranchInstr[8]) const;
     uint16_t extractImmedArg(size_t index) const;
+    void replaceWithInstr(size_t index, const char *ins, const char *arg, const char *comment);
+    void replaceWithInstr(size_t index, const char *ins, const std::string &arg, const char *comment);
     void replaceWithInstr(size_t index, const char *ins, const std::string &arg = "", const std::string &comment = "");
     void insertInstr(size_t index, const char *ins, const std::string &arg = "", const std::string &comment = "");
     void commentOut(size_t index, const std::string &comment = "");
+    static bool isDataDirective(const std::string &instruction);
     size_t findNextInstrBeforeLabel(size_t index) const;
     size_t findNextInstr(size_t index) const;
     size_t findLabelIndex(const std::string &label) const;
     bool isLabel(size_t index, const std::string &label) const;
-    static bool startsWith(const std::string &s, const char *suffix);
-    static bool endsWith(const std::string &s, const char *suffix);
-    static bool extractConstantLiteral(const std::string &s, int &val);
     bool isInstrWithPreDecrOrPostIncr(size_t index) const;
+    bool parseRelativeOffset(const std::string &s, int &offset);
+    bool parseConstantLiteral(const std::string &s, int &literal);
 
     struct BasicBlock
     {
@@ -223,6 +249,8 @@ private:
 
 
     std::vector<Element> elements;
+
+    std::string currentSection;  // contains non empty name when an assembly SECTION is currently open
 
     // Used by whole-function optimizer.
 

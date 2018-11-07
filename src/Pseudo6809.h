@@ -1,4 +1,4 @@
-/*  $Id: Pseudo6809.h,v 1.1 2016/05/01 04:39:30 sarrazip Exp $
+/*  $Id: Pseudo6809.h,v 1.3 2017/03/05 19:54:23 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -27,43 +27,51 @@
 
 
 /** represent a value that may or may not be known */
-template <typename T> struct PossiblyKnownVal {
-  template <typename T1>
-  PossiblyKnownVal(const PossiblyKnownVal<T1> &v) :
-    known(v.known), val((T)v.val), index(v.index), index2(-1), rhs(v.rhs) { }
+template <typename T> struct PossiblyKnownVal
+{
+    template <typename T1>
+    PossiblyKnownVal(const PossiblyKnownVal<T1> &v)
+        : index(v.index), index2(-1), val((T)v.val), known(v.known) {}
 
-  template <typename T1>
-  PossiblyKnownVal(const PossiblyKnownVal<T1> &v, int idx) :
-    known(v.known), val((T)v.val), index(idx), index2(-1), rhs(v.rhs) { }
+    template <typename T1>
+    PossiblyKnownVal(const PossiblyKnownVal<T1> &v, int idx)
+        : index(idx), index2(-1), val((T)v.val), known(v.known) {}
 
-  template <typename T1>
-  PossiblyKnownVal(const PossiblyKnownVal<T1> &v1, const PossiblyKnownVal<T1> &v2) :
-    known(v1.known && v2.known), val((T)((((int)v1.val) << 8) | v2.val)),
-    index(v1.index), index2(v1.index), rhs() { }
+    template <typename T1>
+    PossiblyKnownVal(const PossiblyKnownVal<T1> &v1, const PossiblyKnownVal<T1> &v2)
+        : index(v1.index), index2(v1.index),
+          val((T)((((int)v1.val) << 8) | v2.val)),
+          known(v1.known && v2.known) {}
 
-  PossiblyKnownVal() : known(false), val(0), index(-1), index2(-1), rhs("") { }
-  PossiblyKnownVal(T startval, bool isKnown=true, int idx1=-1,
-                   std::string rightHandSide="")
-    : known(isKnown), val(startval), index(idx1), index2(-1), rhs(rightHandSide) { }
+    PossiblyKnownVal() : index(-1), index2(-1), val(0), known(false) {}
 
-  PossiblyKnownVal<T> asl() const {
-    return PossiblyKnownVal<T>((0xff & (val << 1)), known, index);
-  }
-  PossiblyKnownVal<T> asr() const {
-    return PossiblyKnownVal<T>((val & 0x80) | (0xff & (val >> 1)), known, index);
-  }
-  PossiblyKnownVal<T> lsl() const {
-    return PossiblyKnownVal<T>((0xff & (val << 1)), known, index);
-  }
-  PossiblyKnownVal<T> lsr() const {
-    return PossiblyKnownVal<T>((0xff & (val >> 1)), known, index);
-  }
+    PossiblyKnownVal(T startval, bool isKnown=true, int idx1=-1)
+        : index(idx1), index2(-1), val(startval), known(isKnown) {}
 
-  bool known;
-  T val;
-  int index;
-  int index2;
-  std::string rhs;
+    PossiblyKnownVal<T> asl() const
+    {
+        return PossiblyKnownVal<T>((0xff & (val << 1)), known, index);
+    }
+
+    PossiblyKnownVal<T> asr() const
+    {
+        return PossiblyKnownVal<T>((val & 0x80) | (0xff & (val >> 1)), known, index);
+    }
+
+    PossiblyKnownVal<T> lsl() const
+    {
+        return PossiblyKnownVal<T>((0xff & (val << 1)), known, index);
+    }
+
+    PossiblyKnownVal<T> lsr() const
+    {
+        return PossiblyKnownVal<T>((0xff & (val >> 1)), known, index);
+    }
+
+    int index;
+    int index2;
+    T val;
+    bool known;
 };
 
 template <typename T>
@@ -160,57 +168,67 @@ struct Pseudo6809Registers {
   }
 
   /** @return the value for the given register */
-  PossiblyKnownVal<int> getVal(const std::string &reg) const {
-    if (reg == "A") {
-      return accum.a;
-    } else if (reg == "B") {
-      return accum.b;
-    } else if (reg == "D") {
-      return PossiblyKnownVal<int>(accum.a, accum.b);
-    } else if (reg == "X") {
-      return x;
-    } else if (reg == "Y") {
-      return y;
-    } else if (reg == "S") {
-      return s;
-    } else if (reg == "DP") {
-      return dp;
-    } else if (reg == "PC") {
-      return pc;
-    } else if (reg == "CC") {
-      return cc;
+  PossiblyKnownVal<int> getVal(Register reg) const
+  {
+    switch (reg)
+    {
+    case A:
+        return accum.a;
+    case B:
+        return accum.b;
+    case D:
+        return PossiblyKnownVal<int>(accum.a, accum.b);
+    case X:
+        return x;
+    case Y:
+        return y;
+    case S:
+        return s;
+    case DP:
+        return dp;
+    case PC:
+        return pc;
+    case CC:
+        return cc;
+    default:
+        return PossiblyKnownVal<int>(0, false);
     }
-    return PossiblyKnownVal<int>(0, false);
   }
 
   /** sets the given register value */
-  void setVal(const std::string &reg, const PossiblyKnownVal<int> &val) {
-    if (reg == "A") {
-      accum.a = val;
-    } else if (reg == "B") {
-      accum.b = val;
-    } else if (reg == "D") {
-      accum.setdval(val);
-    } else if (reg == "X") {
-      x = val;
-    } else if (reg == "Y") {
-      y = val;
-    } else if (reg == "U") {
-      u = val;
-    } else if (reg == "S") {
-      s = val;
-    } else if (reg == "DP") {
-      dp = val;
-    } else if (reg == "PC") {
-      pc = val;
-    } else if (reg == "CC") {
-      cc = val;
+  void setVal(Register reg, const PossiblyKnownVal<int> &val)
+  {
+    switch (reg)
+    {
+    case A:
+        accum.a = val; break;
+    case B:
+        accum.b = val; break;
+    case D:
+        accum.setdval(val); break;
+    case X:
+        x = val; break;
+    case Y:
+        y = val; break;
+    case U:
+        u = val; break;
+    case S:
+        s = val; break;
+    case DP:
+        dp = val; break;
+    case PC:
+        pc = val; break;
+    case CC:
+        cc = val; break;
+    default:
+        break;
     }
   }
 
   template<typename T>
-  void loadVal(const std::string &reg, const PossiblyKnownVal<T> &val, int index) {
-    setVal(reg, PossiblyKnownVal<int>(val, index));
+  void loadVal(Register reg, const PossiblyKnownVal<T> &val, int index)
+  {
+      setVal(reg, PossiblyKnownVal<int>(val, index));
   }
 
   /** @return mask of known registers */
@@ -249,11 +267,13 @@ public:
   }
 
   /** @return the value of the given register, updating its reference state */
-  PossiblyKnownVal<int> getVal(const std::string &reg, int index) {
-    if (reg == "D") {
-      getVal("A", index);
-      getVal("B", index);
-      return regs.getVal(reg);
+  PossiblyKnownVal<int> getVal(Register reg, int index)
+  {
+    if (reg == D)
+    {
+        getVal(A, index);
+        getVal(B, index);
+        return regs.getVal(reg);
     }
     PossiblyKnownVal<int> val = regs.getVal(reg);
     refVal(val, index);
@@ -272,7 +292,7 @@ public:
   }
 
   /** Loads the register with the given value. */
-  void loadVal(const std::string &reg, const PossiblyKnownVal<int> &val, int index) {
+  void loadVal(Register reg, const PossiblyKnownVal<int> &val, int index) {
     regs.loadVal(reg, val, index);
     if (!val.known)
       return;
@@ -280,24 +300,29 @@ public:
     vals.push_back(val);
   }
 
-  void addVal(const std::string &reg1, const std::string &reg2, int index) {
+  void addVal(Register reg1, Register reg2, int index)
+  {
     loadVal(reg1, getVal(reg1, index) + getVal(reg2, index), index);
   }
 
   template<typename T>
-  void addVal(const std::string &reg, const PossiblyKnownVal<T> &val, int index) {
+  void addVal(Register reg, const PossiblyKnownVal<T> &val, int index)
+  {
     loadVal(reg, getVal(reg, index) + val, index);
   }
 
-  void addVal(const std::string &reg, int val, int index) {
+  void addVal(Register reg, int val, int index)
+  {
     loadVal(reg, getVal(reg, index) + val, index);
   }
 
-  void exg(const std::string &reg1, const std::string &reg2, int index) {
+  void exg(Register reg1, Register reg2, int index)
+  {
     loadVal(reg1, getVal(reg1, index) - getVal(reg2, index), index);
   }
 
-  void tfr(const std::string &reg1, const std::string &reg2, int index) {
+  void tfr(Register reg1, Register reg2, int index)
+  {
     loadVal(reg2, getVal(reg1, index), index);
   }
 
@@ -309,10 +334,10 @@ public:
                bool ignoreStackErrors = false);
 
   /** processes a push instruction */
-  void processPush(const std::string &stackReg, const std::string &operand, int index);
+  void processPush(Register stackReg, const std::string &operand, int index);
 
   /** processes a pull instruction */
-  bool processPull(const std::string &stackReg, const std::string &operand, int index);
+  bool processPull(Register stackReg, const std::string &operand, int index);
 
   /** @return number of pushed/pulled bytes */
   int numBytesPushedOrPulled(const std::string &operand);
@@ -367,9 +392,20 @@ public:
   }
 
   /** returns whether or not reg is 16-bit */
-  bool regIs16Bit(const std::string &reg) const {
-    return (reg == "X") || (reg == "Y") || (reg == "D") ||
-           (reg == "U") || (reg == "S") || (reg == "PC");
+  bool regIs16Bit(Register reg) const
+  {
+      switch (reg)
+      {
+      case X:
+      case Y:
+      case D:
+      case U:
+      case S:
+      case PC:
+          return true;
+      default:
+          return false;
+      }
   }
 
   /** pop a 16-bit value from the stack */

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <signal.h>
 #include <errno.h>
+#include <string.h>
 #include "mc6809.h"
 
 #if defined(__unix) || (defined(__APPLE__) && defined(TARGET_OS_MAC)) || defined(__MINGW32__)
@@ -362,7 +363,7 @@ void update(int)
 int main(int argc, char *argv[])
 {
 	if (argc < 2 || argc > 3) {
-		fprintf(stderr, "Usage: usim <hexfile> [<hex load offset>]\n");
+		fprintf(stderr, "Usage: usim <hexfile|srecfile> [<hex load offset>]\n");
 		return EXIT_FAILURE;
 	}
 
@@ -384,7 +385,11 @@ int main(int argc, char *argv[])
 		loadOffset = Word(n);
 	}
 
-	sys.load_intelhex(argv[1], loadOffset);
+	const char *progFilename = argv[1];
+	if (strstr(progFilename, ".srec") == progFilename + strlen(progFilename) - 5)
+	    sys.load_srec(progFilename, loadOffset);
+	else
+	    sys.load_intelhex(progFilename, loadOffset);
 	sys.run();
 
 	return EXIT_SUCCESS;

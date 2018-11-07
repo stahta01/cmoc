@@ -1,4 +1,4 @@
-/*  $Id: WhileStmt.cpp,v 1.12 2016/05/06 03:42:56 sarrazip Exp $
+/*  $Id: WhileStmt.cpp,v 1.16 2018/02/02 02:55:59 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -43,6 +43,19 @@ WhileStmt::~WhileStmt()
 
 
 /*virtual*/
+void
+WhileStmt::checkSemantics(Functor &)
+{
+    if (condition->getType() == CLASS_TYPE && !condition->isRealOrLong())
+        condition->errormsg("invalid use of %s as condition of while statement",
+                            condition->getTypeDesc()->isUnion ? "union" : "struct");
+}
+
+
+// The code to evaluate condition is emitted after the loop body, instead of before,
+// to save one branch instruction per iteration.
+//
+/*virtual*/
 CodeStatus
 WhileStmt::emitCode(ASMText &out, bool lValue) const
 {
@@ -69,18 +82,8 @@ WhileStmt::emitCode(ASMText &out, bool lValue) const
     {
         condition->writeLineNoComment(out, stmtName);
 
-        if (!isDo)  // if while statement, evaluate condition first
-        {
-            out.emitLabel(conditionLabel, stmtName + " condition at " + condition->getLineNo());
-
-            if (! condition->isExpressionAlwaysTrue())
-            {
-                // Passing 'false' for requiredCondition enables the use of an optimization when the condition
-                // is an AND or an OR of relational operators. (bodyLabel is only used if that optimization applies.)
-                if (!BinaryOpExpr::emitBoolJumps(out, condition, bodyLabel, endLabel))
-                    return false;
-            }
-        }
+        if (!isDo)  // if while statement, jump over the body
+            out.ins("LBRA", conditionLabel, "jump to " + string(isDo ? "do-" : "") + "while condition");
 
         out.emitLabel(bodyLabel, stmtName + " body");
         if (!body->emitCode(out, false))
@@ -91,21 +94,12 @@ WhileStmt::emitCode(ASMText &out, bool lValue) const
     {
         // Emit the condition (for a do-while) or a branch back up to the condition (for a while).
         //
-        if (isDo)
-        {
-            out.emitLabel(conditionLabel, stmtName + " condition at " + condition->getLineNo());
+        out.emitLabel(conditionLabel, stmtName + " condition at " + condition->getLineNo());
 
-            if (! condition->isExpressionAlwaysTrue())
-            {
-                // Passing 'false' for requiredCondition enables the use of an optimization when the condition
-                // is an AND or an OR of relational operators. (bodyLabel is only used if that optimization applies.)
-                if (!BinaryOpExpr::emitBoolJumps(out, condition, bodyLabel, endLabel))
-                    return false;
-            }
-            out.ins("LBRA", bodyLabel, "go to start of do-while body");  // if did not jump to endLabel, jump back to body
-        }
-        else
-            out.ins("LBRA", conditionLabel, "go to while condition");
+        if (condition->isExpressionAlwaysTrue())
+            out.ins("LBRA", bodyLabel, "go to start of " + string(isDo ? "do-" : "") + "while body");
+        else if (!BinaryOpExpr::emitBoolJumps(out, condition, bodyLabel, endLabel))
+            return false;
     }
 
     out.emitLabel(endLabel, "after end of " + stmtName + " starting at " + condition->getLineNo());

@@ -1,4 +1,4 @@
-/*  $Id: Declaration.h,v 1.13 2016/09/15 03:34:56 sarrazip Exp $
+/*  $Id: Declaration.h,v 1.27 2018/09/15 20:00:49 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -22,17 +22,28 @@
 
 #include "Tree.h"
 
+class IdentifierExpr;
+
 
 class Declaration : public Tree
 {
 public:
 
-    // numArrayElements: 0 means not an array; otherwise,
-    // number of elements in array.
+    // _arrayDimensions: empty means not an array.
     //
     Declaration(const std::string &id,
                 const TypeDesc *td,
-                const std::vector<uint16_t> &numArrayElements,
+                const std::vector<uint16_t> &_arrayDimensions,
+                bool isStatic, bool isExtern);
+
+    // Builds a Declaration object partially. The work is finished by DeclarationFinisher.
+    // To be used during parsing, when it is too soon to completely initialize a Declaration.
+    // varTypeDesc: Type of the variable, as opposed to the type of the declarator.
+    // Example: with "int a[3]", varTypeDesc is 'int'; the array part is in the declarator.
+    //
+    Declaration(const std::string &id,
+                const TypeDesc *varTypeDesc,
+                const std::vector<Tree *> &arraySizeExprList,
                 bool isStatic, bool isExtern);
 
     virtual ~Declaration();
@@ -41,13 +52,28 @@ public:
 
     std::string getVariableId() const;
 
+    // Example: int v[], without an initializer, is an incomplete type.
+    //
+    bool isCompleteType() const;
+
     bool getVariableSizeInBytes(uint16_t &sizeInBytes, bool skipFirstDimensionIfArray = false) const;
 
     const std::vector<uint16_t> &getArrayDimensions() const;
 
+    // Once a function's stack frame has been set up:
+    //   0,U points to the saved stack frame pointer;
+    //   2,U points to the return address;
+    // so negative offsets on U are local variables
+    // and offsets of 4 or more are function parameters.
+    // Note that 0,U can refer to a local variable if it is of an empty struct.
+    //
+    enum { FIRST_FUNC_PARAM_FRAME_DISPLACEMENT = 2 + 2 };
+
     void setFrameDisplacement(int16_t disp);
     int16_t getFrameDisplacement(int16_t offset = 0) const;
     std::string getFrameDisplacementArg(int16_t offset = 0) const;
+    bool hasFunctionParameterFrameDisplacement() const;
+    bool hasLocalVariableFrameDisplacement() const;
     Tree *getInitExpr();
 
     void setGlobal(bool g);
@@ -60,7 +86,12 @@ public:
     // an initializer that only contains integer values, and no
     // string literals.
     //
-    bool isArrayWithIntegerInitValues() const;
+    bool isArrayWithOnlyNumericalLiteralInitValues() const;
+
+    // Returns true only if this object declares a variable with with a numerical
+    // literal initializer, or if isArrayWithNumericalLiteralInitValues() returns true.
+    //
+    bool hasOnlyNumericalLiteralInitValues() const;
 
     // Sets the assembly language label to be used to represent
     // the starting address of this variable (useful only with global declarations).
@@ -73,7 +104,7 @@ public:
     // is true. Fails otherwise and writes nothing.
     // Returns true on success, false on failure.
     //
-    bool emitStaticArrayInitializer(ASMText &out);
+    CodeStatus emitStaticArrayInitializer(ASMText &out);
 
     virtual void checkSemantics(Functor &f);
 
@@ -88,9 +119,17 @@ public:
         assert(!"child not found");
     }
 
-    bool emitStaticValues(ASMText &out, Tree *arrayElementInitializer, const TypeDesc *requiredTypeDesc);
+    CodeStatus emitStaticValues(ASMText &out, Tree *arrayElementInitializer, const TypeDesc *requiredTypeDesc);
 
     virtual bool isLValue() const { return false; }
+
+    // Creates a Declaration and puts it in the current scope.
+    // The TypeDesc of the Declaration will 'typeDesc' unless it is null,
+    // then it will be that of 'parentExpression'.
+    // The caller is responsible for deleting the returned object.
+    //
+    static Declaration *declareHiddenVariableInCurrentScope(const Tree &parentExpression,
+                                                            const TypeDesc *typeDesc = NULL);
 
 public:
 
@@ -103,6 +142,8 @@ public:
     bool readOnly;               // if true, can be put in ROM
     bool isStatic;               // if true, the 'static' keyword was used on this declaration
     bool isExtern;
+    bool needsFinish;    // true means init to be completed by DeclarationFinisher after parsing done
+    std::vector<Tree *> arraySizeExprList;  // used by DeclarationFinisher; Tree objects owned by this Declaration
 
 private:
     // Forbidden:
@@ -115,9 +156,10 @@ private:
     static void checkInitExpr(Tree *initializationExpr, const TypeDesc *varTypeDesc, const std::string &variableId, const std::vector<uint16_t> &arrayDimensions, size_t dimIndex);
     static void checkArrayInitializer(Tree *initializationExpr, const TypeDesc *varTypeDesc, const std::string &variableId, const std::vector<uint16_t> &arrayDimensions, size_t dimIndex);
     static void checkClassInitializer(Tree *initializationExpr, const TypeDesc *varTypeDesc, const std::string &variableId);
-    static bool isFloatOrLongInitWithNumber(const TypeDesc *varTypeDesc, const Tree &initializationExpr);
-    bool isTreeSequenceWithOnlyIntegerValues(const TreeSequence *seq) const;
-    bool emitInitCode(ASMText &out, const Tree *initializer, const TypeDesc *requiredTypeDesc, int16_t arraySizeInBytes, uint16_t& writingOffset) const;
+    static bool isRealOrLongInitWithNumber(const TypeDesc *varTypeDesc, const Tree &initializationExpr);
+    static bool isTreeSequenceWithOnlyNumericalLiterals(const TreeSequence *seq);
+    CodeStatus emitSequenceInitCode(ASMText &out, const Tree *initializer, const TypeDesc *requiredTypeDesc, int16_t arraySizeInBytes, uint16_t& writingOffset) const;
+    static bool emitArrayAddress(ASMText &out, const IdentifierExpr &ie, const TypeDesc &requiredTypeDesc);
 
 };
 

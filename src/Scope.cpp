@@ -1,4 +1,4 @@
-/*  $Id: Scope.cpp,v 1.6 2016/10/05 02:28:24 sarrazip Exp $
+/*  $Id: Scope.cpp,v 1.13 2018/09/16 03:34:40 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -87,17 +87,16 @@ Scope::getParent()
 
 
 int16_t
-Scope::allocateLocalVariables(int16_t displacement, bool processSubScopes)
+Scope::allocateLocalVariables(int16_t displacement, bool processSubScopes, size_t &numLocalVariablesAllocated)
 {
     /*cerr << "# Scope(" << this << ")::allocateLocalVariables("
         << displacement << ", " << processSubScopes << "): " << subScopes.size() << " subscopes\n";*/
-    for (vector< pair<string, Declaration *> >::reverse_iterator itd = declTable.rbegin();
-                                                                itd != declTable.rend(); itd++)
+    for (DeclarationTable::reverse_iterator itd = declTable.rbegin(); itd != declTable.rend(); itd++)
     {
         Declaration *decl = itd->second;
         assert(decl != NULL);
 
-        if (decl->getFrameDisplacement() > 0)
+        if (decl->hasFunctionParameterFrameDisplacement())
             continue;  // function parameter, i.e., already allocated by FunctionDef::declareFormalParams()
 
         if (decl->isGlobal())
@@ -109,12 +108,13 @@ Scope::allocateLocalVariables(int16_t displacement, bool processSubScopes)
         uint16_t size = 0;
         if (!decl->getVariableSizeInBytes(size))
         {
-            decl->errormsg("invalid dimensions for array %s", decl->getVariableId().c_str());
+            if (!decl->needsFinish)  // if needsFinish, then DeclarationFinisher failed, so error msg already issued there
+                decl->errormsg("invalid dimensions for array `%s'", decl->getVariableId().c_str());
             continue;
         }
         if (size > 32767)
         {
-            decl->errormsg("local variable %s exceeds maximum of 32767 bytes", decl->getVariableId().c_str());
+            decl->errormsg("local variable `%s' exceeds maximum of 32767 bytes", decl->getVariableId().c_str());
             continue;
         }
 
@@ -124,6 +124,8 @@ Scope::allocateLocalVariables(int16_t displacement, bool processSubScopes)
                 << " byte(s), which puts displacement at "
                 << displacement << "\n";*/
         decl->setFrameDisplacement(displacement);
+
+        ++numLocalVariablesAllocated;
     }
 
     int16_t minDisplacement = displacement;
@@ -132,7 +134,7 @@ Scope::allocateLocalVariables(int16_t displacement, bool processSubScopes)
         for (vector<Scope *>::iterator its = subScopes.begin();
                                       its != subScopes.end(); its++)
         {
-            int16_t d = (*its)->allocateLocalVariables(displacement, true);
+            int16_t d = (*its)->allocateLocalVariables(displacement, true, numLocalVariablesAllocated);
             minDisplacement = min(minDisplacement, d);
         }
 
@@ -146,10 +148,30 @@ bool
 Scope::declareVariable(Declaration *d)
 {
     assert(d != NULL);
-    const string &id = d->getVariableId();
+    const string id = d->getVariableId();
     const Declaration *found = getVariableDeclaration(id, false);
+    /*cout << "# Scope::declareVariable: [" << this << "] id='" << id << "' -> d=" << d
+            << ", {" << d->getTypeDesc()->toString()
+            << "}, isExtern=" << d->isExtern << ", lineno=" << (d ? d->getLineNo() : "")
+            << ", found=" << found << endl;*/
     if (found != NULL)  // if already declared in this scope
-        return false;
+    {
+        if (found->getTypeDesc() != d->getTypeDesc())
+            return false;
+
+        if (found->isExtern && !d->isExtern)
+        {
+            // An "extern" declaration already exists and 'd' is a definition.
+            // We destroy the extern and only keep 'd'.
+            //
+            declTable.erase(findInVectorOfPairsByKey(declTable, id));
+            declTable.push_back(make_pair(id, d));
+            return true;
+        }
+
+        // Accept two identical extern declarations.
+        return found->isExtern && d->isExtern;
+    }
     declTable.push_back(make_pair(id, d));
     return true;
 }
@@ -158,13 +180,9 @@ Scope::declareVariable(Declaration *d)
 Declaration *
 Scope::getVariableDeclaration(const string &id, bool lookInAncestors) const
 {
-    for (vector< pair<string, Declaration *> >::const_iterator it = declTable.begin();
-                                                              it != declTable.end(); ++it)
+    for (DeclarationTable::const_iterator it = declTable.begin(); it != declTable.end(); ++it)
         if (it->first == id)
-        {
-            Declaration *decl = it->second;
-            return decl;
-        }
+            return it->second;
 
     if (lookInAncestors && parent != NULL)
         return parent->getVariableDeclaration(id, lookInAncestors);
@@ -176,8 +194,7 @@ Scope::getVariableDeclaration(const string &id, bool lookInAncestors) const
 void
 Scope::destroyDeclarations()
 {
-    for (vector< pair<string, Declaration *> >::iterator it = declTable.begin();
-                                                        it != declTable.end(); ++it)
+    for (DeclarationTable::iterator it = declTable.begin(); it != declTable.end(); ++it)
         delete it->second;
 
     declTable.clear();
@@ -215,7 +232,6 @@ Scope::getClassDef(const std::string &className) const
 void
 Scope::getDeclarationIds(std::vector<std::string> &dest) const
 {
-    for (vector< pair<string, Declaration *> >::const_iterator it = declTable.begin();
-                                                              it != declTable.end(); it++)
+    for (DeclarationTable::const_iterator it = declTable.begin(); it != declTable.end(); it++)
         dest.push_back(it->first);
 }

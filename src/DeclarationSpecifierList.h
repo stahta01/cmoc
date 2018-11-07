@@ -1,4 +1,4 @@
-/*  $Id: DeclarationSpecifierList.h,v 1.9 2016/07/24 23:03:06 sarrazip Exp $
+/*  $Id: DeclarationSpecifierList.h,v 1.12 2018/03/11 06:29:10 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -34,6 +34,9 @@ public:
         ASSEMBLY_ONLY_SPEC,
         EXTERN_SPEC,
         STATIC_SPEC,
+        NO_RETURN_INSTRUCTION,
+        CONST_QUALIFIER,
+        VOLATILE_QUALIFIER,
     };
 
     DeclarationSpecifierList();
@@ -50,11 +53,15 @@ public:
 
     bool isAssemblyOnly() const;
 
+    bool hasNoReturnInstruction() const;
+
     bool isTypeDefinition() const;
 
     bool isExternDeclaration() const;
 
     bool isStaticDeclaration() const;
+
+    bool isConstant() const;
 
     const std::string &getEnumTypeName() const;
 
@@ -75,8 +82,11 @@ private:
     bool isTypeDef;
     bool isISR;
     bool asmOnly;
+    bool noReturnInstruction;  // when true, no RTS/RTI emitted at end of asm-only function
     bool isExtern;
     bool isStatic;
+    bool isConst;
+    bool isVolatile;
     std::string enumTypeName;  // empty if type is not a named enum
     std::vector<Enumerator *> *enumeratorList;
 

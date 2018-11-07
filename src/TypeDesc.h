@@ -1,4 +1,4 @@
-/*  $Id: TypeDesc.h,v 1.8 2016/10/08 18:15:06 sarrazip Exp $
+/*  $Id: TypeDesc.h,v 1.27 2018/09/15 19:42:37 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -35,34 +35,15 @@ enum BasicType
     POINTER_TYPE,
     ARRAY_TYPE,
     CLASS_TYPE,
+    FUNCTION_TYPE,
     SIZELESS_TYPE,  // for 'signed' and 'unsigned'
 };
 
 
-inline
-const char *
-getBasicTypeName(BasicType bt)
-{
-    switch (bt)
-    {
-        case VOID_TYPE: return "void";
-        case BYTE_TYPE: return "char";
-        case WORD_TYPE: return "int";
-        case POINTER_TYPE: return "pointer";
-        case ARRAY_TYPE: return "array";
-        case CLASS_TYPE: return "class";
-        case SIZELESS_TYPE: return "sizeless";
-    }
-    return "???";
-}
+const char *getBasicTypeName(BasicType bt);
 
 
-inline
-std::ostream &
-operator << (std::ostream &out, BasicType bt)
-{
-    return out << getBasicTypeName(bt);
-}
+std::ostream &operator << (std::ostream &out, BasicType bt);
 
 
 // Instances must be allocated only by TypeManager.
@@ -73,8 +54,17 @@ public:
     BasicType type;
     const TypeDesc *pointedTypeDesc;  // must come from TypeManager or be null;
                                       // relevant when type == POINTER_TYPE or type == ARRAY_TYPE
+private:
+    // Revelant only when type == FUNCTION_TYPE:
+    const TypeDesc *returnTypeDesc;
+    std::vector<const TypeDesc *> formalParamTypeDescList;  // may be empty
+    bool isISR;  // function type uses the 'interrupt' keyword
+    bool ellipsis;  // variadic function, i.e., arguments end with '...'
+    bool isConst;
+
+public:
     std::string className;      // non empty if type == CLASS_TYPE
-    uint16_t numArrayElements;  // relevant when type == ARRAY_TYPE; uint16_t(-1) means undermined number of elements
+    uint16_t numArrayElements;  // relevant when type == ARRAY_TYPE; uint16_t(-1) means undetermined number of elements
     bool isSigned;
     bool isUnion;               // false means struct (only applies when type == CLASS_TYPE)
 
@@ -87,23 +77,56 @@ public:
 
     bool isPtrOrArray() const;
 
+    bool isPtrToFunction() const;
+
+    bool isByteOrWord() const;
+
     bool isIntegral() const;
 
     bool isNumerical() const;
 
     bool isLong() const;
 
-    bool isFloat() const;
+    bool isReal() const;
 
     bool isSingle() const;
 
     bool isDouble() const;
 
+    bool isRealOrLong() const;
+
+    bool isStruct() const;
+
+    bool isInterruptServiceRoutine() const;
+
+    // Returns true if this type has the const keyword at the first level (e.g., const int)
+    // or if it is an array of elements whose type isConstant() (e.g., const int a[]).
+    // Note that this method returns false for 'const int *', because the pointer is writable,
+    // i.e., the const keyword is not at the first level.
+    //
+    bool isConstant() const;
+
+    // Determines if a variable of this type is suitable for the rodata section, for ROM.
+    // This is different from isConstant(), which checks for "C constness".
+    //
+    bool canGoInReadOnlySection(bool isRelocatabilitySupported) const;
+
+    // Returns a TypeDesc that represents the pointed type.
+    // Returns NULL if this type is not a pointer or array.
+    //
     const TypeDesc *getPointedTypeDesc() const;
 
     BasicType getPointedType() const;
 
     size_t getPointerLevel() const;
+
+    // Returns NULL if this type is not a FUNCTION_TYPE.
+    //
+    const TypeDesc *getReturnTypeDesc() const;
+
+    const std::vector<const TypeDesc *> &getFormalParamTypeDescList() const;
+
+    bool endsWithEllipsis() const;
 
     void appendDimensions(std::vector<uint16_t> &arrayDimensions) const;
 
@@ -111,7 +134,28 @@ public:
     //
     size_t getNumArrayElements() const;
 
+    // Returns true iff this type and 'td' are both pointers or arrays
+    // and the pointed type is the same.
+    //
+    bool pointsToSameType(const TypeDesc &td) const;
+
+    // Returns 0 if a and b are exactly the same type.
+    // Returns -1 if they differ.
+    // Returns -2 if they differ only by the isISR field.
+    //
+    static int compare(const TypeDesc &a, const TypeDesc &b);
+
+    static bool sameTypesModuloConst(const TypeDesc &a, const TypeDesc &b);
+
 private:
+
+    TypeDesc(const TypeDesc &);
+
+    friend std::ostream &operator << (std::ostream &out, const TypeDesc &td);
+    friend bool operator == (const TypeDesc &a, const TypeDesc &b);
+
+    static void printFunctionSignature(std::ostream &out, const TypeDesc &funcTD,
+                                       bool pointer, bool isPointerConst, bool arrayOfPointers);
 
     friend class TypeManager;  // the only class that can create TypeDesc instances
 
@@ -122,10 +166,32 @@ private:
              bool _isUnion,
              uint16_t _numArrayElements = uint16_t(-1));
 
+    TypeDesc(const TypeDesc *_returnTypeDesc, bool _isISR, bool _endsWithEllipsis);
+
+    void addFormalParamTypeDesc(const TypeDesc *_formalParamTypeDesc);
+
     // Forbidden:
-    TypeDesc(const TypeDesc &);
     TypeDesc &operator = (const TypeDesc &);
 
+};
+
+
+class Enumerator;
+
+
+class TypeSpecifier
+{
+public:
+    const TypeDesc *typeDesc;
+    std::string enumTypeName;  // empty for anonymous enum, and for non-enum type
+    std::vector<Enumerator *> *enumeratorList;  // null unless enum type
+
+    TypeSpecifier(const TypeDesc *_typeDesc, const std::string &_enumTypeName, std::vector<Enumerator *> *_enumeratorList)
+    :   typeDesc(_typeDesc), enumTypeName(_enumTypeName), enumeratorList(_enumeratorList) {}
+
+private:
+    TypeSpecifier(const TypeSpecifier &);
+    TypeSpecifier &operator = (const TypeSpecifier &);
 };
 
 

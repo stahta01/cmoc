@@ -1,4 +1,4 @@
-/*  $Id: ExpressionTypeSetter.cpp,v 1.26 2016/10/19 03:33:39 sarrazip Exp $
+/*  $Id: ExpressionTypeSetter.cpp,v 1.66 2018/09/30 13:47:38 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -29,11 +29,13 @@
 #include "TranslationUnit.h"
 #include "VariableExpr.h"
 #include "IdentifierExpr.h"
+#include "CommaExpr.h"
 
 using namespace std;
 
 
 ExpressionTypeSetter::ExpressionTypeSetter()
+:   unknownEnumeratorDetectionEnabled(false)
 {
 }
 
@@ -78,8 +80,17 @@ ExpressionTypeSetter::close(Tree *t)
     CastExpr *ce = dynamic_cast<CastExpr *>(t);
     if (ce != NULL)
     {
-        if (ce->getType() == CLASS_TYPE)
-            ce->errormsg("cannot cast to class type");
+        if (ce->getType() == CLASS_TYPE && !ce->isNumerical())
+            ce->errormsg("cannot cast to struct `%s'", ce->getTypeDesc()->toString().c_str());
+        else if (ce->isReal() && ce->getSubExpr()->getTypeDesc()->isPtrOrArray())
+            ce->errormsg("cannot cast `%s' to `%s'",
+                         ce->getSubExpr()->getTypeDesc()->toString().c_str(),
+                         ce->getTypeDesc()->toString().c_str());
+        else if (ce->getTypeDesc()->isPtrOrArray() && ce->getSubExpr()->isReal())
+            ce->errormsg("cannot cast `%s' to `%s'",
+                         ce->getSubExpr()->getTypeDesc()->toString().c_str(),
+                         ce->getTypeDesc()->toString().c_str());
+
         assert(ce->getType() != ARRAY_TYPE);  // no syntax for this
         return true;
     }
@@ -107,8 +118,11 @@ ExpressionTypeSetter::close(Tree *t)
         else if (cond->getTrueExpression()->is8BitConstant() && falseTD->type == BYTE_TYPE)
             cond->setTypeDesc(TranslationUnit::getTypeManager().getIntType(BYTE_TYPE, falseTD->isSigned));
         else if (trueTD->isPtrOrArray() != falseTD->isPtrOrArray())
+        {
             cond->errormsg("true and false expressions of conditional are of incompatible types (%s vs %s)",
                            trueTD->toString().c_str(), falseTD->toString().c_str());
+            cond->setTypeDesc(trueTD);  // fallback
+        }
         else
         {
             if (trueTD->isPtrOrArray())
@@ -123,11 +137,10 @@ ExpressionTypeSetter::close(Tree *t)
                     cond->setTypeDesc(falseTD);
             }
 
-            if (*trueTD != *falseTD)
+            if (!TypeDesc::sameTypesModuloConst(*trueTD, *falseTD) && !trueTD->pointsToSameType(*falseTD))
                 cond->warnmsg("true and false expressions of conditional are not of the same type (%s vs %s); result is of type %s",
                                 trueTD->toString().c_str(), falseTD->toString().c_str(),
                                 cond->getTypeDesc()->toString().c_str());
-
         }
         return true;
     }
@@ -160,7 +173,7 @@ ExpressionTypeSetter::close(Tree *t)
     const TypeManager &tm = TranslationUnit::getTypeManager();
 
     // Identifier that refers to an enumerated name.
-    // If an IdentifierExpr refers to a variable or function address,
+    // If an IdentifierExpr refers to something else,
     // it gets typed in ScopeCreator::processIdentifierExpr().
     //
     if (const IdentifierExpr *ie = dynamic_cast<IdentifierExpr *>(t))
@@ -173,6 +186,26 @@ ExpressionTypeSetter::close(Tree *t)
         {
             assert(td->type != VOID_TYPE);
             t->setTypeDesc(td);
+        }
+        else if (unknownEnumeratorDetectionEnabled)
+        {
+            t->errormsg("unknown enumerator `%s'", ie->getId().c_str());
+            t->setTypeDesc(tm.getIntType(WORD_TYPE, true));
+        }
+    }
+
+    // Comma expression (e.g., "x = 1, y = 2;").
+    //
+    if (CommaExpr *commaExpr = dynamic_cast<CommaExpr *>(t))
+    {
+        if (commaExpr->size() > 0)  // if at least one sub-expression
+        {
+            const Tree *lastSubExpr = *commaExpr->rbegin();
+            const TypeDesc *subExprTD = lastSubExpr->getTypeDesc();
+            if (subExprTD->type == VOID_TYPE)
+                lastSubExpr->errormsg("last sub-expression of comma expression is of type void");  // not expected
+            else
+                t->setTypeDesc(subExprTD);
         }
     }
 
@@ -201,24 +234,77 @@ setBinOpTypeDescForDiffSizedOperands(BinaryOpExpr *bin)
 }
 
 
-// This function always return true so allow all parts of a tree to have
-// its expression type set.
+// If either operand is real, then the result a real type no smaller than the operands.
+//
+static bool
+setTypeForRealOrLongOperands(BinaryOpExpr *bin, const char *opToken, const TypeDesc *leftTD, const TypeDesc *rightTD)
+{
+    if (leftTD->isReal() || rightTD->isReal())
+    {
+        if (bin->getOperator() == BinaryOpExpr::MOD || ! leftTD->isNumerical() || ! rightTD->isNumerical())
+        {
+            bin->errormsg("invalid use of %s with operands of types `%s' and `%s'",
+                          opToken, leftTD->toString().c_str(), rightTD->toString().c_str());
+            bin->setTypeDesc(leftTD);  // fallback
+        }
+        else
+        {
+            bool isResultDouble = (leftTD->isDouble() || rightTD->isDouble());
+            bin->setTypeDesc(TranslationUnit::getTypeManager().getRealType(isResultDouble));
+        }
+        return true;
+    }
+    if (leftTD->isLong() || rightTD->isLong())
+    {
+        if (! leftTD->isNumerical() || ! rightTD->isNumerical())
+        {
+            bin->errormsg("invalid use of %s with operands of types `%s' and `%s'",
+                          opToken, leftTD->toString().c_str(), rightTD->toString().c_str());
+            bin->setTypeDesc(leftTD);  // fallback
+        }
+        else
+        {
+            bool resultIsSigned = false;
+            if (leftTD->isLong() && rightTD->isLong())
+                resultIsSigned = leftTD->isSigned && rightTD->isSigned;
+            else if (leftTD->isLong())
+                resultIsSigned = leftTD->isSigned;
+            else
+                resultIsSigned = rightTD->isSigned;
+            bin->setTypeDesc(TranslationUnit::getTypeManager().getLongType(resultIsSigned));
+        }
+        return true;
+    }
+    return false;
+}
+
+
+static bool
+assigningNullToPointer(const TypeDesc &leftTD, const Tree &right)
+{
+    return leftTD.type == POINTER_TYPE && CastExpr::isZeroCastToVoidPointer(right);
+}
+
+
+// This function always return true, to allow all parts of a tree to have
+// their expression type set.
 //
 bool
 ExpressionTypeSetter::processBinOp(BinaryOpExpr *bin)
 {
     BinaryOpExpr::Op oper = bin->getOperator();
-    string ot = BinaryOpExpr::getOperatorToken(oper);
+    const char *ot = BinaryOpExpr::getOperatorToken(oper);
     const Tree *left = bin->getLeft();
     const Tree *right = bin->getRight();
     const TypeDesc *leftTD = left->getTypeDesc();
     const TypeDesc *rightTD = right->getTypeDesc();
 
-    if (oper != BinaryOpExpr::ASSIGNMENT && (leftTD->type == CLASS_TYPE || rightTD->type == CLASS_TYPE))
-    {
-        bin->errormsg("invalid use of an operator on a struct");
-        return true;
-    }
+    assert(leftTD);
+    assert(rightTD);
+    if (leftTD->type == VOID_TYPE)
+        left->errormsg("left side of operator %s is of type void", ot);
+    if (rightTD->type == VOID_TYPE)
+        right->errormsg("right side of operator %s is of type void", ot);
 
     switch (oper)
     {
@@ -263,13 +349,47 @@ ExpressionTypeSetter::processBinOp(BinaryOpExpr *bin)
                 setBinOpTypeDescForDiffSizedOperands(bin);
                 return true;
             }
+            if (setTypeForRealOrLongOperands(bin, ot, leftTD, rightTD))
+                return true;
             bin->setTypeDesc(leftTD);
             return true;
 
         case BinaryOpExpr::ADD:
+            if (leftTD->isPtrOrArray() && rightTD->isIntegral())
+            {
+                bin->setTypeDesc(leftTD);
+                return true;
+            }
+            if (leftTD->isIntegral() && rightTD->isPtrOrArray())
+            {
+                bin->setTypeDesc(rightTD);
+                return true;
+            }
+            if (setTypeForRealOrLongOperands(bin, ot, leftTD, rightTD))
+                return true;
+
+            /* FALLTHROUGH */
+
         case BinaryOpExpr::BITWISE_OR:
         case BinaryOpExpr::BITWISE_XOR:
         case BinaryOpExpr::BITWISE_AND:
+            if (leftTD->isReal() || rightTD->isReal())
+            {
+                bin->errormsg("invalid use of %s on a floating point type", ot);
+                bin->setTypeDesc(leftTD);  // fallback
+                return true;
+            }
+            if (leftTD->isLong() || rightTD->isLong())
+            {
+                bin->setTypeDesc(leftTD->isLong() ? leftTD : rightTD);
+                return true;
+            }
+            if (leftTD->type == CLASS_TYPE || rightTD->type == CLASS_TYPE)
+            {
+                bin->errormsg("invalid use of %s on a struct or union", ot);
+                bin->setTypeDesc(leftTD);  // fallback
+                return true;
+            }
             if (leftTD->isPtrOrArray() && rightTD->isIntegral())
             {
                 bin->setTypeDesc(leftTD);
@@ -288,7 +408,7 @@ ExpressionTypeSetter::processBinOp(BinaryOpExpr *bin)
         case BinaryOpExpr::MOD:
             if (leftTD->isPtrOrArray() || rightTD->isPtrOrArray())
             {
-                bin->errormsg("operator %s cannot be applied to two pointers", ot.c_str());
+                bin->errormsg("operator %s cannot be applied to a pointer", ot);
                 return true;
             }
             if (   (leftTD->type == WORD_TYPE && rightTD->type == BYTE_TYPE)
@@ -297,6 +417,8 @@ ExpressionTypeSetter::processBinOp(BinaryOpExpr *bin)
                 setBinOpTypeDescForDiffSizedOperands(bin);
                 return true;
             }
+            if (setTypeForRealOrLongOperands(bin, ot, leftTD, rightTD))
+                return true;
             bin->setTypeDesc(leftTD);
             return true;
 
@@ -312,42 +434,6 @@ ExpressionTypeSetter::processBinOp(BinaryOpExpr *bin)
             return true;
 
         case BinaryOpExpr::ASSIGNMENT:
-            if (leftTD->type == POINTER_TYPE
-                    && rightTD->type == POINTER_TYPE
-                    && *leftTD->pointedTypeDesc != *rightTD->pointedTypeDesc)
-            {
-                stringstream ss;
-                ss << "assignment to type '" << *leftTD
-                   << "' from incompatible pointer type '" << *rightTD << "'";
-                bin->warnmsg(ss.str().c_str());
-            }
-            else if (leftTD->type == POINTER_TYPE && (rightTD->type == WORD_TYPE || rightTD->type == BYTE_TYPE))  // taken from Declaration::checkInitExpr()
-            {
-                uint16_t value = 0;
-                if (!right->evaluateConstantExpr(value))  // if not constant
-                    right->warnmsg("assigning pointer with integer expression");
-                else if (value >= 0x8000 && right->getTypeDesc()->isSigned)
-                    right->warnmsg("assigning pointer with negative constant");
-                // No return, to reach the call to setTypeDesc() below.
-            }
-            else if (leftTD->type == POINTER_TYPE && rightTD->type == ARRAY_TYPE)  // taken from Declaration::checkInitExpr()
-            {
-                const TypeDesc *declPointedTypeDesc = leftTD->getPointedTypeDesc();
-                const TypeDesc *initPointedTypeDesc = rightTD->getPointedTypeDesc();
-
-                if (*declPointedTypeDesc != *initPointedTypeDesc)
-                    right->warnmsg("assigning pointer to %s with incompatible %s",
-                            declPointedTypeDesc->toString().c_str(),
-                            right->getTypeDesc()->toString().c_str());
-                // No return, to reach the call to setTypeDesc() below.
-            }
-            else if ((leftTD->type == CLASS_TYPE) != (rightTD->type == CLASS_TYPE))  // if not struct on both sides
-            {
-                left->errormsg("cannot assign `%s' to `%s'", rightTD->toString().c_str(), leftTD->toString().c_str());
-            }
-
-            /* FALLTHROUGH */
-
         case BinaryOpExpr::INC_ASSIGN:
         case BinaryOpExpr::DEC_ASSIGN:
         case BinaryOpExpr::MUL_ASSIGN:
@@ -356,15 +442,69 @@ ExpressionTypeSetter::processBinOp(BinaryOpExpr *bin)
         case BinaryOpExpr::XOR_ASSIGN:
         case BinaryOpExpr::AND_ASSIGN:
         case BinaryOpExpr::OR_ASSIGN:
-            if (leftTD->type == BYTE_TYPE && rightTD->type != BYTE_TYPE)
             {
-                uint16_t rightValue = 0;
-                if (!right->evaluateConstantExpr(rightValue))
-                    bin->warnmsg("assigning to `%s' from larger type `%s'",
-                                 leftTD->toString().c_str(), rightTD->toString().c_str());
-                else if ((int16_t) rightValue < -128 || (int16_t) rightValue > 255)
-                    bin->warnmsg("assigning to `%s' from larger constant of type `%s'",
-                                 leftTD->toString().c_str(), rightTD->toString().c_str());
+                FunctionCallExpr::Diagnostic diag = FunctionCallExpr::paramAcceptsArg(*leftTD, *right);
+                if (diag == FunctionCallExpr::NO_PROBLEM && leftTD->isConstant() && TranslationUnit::instance().warnOnConstIncorrect())
+                    diag = FunctionCallExpr::WARN_CONST_INCORRECT;
+                switch (diag)
+                {
+                case FunctionCallExpr::NO_PROBLEM:
+                    break;
+                case FunctionCallExpr::WARN_CONST_INCORRECT:
+                    right->warnmsg("assigning `%s' to `%s' is not const-correct", rightTD->toString().c_str(), leftTD->toString().c_str());
+                    break;
+                case FunctionCallExpr::WARN_NON_PTR_ARRAY_FOR_PTR:
+                    if ((oper == BinaryOpExpr::INC_ASSIGN || oper == BinaryOpExpr::DEC_ASSIGN)
+                        && leftTD->type == POINTER_TYPE && rightTD->isIntegral())  // accept ptr += num;
+                        ;
+                    else
+                        right->warnmsg("assigning non-pointer/array (%s) to `%s'", rightTD->toString().c_str(), leftTD->toString().c_str());
+                    break;
+                case FunctionCallExpr::WARN_PASSING_CONSTANT_FOR_PTR:
+                    if (TranslationUnit::instance().isWarningOnPassingConstForFuncPtr())  // if -Wpass-const-for-func-pointer
+                        right->warnmsg("assigning non-zero numeric constant to `%s'", leftTD->toString().c_str());
+                    break;
+                case FunctionCallExpr::WARN_ARGUMENT_TOO_LARGE:
+                    right->warnmsg("assigning to `%s' from larger type `%s'", leftTD->toString().c_str(), rightTD->toString().c_str());
+                    break;
+                case FunctionCallExpr::WARN_REAL_FOR_INTEGRAL:
+                    right->warnmsg("assigning real type `%s' to `%s`", rightTD->toString().c_str(), leftTD->toString().c_str());
+                    break;
+                case FunctionCallExpr::WARN_FUNC_PTR_FOR_PTR:
+                    right->warnmsg("assigning function pointer `%s' to `%s`", rightTD->toString().c_str(), leftTD->toString().c_str());
+                    break;
+                case FunctionCallExpr::ERROR_MSG:
+                    if (leftTD->type != VOID_TYPE && !assigningNullToPointer(*leftTD, *right))  // error message issued elsewhere
+                        right->errormsg("assigning `%s' to `%s'", rightTD->toString().c_str(), leftTD->toString().c_str());
+                    break;
+                }
+            }
+
+            /* FALLTHROUGH */
+
+            if (oper != BinaryOpExpr::ASSIGNMENT && (leftTD->type == CLASS_TYPE || rightTD->type == CLASS_TYPE))
+            {
+                bool error = false;
+                switch (oper)
+                {
+                case BinaryOpExpr::INC_ASSIGN:
+                case BinaryOpExpr::DEC_ASSIGN:
+                case BinaryOpExpr::MUL_ASSIGN:
+                case BinaryOpExpr::DIV_ASSIGN:
+                    error = (!leftTD->isNumerical() || !rightTD->isNumerical());
+                    break;
+                case BinaryOpExpr::MOD_ASSIGN:
+                case BinaryOpExpr::AND_ASSIGN:
+                case BinaryOpExpr::OR_ASSIGN:
+                case BinaryOpExpr::XOR_ASSIGN:
+                    error = (!leftTD->isIntegral() || !rightTD->isIntegral());
+                    break;
+                default:
+                    error = true;
+                    break;
+                }
+                if (error)
+                    bin->errormsg("invalid use of %s on a struct or union", ot);
             }
 
             /* FALLTHROUGH */
@@ -384,17 +524,41 @@ ExpressionTypeSetter::processBinOp(BinaryOpExpr *bin)
 
 
 bool
+ExpressionTypeSetter::checkForUnaryOnClass(const Tree &subExpr, UnaryOpExpr::Op op) const
+{
+    if (subExpr.getType() == CLASS_TYPE)
+    {
+        subExpr.errormsg("invalid use of %s on a %s",
+                          UnaryOpExpr::getOperatorName(op),
+                          subExpr.getTypeDesc()->isUnion ? "union" : "struct");
+        return false;
+    }
+    return true;
+}
+
+
+bool
 ExpressionTypeSetter::processUnaryOp(UnaryOpExpr *un)
 {
     Tree *subExpr = un->getSubExpr();
+    const TypeDesc *subExprTD = (subExpr ? subExpr->getTypeDesc() : NULL);
+    UnaryOpExpr::Op op = un->getOperator();
 
-    switch (un->getOperator())
+    const TypeManager &tm = TranslationUnit::getTypeManager();
+
+    if (subExpr && subExpr->getType() == VOID_TYPE)
+    {
+        subExpr->errormsg("argument of %s operator is of type void", UnaryOpExpr::getOperatorName(op));
+        un->setTypeDesc(tm.getIntType(WORD_TYPE, true));  // fall back on int
+    }
+
+    switch (op)
     {
         case UnaryOpExpr::ADDRESS_OF:
         {
             if (subExpr->getType() == ARRAY_TYPE)
             {
-                un->setTypeDesc(TranslationUnit::getTypeManager().getPointerTo(subExpr->getTypeDesc()->pointedTypeDesc));  // address of T[] is T *
+                un->setTypeDesc(tm.getPointerTo(subExprTD->pointedTypeDesc));  // address of T[] is T *
                 return true;
             }
 
@@ -403,51 +567,77 @@ ExpressionTypeSetter::processUnaryOp(UnaryOpExpr *un)
             {
                 // Operator '&' used on a function name: gives the address of that function.
                 //
-                un->setTypeDesc(subExpr->getTypeDesc());
+                un->setTypeDesc(subExprTD);
                 return true;
             }
 
             // Note that taking the address of a pointer is supported.
             //
-            un->setTypeDesc(TranslationUnit::getTypeManager().getPointerTo(subExpr->getTypeDesc()));
+            un->setTypeDesc(tm.getPointerTo(subExprTD));
             return true;
         }
 
         case UnaryOpExpr::INDIRECTION:
             if (subExpr->getType() == VOID_TYPE)
-            {
-                un->errormsg("using void expression as pointer");
-                return true;
-            }
+                return true;  // error message already issued
             if (subExpr->getType() != POINTER_TYPE
-                && subExpr->getType() != ARRAY_TYPE)
+                && subExpr->getType() != ARRAY_TYPE
+                && subExpr->getType() != FUNCTION_TYPE)
             {
-                un->setTypeDesc(TranslationUnit::getTypeManager().getIntType(BYTE_TYPE, false));
-                un->errormsg("indirection using %s as pointer (assuming pointer to byte)", subExpr->getTypeDesc()->toString().c_str());
+                un->setTypeDesc(tm.getPointerToVoid());
+                un->errormsg("indirection using `%s' as pointer (assuming `void *')", subExprTD->toString().c_str());
                 return true;
             }
-            un->setTypeDesc(subExpr->getTypeDesc()->pointedTypeDesc);
+            if (!checkForUnaryOnClass(*subExpr, op))  // if error message issued
+                return true;
+            if (subExpr->getType() == FUNCTION_TYPE)
+                un->setTypeDesc(subExprTD);
+            else
+                un->setTypeDesc(subExprTD->pointedTypeDesc);
             return true;
 
         case UnaryOpExpr::SIZE_OF:
-            un->setTypeDesc(TranslationUnit::getTypeManager().getIntType(WORD_TYPE, false));
+            un->setTypeDesc(tm.getIntType(WORD_TYPE, false));
             un->setSizeofArgTypeDesc();
             un->checkForSizeOfUnknownStruct();
             return true;
 
         case UnaryOpExpr::BOOLEAN_NEG:
-            un->setTypeDesc(TranslationUnit::getTypeManager().getIntType(BYTE_TYPE, false));
+            un->setTypeDesc(tm.getIntType(BYTE_TYPE, false));
+            if (subExprTD->isNumerical())
+                return true;
+            if (!checkForUnaryOnClass(*subExpr, op))  // if error message issued
+                return true;
             return true;
 
         case UnaryOpExpr::NEG:  // Negation always returns a signed type.
             if (subExpr->getType() == BYTE_TYPE || subExpr->getType() == WORD_TYPE)
-                un->setTypeDesc(TranslationUnit::getTypeManager().getIntType(subExpr->getType(), true));
-            else
-                un->errormsg("cannot negate an expression of type %s", subExpr->getTypeDesc()->toString().c_str());
+                un->setTypeDesc(tm.getIntType(subExpr->getType(), true));
+            else if (subExprTD->isReal() || subExprTD->isLong())
+                un->setTypeDesc(subExprTD);  // same type
+            else if (!checkForUnaryOnClass(*subExpr, op))
+                un->setTypeDesc(tm.getIntType(WORD_TYPE, true));  // fall back on int, to avoid further error messages
+            return true;
+
+        case UnaryOpExpr::IDENTITY:
+            if (subExprTD->isNumerical())
+                un->setTypeDesc(subExprTD);  // same type
+            else if (!checkForUnaryOnClass(*subExpr, op))
+                un->setTypeDesc(tm.getIntType(WORD_TYPE, true));  // fall back on int, to avoid further error messages
+            return true;
+
+        case UnaryOpExpr::PREDEC:
+        case UnaryOpExpr::PREINC:
+        case UnaryOpExpr::POSTDEC:
+        case UnaryOpExpr::POSTINC:
+            un->setTypeDesc(subExprTD);  // same type
+            if (! subExprTD->isNumerical())
+                checkForUnaryOnClass(*subExpr, op);
             return true;
 
         default:
-            un->setTypeDesc(subExpr->getTypeDesc());
+            un->setTypeDesc(subExprTD);
+            checkForUnaryOnClass(*subExpr, op);
             return true;
     }
 }

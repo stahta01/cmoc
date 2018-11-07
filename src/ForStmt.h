@@ -1,4 +1,4 @@
-/*  $Id: ForStmt.h,v 1.7 2016/09/15 03:34:57 sarrazip Exp $
+/*  $Id: ForStmt.h,v 1.9 2018/02/02 02:55:59 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -31,6 +31,8 @@ public:
 
     virtual ~ForStmt();
 
+    virtual void checkSemantics(Functor &f);
+
     virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
 
     const Tree *getCondition() const { return condition; }
@@ -58,6 +60,10 @@ public:
 
 private:
 
+    CodeStatus emitInScope(ASMText &out,
+                           const std::string &bodyLabel, const std::string &conditionLabel,
+                           const std::string &incrementLabel, const std::string &endLabel) const;
+
     // Forbidden:
     ForStmt(const ForStmt &);
     ForStmt &operator = (const ForStmt &);
@@ -69,10 +75,6 @@ private:
     Tree *condition;
     Tree *increments;
     Tree *body;
-
-    CodeStatus emitInScope(ASMText &out,
-                           const std::string &bodyLabel, const std::string &conditionLabel,
-                           const std::string &incrementLabel, const std::string &endLabel) const;
 };
 
 

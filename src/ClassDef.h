@@ -1,4 +1,4 @@
-/*  $Id: ClassDef.h,v 1.8 2016/10/08 18:15:05 sarrazip Exp $
+/*  $Id: ClassDef.h,v 1.10 2018/03/28 23:28:58 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -48,6 +48,11 @@ public:
         // Returns the size in bytes occupied by this member.
         int16_t getSizeInBytes() const;
 
+        // Returns the dimensions due to the declarator, e.g., 3 in 'int m[3]'.
+        // If the type of this member is itself an array (e.g., typedef int A[4]; A m[3];)
+        // then the caller may want to call getTypeDesc()->appendDimensions() to get the 4,
+        // in this example.
+        //
         std::vector<uint16_t> getArrayDimensions() const;
 
         bool isArray() const;
@@ -93,10 +98,10 @@ public:
         return dataMembers[memberIndex];
     }
 
-    const ClassMember *getDataMember(const std::string &name) const;
+    const ClassMember *getDataMember(const std::string &memberName) const;
 
     // Returns -1 if name not found.
-    int16_t getDataMemberOffset(const std::string &name,
+    int16_t getDataMemberOffset(const std::string &memberName,
                                 const ClassMember *&member) const;
 
     void clearMembers();

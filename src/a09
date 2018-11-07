@@ -20,6 +20,7 @@ use IPC::Open2;
 
 my $hexToBinConverterPath = "intelhex2cocobin";
 my $hexToSRECConverterPath = "intelhex2srec";
+my $stackSpace = 1024;  # in bytes
 
 
 sub usage()
@@ -41,6 +42,8 @@ Options:
 --frankasm          Use as6809 (FrankASM) as the underlying assembler. 
 --srec              Generate a Motorola SREC executable in addition to the .hex file.
 --no-blocks         Do not generate blocks during assembly.
+--stack-space=N     Reserve N bytes for stack space (default: $stackSpace).
+--output=<file>     Output to <file> instead of default, which is "source.bin".
 __EOF__
 }
 
@@ -141,7 +144,7 @@ sub fixIntelHexEntryPointRecord
     my $hexFile;
     if (!open($hexFile, $hexFilename))
     {
-        print "a09: ERROR: failed to open $hexFilename: $!\n";
+        print "cmoc: ERROR: failed to open $hexFilename: $!\n";
         return 0;
     }
 
@@ -154,7 +157,7 @@ sub fixIntelHexEntryPointRecord
 
     if (!defined $contents)
     {
-        print "a09: ERROR: failed to read $hexFilename\n";
+        print "cmoc: ERROR: failed to read $hexFilename\n";
         return 0;
     }
 
@@ -162,7 +165,7 @@ sub fixIntelHexEntryPointRecord
     #
     if ($contents !~ s/^:00[0-9a-f]{4}01[0-9a-f]{2}\s*$//mi)  # the "01" means type-1 record
     {
-        print "a09: ERROR: $hexFilename does not finish with valid type-1 record\n";
+        print "cmoc: ERROR: $hexFilename does not finish with valid type-1 record\n";
         return 0;
     }
 
@@ -175,7 +178,7 @@ sub fixIntelHexEntryPointRecord
 
     if (!open($hexFile, "> $hexFilename"))
     {
-        print "a09: ERROR: failed to overwrite $hexFilename: $!\n";
+        print "cmoc: ERROR: failed to overwrite $hexFilename: $!\n";
         return 0;
     }
 
@@ -183,7 +186,7 @@ sub fixIntelHexEntryPointRecord
 
     if (!close($hexFile))
     {
-        print "a09: ERROR: failed to close $hexFilename\n";
+        print "cmoc: ERROR: failed to close $hexFilename\n";
         return 0;
     }
 
@@ -209,6 +212,7 @@ my @neededUtilitySubRoutines;  # e.g., "MUL16", etc.
 my $generateSREC = 0;  # if true, generate a Motorola SREC version of the output executable.
 my @defineList;
 my $noBlocks = 0;
+my $outputFilename;  # if not defined, use <source>.bin
 
 if (!GetOptions(
         "help" => \$showHelp,
@@ -229,6 +233,8 @@ if (!GetOptions(
         "srec" => \$generateSREC,
         "no-blocks" => \$noBlocks,
         "define=s" => \@defineList,
+        "stack-space=i" => \$stackSpace,
+        "output=s" => \$outputFilename,
         ))
 {
     usage();
@@ -255,8 +261,13 @@ if (!defined $source)
 my $base = $source;
 unless ($base =~ s/\.(asm|s)$//)
 {
-    print STDERR "a09: source filename has unsupported assembler extension: $source\n";
+    print STDERR "cmoc: ERROR: source filename has unsupported assembler extension: $source\n";
     exit 1;
+}
+
+if (!defined $outputFilename)  # if not specified by --output
+{
+    $outputFilename = "$base.bin";
 }
 
 my $cppArgs = "";
@@ -268,12 +279,14 @@ my $includeArgs = $cppArgs;
 $cppArgs .= " -D$targetPlatformPreprocId=1" if defined $targetPlatformPreprocId;
 $cppArgs .= " -D_CMOC_CHECK_NULL_POINTERS_=1"  if $checkNullPointers;
 $cppArgs .= " -D_CMOC_CHECK_STACK_OVERFLOW_=1" if $checkStackOverflow;
+$cppArgs .= " -Dstack_space=$stackSpace";
 
 # For each sub-routine name, define _CMOC_NEEDED_name_, so that the needed
 # part of stdlib.inc will be assembled.
 #
 for my $subroutine (@neededUtilitySubRoutines)
 {
+    $subroutine =~ s/^_//;  # avoid two consecutive underscores in the identifier
     $cppArgs .= " -D_CMOC_NEED_${subroutine}_";
 }
 
@@ -281,12 +294,12 @@ my $cmd = "cat $source @filenamesToAppend | cpp -P -traditional $cppArgs";
 print "Preprocessor command: $cmd\n" if $verbose;
 if (!open(ASM, "$cmd |"))
 {
-    print STDERR "a09: preprocessor failed: $!\n";
+    print STDERR "cmoc: ERROR: preprocessor failed: $!\n";
     exit 1;
 }
 if (!open(PREPROCESSED, "> $base.i"))
 {
-    print STDERR "a09: could not create $base.i: $!\n";
+    print STDERR "cmoc: ERROR: could not create $base.i: $!\n";
     exit 1;
 }
 
@@ -340,7 +353,7 @@ while (<ASM>)
         }
         else
         {
-            die "a09: invalid line: $_";
+            die "cmoc: ERROR: invalid line: $_";
             print PREPROCESSED "\n";  # filter it out
         }
     }
@@ -367,7 +380,7 @@ close(ASM) or exit 1;  # exit here if #include directive failed to find its file
 # Remove the .hex file if it currently exists.
 if (-e "$base.hex" && !unlink("$base.hex"))
 {
-    print "a09: ERROR: failed to erase existing $base.hex file.\n";
+    print "cmoc: ERROR: failed to erase existing $base.hex file.\n";
     exit 1; 
 }
 
@@ -375,19 +388,9 @@ if (-e "$base.hex" && !unlink("$base.hex"))
 my $asmCmd;
 if ($useLWASM)
 {
-    my $definitionList = "";
     for my $define (@defineList)
     {
-        my @def = split('=', $define);
-        my $numDefs = @def;
-        if ($numDefs == 1)
-        {
-            $cppArgs .= " -D $def[0]";
-        }
-        else
-        {
-            $cppArgs .= " -D $def[0]=$def[1]";
-        } 
+        $cppArgs .= " -D $define";
     }
 
     # Note: --pragma=forwardrefmax requires LWASM 4.11 or later.
@@ -405,7 +408,7 @@ if ($useLWASM)
 }
 elsif ($targetPlatformPreprocId eq "OS9")
 {
-    print "a09: ERROR: LWASM is required to assemble for OS-9.\n";
+    print "cmoc: ERROR: LWASM is required to assemble for OS-9.\n";
     exit 1; 
 }
 else
@@ -419,7 +422,7 @@ my $exitCode = system($asmCmd);
 #print "Exit code: $exitCode\n";
 if ($exitCode == 0x7f00 || $exitCode == 0x0100)
 {
-    print STDERR "a09: ERROR: failed to run assembler command: $asmCmd: $!\n";
+    print STDERR "cmoc: ERROR: failed to run assembler command: $asmCmd: $!\n";
     exit 1;
 }
 
@@ -450,8 +453,8 @@ if (-e "$base.hex")
             $hexToBinCmd .= "--entry=$entry";
         }
     }
-    $hexToBinCmd .= " < '$base.hex' > '$base.bin'";
-    print "Generating .bin: $hexToBinCmd\n" if $verbose; 
+    $hexToBinCmd .= " < '$base.hex' > '$outputFilename'";
+    print "Generating BIN file: $hexToBinCmd\n" if $verbose; 
     system($hexToBinCmd) == 0
         or exit 1;
 
@@ -465,12 +468,12 @@ if (-e "$base.hex")
 }
 
 
-# Read the .lst file to find some symbol addresses if $verbose.
+# Read the .lst file to find some symbol addresses.
 
 {
     if (!open(LST, "$base.lst"))
     {
-        print "a09: failed to open assembly listing file $base.lst: $!\n";
+        print "cmoc: ERROR: failed to open assembly listing file $base.lst: $!\n";
         exit 1;
     }
 
@@ -515,13 +518,14 @@ if (-e "$base.hex")
         my $program_end = $foundSymbols{program_end};
         if (!defined $program_end)
         {
-            print STDERR "a09: ERROR: code limit set at \$%s but program_end symbol not found in listing file\n";
+            printf STDERR "cmoc: ERROR: code limit set at \$%s but program_end symbol not found in listing file\n",
+                          uc($limit);
             exit 1;
         }
         elsif ($program_end > hex($limit))
         {
-            printf STDERR "a09: ERROR: code limit set at \$%s but program_end exceeds it at \$%04X\n",
-                            $limit, $program_end;
+            printf STDERR "cmoc: ERROR: code limit set at \$%s but program_end exceeds it at \$%04X\n",
+                          uc($limit), $program_end;
             exit 1;
         }
     }

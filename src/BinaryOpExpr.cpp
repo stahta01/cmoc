@@ -1,7 +1,7 @@
-/*  $Id: BinaryOpExpr.cpp,v 1.67 2016/10/19 03:33:39 sarrazip Exp $
+/*  $Id: BinaryOpExpr.cpp,v 1.138 2018/10/03 20:05:56 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -30,6 +30,8 @@
 #include "ClassDef.h"
 #include "ObjectMemberExpr.h"
 #include "FunctionCallExpr.h"
+#include "DWordConstantExpr.h"
+#include "StringLiteralExpr.h"
 
 #include <assert.h>
 
@@ -41,7 +43,8 @@ BinaryOpExpr::BinaryOpExpr(Op op, Tree *left, Tree *right)
     oper(op),
     subExpr0(left),
     subExpr1(right),
-    numBytesPerElement(0)
+    numBytesPerElement(0),
+    resultDeclaration(NULL)
 {
 }
 
@@ -49,6 +52,7 @@ BinaryOpExpr::BinaryOpExpr(Op op, Tree *left, Tree *right)
 /*virtual*/
 BinaryOpExpr::~BinaryOpExpr()
 {
+    delete resultDeclaration;
     delete subExpr0;
     delete subExpr1;
 }
@@ -58,14 +62,48 @@ BinaryOpExpr::~BinaryOpExpr()
 void
 BinaryOpExpr::checkSemantics(Functor &)
 {
+    bool declareTemporary = false;
+    const TypeDesc *tempTD = NULL;
+    const TypeDesc *sub0TD = subExpr0->getTypeDesc();
+
     switch (oper)
     {
-    case ASSIGNMENT:
+    case ADD:
+    case SUB:
+    case MUL:
+    case DIV:
+    case MOD:
+        if (isRealOrLong())
+            declareTemporary = true;
+        break;
+
     case INC_ASSIGN:
     case DEC_ASSIGN:
     case MUL_ASSIGN:
     case DIV_ASSIGN:
     case MOD_ASSIGN:
+        if (!subExpr0->isLong() && subExpr0->isIntegral() && subExpr1->isRealOrLong())
+        {
+            // We have something like <short_integral> op= <float_or_long>.
+            // This is implemented as <temp_float_or_long> = <short_integral> op <float_or_long>,
+            // then <temp_float_or_long> is converted to an integral and stored in <short_integral>.
+            // <temp_float_or_long> is the temporary that we request here.
+            declareTemporary = true;
+            tempTD = subExpr1->getTypeDesc();
+        }
+        else if (subExpr0->isLong() && subExpr1->isReal())
+        {
+            // We have something like <long> op= <float>.
+            // This is implemented as <float> = <long> op <float>,
+            // then <float> is converted to a long and stored in <long>.
+            // <float> is the temporary that we request here.
+            declareTemporary = true;
+            tempTD = subExpr1->getTypeDesc();
+        }
+
+        /* FALLTHROUGH */
+
+    case ASSIGNMENT:
     case XOR_ASSIGN:
     case AND_ASSIGN:
     case OR_ASSIGN:
@@ -73,34 +111,95 @@ BinaryOpExpr::checkSemantics(Functor &)
     case RIGHT_ASSIGN:
         if (subExpr0->getType() == ARRAY_TYPE)
             errormsg("cannot assign to array name");
-        else if (!subExpr0->isLValue())
-            errormsg("lvalue required as left operand of assignment");
+        else if (!subExpr0->isLValue() && subExpr0->getType() != VOID_TYPE)
+            errormsg("l-value required as left operand of assignment");
+        break;
+
+    case LEFT_SHIFT:
+    case RIGHT_SHIFT:
+        if (subExpr0->isLong())
+            declareTemporary = true;
+        break;
+
+    case BITWISE_AND:
+    case BITWISE_OR:
+    case BITWISE_XOR:
+        if (subExpr0->isLong() || subExpr1->isLong())
+            declareTemporary = true;
         break;
 
     case ARRAY_REF:
-        if (!subExpr0->isLValue() && subExpr0->getType() != POINTER_TYPE)
-            errormsg("lvalue required as left operand of array reference");
-
-        // Compute the number of bytes per array element, including the case
-        // where subExpr0 is an array of arrays, or a pointer to an array.
-        // The last case is useful in the case of a function parameter of array type,
-        // as in "void f(int v[][3])". Here, 'v' is a pointer, not an array.
-        //
+    {
+        numBytesPerElement = 0;
+        if (!subExpr0->isLValue() && !sub0TD->isPtrOrArray())
+            errormsg("l-value required as left operand of array reference");
+        else if (sub0TD->type == POINTER_TYPE && sub0TD->pointedTypeDesc->type == VOID_TYPE)
+            errormsg("invalid use of void expression");
+        else
         {
-            const TypeDesc *sub0TD = subExpr0->getTypeDesc();
+            // Compute the number of bytes per array element, including the case
+            // where subExpr0 is an array of arrays, or a pointer to an array.
+            // The last case is useful in the case of a function parameter of array type,
+            // as in "void f(int v[][3])". Here, 'v' is a pointer, not an array.
+            //
             if (sub0TD->type == ARRAY_TYPE)
                 numBytesPerElement = getNumBytesPerMultiDimArrayElement(subExpr0);
             else if (sub0TD->type == POINTER_TYPE && sub0TD->pointedTypeDesc->type == ARRAY_TYPE)
                 numBytesPerElement = getNumBytesPerMultiDimArrayElement(subExpr0);
             else if (sub0TD->pointedTypeDesc)
                 numBytesPerElement = TranslationUnit::instance().getTypeSize(*sub0TD->pointedTypeDesc);
+
+            if (numBytesPerElement == 0)
+                errormsg("failed to determine array element size");
         }
+        if (!subExpr1->getTypeDesc()->isIntegral())
+            errormsg("array subscript is not an integer (`%s')", subExpr1->getTypeDesc()->toString().c_str());
+        else if (subExpr1->getTypeDesc()->isLong())
+            warnmsg("array subscript is %s (only low 16 bits used)", subExpr1->getTypeDesc()->toString().c_str());
         break;
+    }
+
+    case EQUALITY:
+    case INEQUALITY:
+    case INFERIOR:
+    case INFERIOR_OR_EQUAL:
+    case SUPERIOR:
+    case SUPERIOR_OR_EQUAL:
+    {
+        if (   (subExpr0->getTypeDesc()->isPtrOrArray() && subExpr1->isNumerical())
+            || (subExpr1->getTypeDesc()->isPtrOrArray() && subExpr0->isNumerical()))
+        {
+            const Tree *numExpr = (subExpr0->isNumerical() ? subExpr0 : subExpr1);
+            uint16_t numConstValue = 0;
+            if (!numExpr->isRealOrLong() && numExpr->evaluateConstantExpr(numConstValue))
+            {
+                // no problem: numerical expression is constant short -- tolerated
+            }
+            else if (numExpr->isLong() && dynamic_cast<const DWordConstantExpr *>(numExpr)
+                                       && dynamic_cast<const DWordConstantExpr *>(numExpr)->getDWordValue() == 0)
+            {
+                // no problem: numerical expression is constant long 0, which is taken as null pointer
+            }
+            else
+            {
+                const Tree *ptrExpr = (subExpr0->isNumerical() ? subExpr1 : subExpr0);
+                errormsg("comparison between pointer (%s) and integer (%s)",
+                         ptrExpr->getTypeDesc()->toString().c_str(),
+                         numExpr->getTypeDesc()->toString().c_str());
+            }
+        }
+    }
 
     default:
         ;
     }
 
+    if (declareTemporary)
+    {
+        // The result of the expression must be stored in a temporary, because it
+        // cannot be left in D or B.
+        resultDeclaration = Declaration::declareHiddenVariableInCurrentScope(*this, tempTD);
+    }
 }
 
 
@@ -127,6 +226,38 @@ BinaryOpExpr::emitSubExpressions(ASMText &out, bool reverseOrder) const
 }
 
 
+bool
+BinaryOpExpr::isArrayRefAndLongSubscript(const Tree *&arrayTree,
+                                         const Tree *&subscriptTree) const
+{
+    if (subExpr0->getTypeDesc()->isPtrOrArray() && subExpr1->isLong())
+    {
+        arrayTree = subExpr0;
+        subscriptTree = subExpr1;
+        return true;
+    }
+    if (subExpr1->getTypeDesc()->isPtrOrArray() && subExpr0->isLong())
+    {
+        arrayTree = subExpr1;
+        subscriptTree = subExpr1;
+        return true;
+    }
+    return false;
+}
+
+
+// Indicates if a comparison between this operators two sub-expressions
+// would require a signed branch instruction (true), or an unsigned one (false).
+//
+bool
+BinaryOpExpr::isSignedComparison() const
+{
+    return    subExpr0->getTypeDesc()->isReal()
+           || subExpr1->getTypeDesc()->isReal()
+           || (subExpr0->isSigned() && subExpr1->isSigned());
+}
+
+
 /*virtual*/
 CodeStatus
 BinaryOpExpr::emitCode(ASMText &out, bool lValue) const
@@ -142,11 +273,12 @@ BinaryOpExpr::emitCode(ASMText &out, bool lValue) const
         if (getType() == BYTE_TYPE)
             value &= 0xFF;
         out.ins(getLoadInstruction(getType()), "#" + wordToString(value, true),
-                        "constant expression: " + wordToString(value, false) + " decimal");
+                        "constant expression: " + wordToString(value, false) + " decimal, "
+                        + (isSigned() ? "" : "un") + "signed");
         return true;
     }
 
-    bool signedBranch = subExpr0->isSigned() && subExpr1->isSigned();
+    bool signedBranch = isSignedComparison();
 
     switch (oper)
     {
@@ -192,9 +324,7 @@ BinaryOpExpr::emitCode(ASMText &out, bool lValue) const
 
         case LEFT_SHIFT:
         case RIGHT_SHIFT:
-            if (lValue)
-                return false;  // should have been rejected before code emission
-            return emitShift(out, oper == LEFT_SHIFT, false);
+            return emitShift(out, oper == LEFT_SHIFT, false, lValue);
 
         case ASSIGNMENT:
         case INC_ASSIGN:
@@ -256,6 +386,7 @@ BinaryOpExpr::emitAddImmediateToVariable(ASMText &out,
             {
             case VOID_TYPE:
             case BYTE_TYPE:
+            case FUNCTION_TYPE:
                 break;
             case WORD_TYPE:
                 imm *= 2;
@@ -285,19 +416,35 @@ BinaryOpExpr::emitAddImmediateToVariable(ASMText &out,
 CodeStatus
 BinaryOpExpr::emitBitwiseOperation(ASMText &out, bool lValue, Op op) const
 {
-    const char *aInstr = NULL, *bInstr = NULL;
+    const char *aInstr = NULL, *bInstr = NULL, *opName = NULL;
     switch (op)
     {
-    case BITWISE_OR : aInstr = "ORA" ; bInstr = "ORB" ; break;
-    case BITWISE_XOR: aInstr = "EORA"; bInstr = "EORB"; break;
-    case BITWISE_AND: aInstr = "ANDA"; bInstr = "ANDB"; break;
+    case BITWISE_OR : aInstr = "ORA" ; bInstr = "ORB" ; opName = "or" ; break;
+    case BITWISE_XOR: aInstr = "EORA"; bInstr = "EORB"; opName = "xor"; break;
+    case BITWISE_AND: aInstr = "ANDA"; bInstr = "ANDB"; opName = "and"; break;
     default:
         assert(false);
         return false;
     }
 
     if (lValue)
-        return false;
+    {
+        assert(isLong() && (subExpr0->isLong() || subExpr1->isLong()));
+        assert(subExpr0->isIntegral() && subExpr1->isIntegral());
+
+        const Tree *left  = (subExpr0->isLong() ? subExpr0 : subExpr1);
+        const Tree *right = (subExpr0->isLong() ? subExpr1 : subExpr0);
+        if (!emitNumericalExpr(out, *right, true))  // long or short integral
+            return false;
+        if (!emitNumericalExpr(out, *left, true))  // long
+            return false;
+        if (resultDeclaration)  // if result goes into temporary (otherwise, it goes to left side)
+            out.ins("LEAX", resultDeclaration->getFrameDisplacementArg(0),
+                        "temporary destination, type " + resultDeclaration->getTypeDesc()->toString());
+        callUtility(out, string(opName) + "DWord" + (right->isLong() ? "DWord" : "Word"), "preserves X");
+        out.ins("LEAS", "4,S");
+        return true;
+    }
 
     // Optimization for VARIABLE & CONST value.
     //
@@ -407,11 +554,209 @@ BinaryOpExpr::emitAddIntegerToPointer(ASMText &out, const Tree *subExpr0, bool d
 }
 
 
+static const char *
+getVariantName(const Tree &expr, bool includeSignednessOfLong)
+{
+    assert(expr.isNumerical());
+    if (expr.isSingle())
+        return "Single";
+    if (expr.isDouble())
+        return "Double";
+    if (expr.isLong())
+        return includeSignednessOfLong ? (expr.isSigned() ? "SignedDWord" : "UnsignedDWord") : "DWord";
+    return expr.isSigned() ? "SignedInt" : "UnsignedInt";
+}
+
+
+// Emits the expression, then (if pushRegister is true) pushes a register
+// and returns its name ('X', 'D', or '\0' for error).
+// If it is a real or long, its address is left in X ('X' is returned).
+// If it is a byte, it is converted to a word.
+// If it is a word, its value is left in D ('D' is returned).
+// If pushRegister is true, emits a PSHS that pushes the register.
+// Returns '\0' upon error.
+//
+char
+BinaryOpExpr::emitNumericalExpr(ASMText &out, const Tree &expr, bool pushRegister)
+{
+    bool isStruct = expr.isRealOrLong();
+    if (!expr.emitCode(out, isStruct))  // if struct, address in X; if small integer, value in D or B
+        return '\0';
+    if (isStruct)
+    {
+        if (pushRegister)
+            out.ins("PSHS", "X");
+        return 'X';
+    }
+    if (expr.getType() == BYTE_TYPE)
+        out.ins(expr.isSigned() ? "SEX" : "CLRA", "promote to word");
+    if (pushRegister)
+        out.ins("PSHS", "B,A");
+    return 'D';
+}
+
+
+bool
+BinaryOpExpr::isRealAndLongOperation() const
+{
+    return (subExpr0->isReal() && subExpr1->isLong()) || (subExpr0->isLong() && subExpr1->isReal());
+}
+
+
+// Emits code that stores the result (of a real or long type) of the operation named by 'opName':
+// - in the variable declared by 'resultDeclaration', if this member is not null, or,
+// - in the left side of the operation, if 'resultDeclaration' is null (in this case,
+//   the left side must be a real or long number).
+// opName: Must be a prefix of a utility routine (e.g., "add" for "addSingleSingle", etc.).
+// pushAddressOfLeftOperand: If true, the address of the left side will be left pushed
+//                           in the stack at the end of this operation.
+//
+// If 'resultDeclaration' is non null, register X is left pointing to its variable.
+//
+CodeStatus
+BinaryOpExpr::emitRealOrLongOp(ASMText &out, const char *opName, bool pushAddressOfLeftOperand) const
+{
+    assert(subExpr0->isNumerical());
+    assert(subExpr1->isNumerical());
+
+    if (pushAddressOfLeftOperand)
+        out.ins("LEAS", "-2,S", "slot for pointer to left side");
+
+    out.emitComment("push right operand of " + string(opName));
+    char rightReg = emitNumericalExpr(out, *subExpr1);
+    if (!rightReg)
+        return false;
+    assert(rightReg == 'X' || rightReg == 'D');
+
+    char leftReg = '\0';  // to become 'X' or 'D'
+    out.emitComment("push left operand of " + string(opName));
+    if (pushAddressOfLeftOperand)
+    {
+        // Emit the left side as an l-value, to get its address in X.
+        // Then pass X to the utility function if the left side is real, or long
+        // or take the value at X and pass it to the utility function.
+        //
+        if (!subExpr0->emitCode(out, true))  // get address of left side in X
+            return false;
+        out.ins("STX", "2,S", "save in slot for pointer to left side");
+
+        if (subExpr0->isRealOrLong())
+        {
+            out.ins("PSHS", "X");
+            leftReg = 'X';
+        }
+        else
+        {
+            if (subExpr0->getType() == BYTE_TYPE)
+            {
+                out.ins("LDB", ",X");
+                out.ins(subExpr0->isSigned() ? "SEX" : "CLRA", "promote to word");
+            }
+            else
+                out.ins("LDD", ",X");
+            out.ins("PSHS", "B,A");
+            leftReg = 'D';
+        }
+    }
+    else
+    {
+        leftReg = emitNumericalExpr(out, *subExpr0);
+        if (!leftReg)
+            return false;
+    }
+
+    assert(leftReg == 'X' || rightReg == 'X');
+    if (resultDeclaration)
+        out.ins("LEAX", resultDeclaration->getFrameDisplacementArg(0),
+                        "temporary destination, type " + resultDeclaration->getTypeDesc()->toString());
+    else if (leftReg != 'X')
+        return false;  // this mode assumes that left side is a real or a long, so it must be at X
+
+    // Call a utility function depending on the operand types.
+
+    bool includeSignednessOfLong = isRealAndLongOperation();
+    string leftVariant  = getVariantName(*subExpr0, includeSignednessOfLong);
+    string rightVariant = getVariantName(*subExpr1, includeSignednessOfLong);
+
+    if (leftReg == 'X' && rightReg == 'X')
+        callUtility(out, opName + leftVariant + rightVariant, "preserves X");
+    else if (leftReg == 'X')
+        callUtility(out, opName + leftVariant + (subExpr1->isSigned() ? "Int" : "UnsignedInt"), "preserves X");
+    else
+        callUtility(out, opName + string(subExpr0->isSigned() ? "Int" : "UnsignedInt") + rightVariant, "preserves X");
+
+    out.ins("LEAS", "4,S");
+    return true;
+}
+
+
+// Emits code that:
+// - allocates local space for a copy of both operands, converted to dwords.
+// - determines the sign of the result;
+// - converts both operands to non-negative values;
+// - calls an unsigned division utility routine;
+// - applies the sign of the result to the quotient or remainder;
+// - leaves the address of the result dword in X.
+// isDivision: Must be true for a division, false for a modulo.
+//
+CodeStatus
+BinaryOpExpr::emitSignedDivOrModOnLong(ASMText &out, bool isDivision) const
+{
+    assert(subExpr0->isIntegral());
+    assert(subExpr1->isIntegral());
+
+    // Emit divisor info.
+    char rightReg = emitNumericalExpr(out, *subExpr1, false);
+    if (!rightReg)
+        return false;
+    assert(rightReg == 'X' || rightReg == 'D');
+    out.ins("PSHS", rightReg == 'X' ? "X" : "B,A");
+
+    // Emit dividend info.
+    char leftReg = emitNumericalExpr(out, *subExpr0, false);
+    if (!leftReg)
+        return false;
+    assert(leftReg == 'X' || leftReg == 'D');
+    out.ins("PSHS", leftReg == 'X' ? "X" : "B,A");
+
+    // Emit quotient info.
+    if (resultDeclaration)
+        out.ins("LEAX", resultDeclaration->getFrameDisplacementArg(0),
+                        "destination of type " + resultDeclaration->getTypeDesc()->toString());
+    else if (leftReg != 'X')
+        return false;  // this mode assumes that left side is a long, so it must be at X
+    else
+        if (!subExpr0->emitCode(out, true))  // get address of left side in X
+            return false;
+    out.ins("PSHS", "X", "address of quotient to be computed");
+
+    // Push a multiple flag byte.
+    uint8_t flagByte =    (isDivision           << 0)   // operation flag
+                        | (isSigned()           << 1)   // quotient signedness flag
+                        | (subExpr0->isLong()   << 2)   // dividend size flag
+                        | (subExpr0->isSigned() << 3)   // dividend signedness flag
+                        | (subExpr1->isLong()   << 4)   // divisor size flag
+                        | (subExpr1->isSigned() << 5);  // divisor signedness flag
+    out.ins("LDB", "#" + wordToString(flagByte, true), "flag byte");
+
+    // Call a division/modulo routine.
+    callUtility(out, "signedDivOrModOnDWord");
+    out.ins("LEAS", "6,S");
+
+    return true;
+}
+
+
 CodeStatus
 BinaryOpExpr::emitAdd(ASMText &out, bool lValue, bool doSub) const
 {
     if (lValue)
-        return false;
+    {
+        if (!getTypeDesc()->isRealOrLong())
+            return false;
+
+        return emitRealOrLongOp(out, doSub ? "sub" : "add");
+    }
 
     if (emitBinOpIfConstants(out, doSub ? subtract : add))  // if this emits code
         return true;  // done
@@ -423,8 +768,21 @@ BinaryOpExpr::emitAdd(ASMText &out, bool lValue, bool doSub) const
     if (ve0 && !ve0->isFuncAddrExpr() && isRightConst)
         return emitAddImmediateToVariable(out, ve0, (doSub ? -1 : +1) * rightValue);
 
-    if (!emitSubExpressions(out, true))
+    const Tree *arrayTree, *subscriptTree;
+    if (isArrayRefAndLongSubscript(arrayTree, subscriptTree))
+    {
+        if (!subscriptTree->emitCode(out, true))  // get address of long subscript in X
+            return false;
+        out.ins("LDD", "2,X", "low word of long array subscript");
+        out.ins("PSHS", "B,A", "word-sized array subscript");
+        if (!arrayTree->emitCode(out, false))  // get address of array in D
+            return false;
+    }
+    else if (!emitSubExpressions(out, true))
         return false;
+
+    // Here, the word on the stack must be popped, multiplied if necessary, and added to D.
+
     if (getType() == BYTE_TYPE)
     {
         out.ins("LEAS", "1,S");
@@ -432,7 +790,7 @@ BinaryOpExpr::emitAdd(ASMText &out, bool lValue, bool doSub) const
     }
     else
     {
-        if (!doSub
+        if (   !doSub
             && subExpr0->getTypeDesc()->isPtrOrArray()
             && subExpr0->getTypeDesc()->getPointedType() == WORD_TYPE
             && subExpr1->getTypeDesc()->isIntegral())
@@ -441,10 +799,10 @@ BinaryOpExpr::emitAdd(ASMText &out, bool lValue, bool doSub) const
             out.ins("ADDD", ",S");
             out.ins("ADDD", ",S++");
         }
-        else if (!doSub
-            && subExpr1->getTypeDesc()->isPtrOrArray()
-            && subExpr1->getTypeDesc()->getPointedType() == WORD_TYPE
-            && subExpr0->getTypeDesc()->isIntegral())
+        else if (   !doSub
+                 && subExpr1->getTypeDesc()->isPtrOrArray()
+                 && subExpr1->getTypeDesc()->getPointedType() == WORD_TYPE
+                 && subExpr0->getTypeDesc()->isIntegral())
         {
             // <integral type> + <word *>:
             out.ins("LSLB");
@@ -581,7 +939,19 @@ CodeStatus
 BinaryOpExpr::emitMulDivMod(ASMText &out, bool lValue) const
 {
     if (lValue)
-        return false;
+    {
+        if (! ((isReal() && oper != MOD) || isLong()))
+            return false;
+
+        //TODO: conditions determining if we call emitSignedDivOrModOnLong() are mostly duplicated at each call.
+
+        assert(oper == MUL || oper == DIV || oper == MOD);
+        if (isReal() || oper == MUL || (!subExpr0->isSigned() && !subExpr1->isSigned()))
+            return emitRealOrLongOp(out, oper == MUL ? "mul" : (oper == DIV ? "div" : "mod"));
+
+        // Special processing for DIV and MOD when one or both operands are signed.
+        return emitSignedDivOrModOnLong(out, oper == DIV);
+    }
 
     uint16_t (*functor)(uint16_t, uint16_t) = NULL;
     const char *routine = NULL;
@@ -787,6 +1157,11 @@ BinaryOpExpr::emitMulDivMod(ASMText &out, bool lValue) const
         return true;
     }
 
+    // Handle case where two unsigned bytes (possibly cast to unsigned int) get multiplied
+    // and the result is of type unsigned int.
+    if (oper == MUL && !lValue && emitMulOfTypeUnsignedBytesGivingUnsignedWord(out))
+        return true;
+
     emitSubExpressions(out);
 
     // If multiplication and result is byte, use MUL.
@@ -816,8 +1191,91 @@ BinaryOpExpr::emitMulDivMod(ASMText &out, bool lValue) const
 }
 
 
+static bool
+isSingleByteConstant(const Tree &tree)
+{
+    uint16_t value = 0;
+    if (!tree.evaluateConstantExpr(value))
+        return false;
+    if (value > 0x00FF)  // if > 256 or signed negative constant
+        return false;
+    return true;
+}
+
+
+// In the positive, returns the tree itself or the cast's subtree,
+// depending on which is unsigned char.
+// Returns NULL otherwise.
+//
+static const Tree *
+isUnsignedBytePossiblyCastToUnsignedWord(const Tree &tree)
+{
+    if (isSingleByteConstant(tree))
+        return &tree;
+    if (tree.isSigned())
+        return NULL;
+    if (tree.getType() == BYTE_TYPE)
+        return &tree;
+    const CastExpr *ce = dynamic_cast<const CastExpr *>(&tree);
+    if (!ce)
+        return NULL;
+    if (ce->getType() != WORD_TYPE || ce->isSigned())
+        return NULL;
+    const Tree *sub = ce->getSubExpr();
+    if (isSingleByteConstant(*sub))
+        return sub;
+    if (sub->getType() != BYTE_TYPE || sub->isSigned())
+        return NULL;
+    return sub;
+}
+
+
+// r-value result assumed.
+// TODO: Avoid PSHS/PULS when possible.
+//
 bool
-BinaryOpExpr::emitComparisonIfNoFuncAddrExprInvolved(ASMText &out) const
+BinaryOpExpr::emitMulOfTypeUnsignedBytesGivingUnsignedWord(ASMText &out) const
+{
+    const Tree *leftUnsignedByteExpr = isUnsignedBytePossiblyCastToUnsignedWord(*subExpr0);
+    if (!leftUnsignedByteExpr)  // if left side not unsigned char
+        return false;
+    const Tree *rightUnsignedByteExpr = isUnsignedBytePossiblyCastToUnsignedWord(*subExpr1);
+    if (!rightUnsignedByteExpr)  // if right side not unsigned char
+        return false;
+
+    if (!leftUnsignedByteExpr->emitCode(out, false))  // value of left side in B
+        return false;
+
+    const VariableExpr *rightVar = rightUnsignedByteExpr->asVariableExpr();
+    uint16_t leftVal = 0, rightVal = 0;
+    bool leftVarOrConst = (leftUnsignedByteExpr->asVariableExpr()  || leftUnsignedByteExpr->evaluateConstantExpr(leftVal));
+    bool rightVarOrConst = (rightVar || rightUnsignedByteExpr->evaluateConstantExpr(rightVal));
+    bool bothVarOrConst = leftVarOrConst && rightVarOrConst;
+
+    if (bothVarOrConst)
+    {
+        if (rightVar)
+            out.ins("LDA", rightVar->getFrameDisplacementArg(0), "variable " + rightVar->getId());
+        else
+            out.ins("LDA", "#" + wordToString(rightVal, true), wordToString(rightVal, false) + " decimal");
+    }
+    else  // general case:
+    {
+        out.ins("PSHS", "B", "preserve left side of multiplication");
+
+        if (!rightUnsignedByteExpr->emitCode(out, false))  // value of right side in B
+            return false;
+
+        out.ins("PULS", "A", "retrieve left side of multiplication");
+    }
+
+    out.ins("MUL");  // product left in D
+    return true;
+}
+
+
+bool
+BinaryOpExpr::emitIntegralComparisonIfNoFuncAddrExprInvolved(ASMText &out) const
 {
     const VariableExpr *ve0 = subExpr0->asVariableExpr();
     const VariableExpr *ve1 = subExpr1->asVariableExpr();
@@ -830,7 +1288,7 @@ BinaryOpExpr::emitComparisonIfNoFuncAddrExprInvolved(ASMText &out) const
     uint16_t rightValue = 0;
     bool isRightConst = subExpr1->evaluateConstantExpr(rightValue);
 
-    if (ve0 != NULL && isRightConst)
+    if (ve0 != NULL && ve0->isIntegral() && isRightConst)
     {
         uint16_t imm = rightValue;
 
@@ -879,6 +1337,80 @@ BinaryOpExpr::emitComparisonIfNoFuncAddrExprInvolved(ASMText &out) const
 }
 
 
+static bool
+isLongZero(const Tree &expr)
+{
+    const DWordConstantExpr *dce = dynamic_cast<const DWordConstantExpr *>(&expr);
+    return dce && dce->getDWordValue() == 0;
+}
+
+
+CodeStatus
+BinaryOpExpr::emitNullPointerComparison(ASMText &out, const Tree &ptrExpr, bool ptrAtRightOfOperator) const
+{
+    assert(ptrExpr.getTypeDesc()->isPtrOrArray());
+    assert(isRelationalOperator());
+    if (!ptrExpr.emitCode(out, false))  // get address in D
+        return false;
+    if (ptrAtRightOfOperator)
+    {
+        out.ins("PSHS", "B,A", "preserve address");
+        out.ins("CLRA");
+        out.ins("CLRB");
+        out.ins("SUBD", ",S++", "compare zero with address");  // SUBD 1 cycle less than CMPD
+    }
+    else
+        out.ins("SUBD", "#0");
+    return true;
+}
+
+
+// Emits code that sets CC according to the comparison between a pair of operands
+// of which one is a real number or a dword.
+//
+CodeStatus
+BinaryOpExpr::emitRealOrLongComparison(ASMText &out) const
+{
+    if (subExpr0->getTypeDesc()->isPtrOrArray() && isLongZero(*subExpr1))
+        return emitNullPointerComparison(out, *subExpr0, false);
+    if (subExpr1->getTypeDesc()->isPtrOrArray() && isLongZero(*subExpr0))
+        return emitNullPointerComparison(out, *subExpr1, true);
+
+    if (!subExpr0->isNumerical() || !subExpr1->isNumerical())
+    {
+        errormsg("comparison between `%s' and `%s' not supported",
+                 subExpr0->getTypeDesc()->toString().c_str(),
+                 subExpr1->getTypeDesc()->toString().c_str());
+        return false;
+    }
+
+    out.emitComment("push right operand of comparison");
+    char rightReg = emitNumericalExpr(out, *subExpr1);
+    if (!rightReg)
+        return false;
+    out.emitComment("push left operand of comparison");
+    char leftReg = emitNumericalExpr(out, *subExpr0);
+    if (!leftReg)
+        return false;
+    assert(leftReg == 'X' || rightReg == 'X');
+
+    string utility;
+    if (subExpr0->isLong() && subExpr1->isLong())
+        utility = "cmpDWordDWord";
+    else
+    {
+        bool includeSignednessOfLong = isRealAndLongOperation();
+        const char *leftVariant  = getVariantName(*subExpr0, includeSignednessOfLong);
+        const char *rightVariant = getVariantName(*subExpr1, includeSignednessOfLong);
+        utility = string("cmp") + leftVariant + rightVariant;
+    }
+
+    callUtility(out, utility, "sets N, Z, V, C; preserves X");
+    out.ins("LEAS", "4,S");
+    return true;
+}
+
+
 // condBranchInstr: Ignored if produceIntegerResult is false.
 //
 CodeStatus
@@ -886,13 +1418,18 @@ BinaryOpExpr::emitComparison(ASMText &out,
                                 bool produceIntegerResult,
                                 const string &condBranchInstr) const
 {
-    if (! emitComparisonIfNoFuncAddrExprInvolved(out))  // try some specific cases
+    if (subExpr0->isRealOrLong() || subExpr1->isRealOrLong())
+    {
+        if (!emitRealOrLongComparison(out))
+            return false;
+    }
+    else if (! emitIntegralComparisonIfNoFuncAddrExprInvolved(out))  // try some specific cases
     {
         // General case.
         if (!emitSubExpressions(out, true))
             return false;
         if (subExpr0->fits8Bits() && subExpr1->fits8Bits()
-            && subExpr0->isSigned() == subExpr1->isSigned())
+                && subExpr0->isSigned() == subExpr1->isSigned())
         {
             // This optimization is only used if both operands have the same signednes.
             // It should not be used for this case:
@@ -1004,8 +1541,47 @@ BinaryOpExpr::emitLogicalOr(ASMText &out, bool lValue) const
 //                 If false, only an r-value is computed (and left in D or B).
 //
 CodeStatus
-BinaryOpExpr::emitShift(ASMText &out, bool isLeftShift, bool changeLeftSide) const
+BinaryOpExpr::emitShift(ASMText &out, bool isLeftShift, bool changeLeftSide, bool lValue) const
 {
+    if (lValue && isLong())
+    {
+        assert(subExpr0->isLong());
+        assert(subExpr0->isSigned() == isSigned());
+
+        if (subExpr1->isLong())
+        {
+            if (!subExpr1->emitCode(out, true))  // get address of long in X
+                return false;
+            // Push low byte of this long.
+            out.ins("LDB", "3,X");
+        }
+        else
+        {
+            if (!subExpr1->emitCode(out, false))  // get number of shifts in D
+                return false;
+        }
+        if (!isLeftShift)  // if right shift on signed value, do arithmetic shift, i.e., sign extension
+        {
+            if (isSigned())
+                out.ins("LDA", "#$FF", "request sign extension");
+            else
+                out.ins("CLRA", "", "request zero extension");
+            out.ins("PSHS", "B,A", "A=sign/zero ext flag, B=number of bits to shift");
+        }
+        else
+            out.ins("PSHS", "B", "number of bits to shift");
+
+        if (!subExpr0->emitCode(out, true))  // get address of left side long in X
+            return false;
+        out.ins("PSHS", "X", "address of input dword to be shifted");
+        if (resultDeclaration)  // if result goes into temporary (otherwise, it goes to left side)
+            out.ins("LEAX", resultDeclaration->getFrameDisplacementArg(0),
+                        "temporary destination, type " + resultDeclaration->getTypeDesc()->toString());
+        callUtility(out, isLeftShift ? "leftShiftDWord" : "rightShiftDWord", "preserves X");
+        out.ins("LEAS", isLeftShift ? "3,S" : "4,S");
+        return true;
+    }
+
     bool isLeftByte = (getType() == BYTE_TYPE);
 
     uint16_t numBits = 0;
@@ -1155,7 +1731,7 @@ BinaryOpExpr::emitShift(ASMText &out, bool isLeftShift, bool changeLeftSide) con
             out.ins("PSHS", "X", "preserve address of left side");
         }
 
-        const char *utilityName = NULL;  // name of stdlib.inc subroutine
+        const char *utilityName = NULL;  // name of standard library subroutine
         if (isLeftShift)
             utilityName = (isLeftByte ? "shiftByteLeft" : "shiftLeft");
         else if (subExpr0->isSigned())
@@ -1165,7 +1741,13 @@ BinaryOpExpr::emitShift(ASMText &out, bool isLeftShift, bool changeLeftSide) con
 
         out.ins("PSHS", isLeftByte ? "B" : "B,A", "left side of shift: used and popped by " + string(utilityName));
 
-        if (!subExpr1->emitCode(out, false))
+        if (subExpr1->isLong())
+        {
+            if (!subExpr1->emitCode(out, true))  // get address of long in X
+                return false;
+            out.ins("LDD", "2,X");
+        }
+        else if (!subExpr1->emitCode(out, false))
             return false;
         if (subExpr1->getType() == BYTE_TYPE)
             out.ins("CLRA");
@@ -1184,8 +1766,33 @@ BinaryOpExpr::emitShift(ASMText &out, bool isLeftShift, bool changeLeftSide) con
 }
 
 
+CodeStatus
+BinaryOpExpr::emitLongBitwiseOpAssign(ASMText &out) const
+{
+    assert(isLong() && subExpr0->isLong() && subExpr1->isIntegral());
+    if (!emitNumericalExpr(out, *subExpr1, true))
+        return false;
+    if (emitNumericalExpr(out, *subExpr0, true) != 'X')
+        return false;
+
+    const char *opName = NULL;
+    switch (oper)
+    {
+    case OR_ASSIGN : opName = "or" ; break;
+    case XOR_ASSIGN: opName = "xor"; break;
+    case AND_ASSIGN: opName = "and"; break;
+    default: assert(false); return false;
+    }
+
+    callUtility(out, string(opName) + "DWord" + (subExpr1->isLong() ? "DWord" : "Word"), "preserves X");
+
+    out.ins("LEAS", "4,S");
+    return true;
+}
+
+
 /*static*/
-string
+const char *
 BinaryOpExpr::getOperatorToken(Op oper)
 {
     switch (oper)
@@ -1273,7 +1880,7 @@ BinaryOpExpr::emitAssignmentIfNoFuncAddrExprInvolved(ASMText &out,
         if (val != 0)  // if nothing to inc/dec, we still need to load the variable in B or D, as per convention: needed for i = (j += 0);
         {
             string instr = (oper == INC_ASSIGN ? getAddInstruction(getType()) : getSubInstruction(getType()));
-            out.ins(instr,  "#" + wordToString(val, true), getOperatorToken(oper) + " operator at " + getLineNo());
+            out.ins(instr,  "#" + wordToString(val, true), string(getOperatorToken(oper)) + " operator at " + getLineNo());
             out.ins(getStoreInstruction(getType()), ve0->getFrameDisplacementArg());
         }
         return true;
@@ -1295,12 +1902,35 @@ BinaryOpExpr::emitAssignmentIfNoFuncAddrExprInvolved(ASMText &out,
 }
 
 
+CodeStatus
+BinaryOpExpr::emitLeftSideAddressInX(ASMText &out, bool preserveD) const
+{
+    const IdentifierExpr *ie;
+    if ((ie = dynamic_cast<const IdentifierExpr *>(subExpr0)) != NULL && ie->getDeclaration())
+    {
+        // Optimization in the case where the left side is a variable.
+        if (!subExpr0->emitCode(out, true))  // get address of left-side in X; no other register modified
+            return false;
+    }
+    else
+    {
+        if (preserveD)
+            out.ins("PSHS", subExpr1->getType() == BYTE_TYPE ? "B" : "B,A", "preserve right side of assignment");
+        if (!subExpr0->emitCode(out, true))  // get address of left-side real in X
+            return false;
+        if (preserveD)
+            out.ins("PULS", subExpr1->getType() == BYTE_TYPE ? "B" : "A,B", "restore right side of assignment");
+    }
+    return true;
+}
+
+
 // Applies to ASSIGNMENT, INC_ASSIGN, etc.
 //
 CodeStatus
-BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
+BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op op) const
 {
-    writeLineNoComment(out, "assignment: " + getOperatorToken(oper));
+    writeLineNoComment(out, "assignment: " + string(getOperatorToken(op)));
 
     #if 0
     cerr << "Assigning to " << subExpr0->getTypeDesc()
@@ -1309,10 +1939,61 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
 
     // Treat struct assignment specially.
     //
-    if (oper == ASSIGNMENT && getType() == CLASS_TYPE)
+    if (op == ASSIGNMENT && getType() == CLASS_TYPE)
     {
+        if (subExpr0->isRealOrLong() && !subExpr1->isLong() && subExpr1->isIntegral())  // if assigning a short integral to a real or long
+        {
+            if (!subExpr1->emitCode(out, false))  // load integral in B or D
+                return false;
+
+            if (!emitLeftSideAddressInX(out, true))  // preserves D
+                return false;
+            if (subExpr1->getType() == BYTE_TYPE)
+                out.ins(subExpr1->isSigned() ? "SEX" : "CLRA", "promote to word");
+
+            callUtility(out, "init" + string(subExpr0->isLong() ? "DWord" : (subExpr0->isSingle() ? "Single" : "Double"))
+                             + "From" + (subExpr1->isSigned() ? "Signed" : "Unsigned") + "Word");
+            return true;
+        }
+
+        assert(subExpr1->getType() == CLASS_TYPE);
+
         if (!subExpr1->emitCode(out, true))  // get address of right-side struct in X
             return false;
+
+        if (subExpr0->isReal() && subExpr1->isLong())
+        {
+            out.ins("TFR", "X,D", "address of source number in D");
+
+            if (!emitLeftSideAddressInX(out, true))  // preserve D
+                return false;
+
+            if (subExpr1->isSigned())
+                out.ins("ORCC", "#$01", "C=1 means signed");
+            else
+                out.ins("ANDCC", "#$FE", "C=0 means unsigned");
+
+            callUtility(out, "init" + string(isSingle() ? "Single" : "Double")
+                             + "From" + (subExpr1->isLong()
+                                             ? "DWord"
+                                             : (subExpr1->isSingle() ? "Single" : "Double")));
+            return true;
+        }
+        if (subExpr0->isLong() && subExpr1->isReal())
+        {
+            out.ins("TFR", "X,D", "address of source number");
+
+            if (!emitLeftSideAddressInX(out, true))  // preserve D
+                return false;
+
+            if (subExpr0->isSigned())
+                out.ins("ORCC", "#$01", "C=1 means signed");
+            else
+                out.ins("ANDCC", "#$FE", "C=0 means unsigned");
+
+            callUtility(out, "initDWordFrom" + string(subExpr1->isSingle() ? "Single" : "Double"));
+            return true;
+        }
 
         int16_t structSizeInBytes = TranslationUnit::instance().getTypeSize(*getTypeDesc());
         out.ins("LDD", "#" + wordToString(structSizeInBytes), "size of struct " + getTypeDesc()->className);
@@ -1323,24 +2004,146 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
             return false;
 
         out.ins("PSHS", "X");
-        out.ins("LBSR", "_memcpy", "copy struct (preserves X)");
-        TranslationUnit::instance().registerNeededUtility("memcpy");  // define _CMOC_NEED_memcpy_ re: stdlib.inc
+        callUtility(out, "memcpy", "copy struct (preserves X)");
         out.ins("LEAS", "6,S");
-
-        // CAUTION: We do not check lValue, so it can be false, which we should reject
-        //          in theory, because r-value structs are not supported (they cannot
-        //          be stored in register D).
-        //          This means that we will return garbage in D when lValue is false.
-        //          However, there is no legal context in the language where this bad D
-        //          can be used. For instance, one cannot pass a struct by value, so
-        //          the compiler never gets here because no code gets emitted.
 
         return true;
     }
 
+    // Assigning a float to an integral type.
+    //
+    if (op == ASSIGNMENT && subExpr1->isRealOrLong())
+    {
+        assert(subExpr0->isNumerical());
+
+        if (!subExpr1->emitCode(out, true))  // get address of right-side real in X
+            return false;
+
+        const IdentifierExpr *ie;
+        if ((ie = dynamic_cast<const IdentifierExpr *>(subExpr0)) != NULL && ie->getDeclaration())
+        {
+            // Optimization in the case where the left side is a variable.
+            out.ins("TFR", "X,D", "pass address of right-side real in D");
+            if (!subExpr0->emitCode(out, true))  // get address of left-side in X; no other register modified
+                return false;
+        }
+        else
+        {
+            out.ins("PSHS", "X", "preserve address of right-side real");
+
+            if (!subExpr0->emitCode(out, true))  // get address of left-side in X
+                return false;
+
+            out.ins("PULS", "B,A", "restore address of right-side real into D");
+        }
+
+        callUtility(out, "init" + string(subExpr1->isLong() ? "" : (subExpr0->isSigned() ? "Signed" : "Unsigned"))
+                                + (subExpr0->getType() == BYTE_TYPE ? "Byte" : "Word")
+                                + "From" + (subExpr1->isLong() ? "DWord" : (subExpr1->isSingle() ? "Single" : "Double")),
+                         "assign real to l-value at X");
+        return true;
+    }
+
+    // Process <real_or_long> += <integral> and <integral> += <real_or_long> (and also -=, *=, /=).
+    //
+    if (op == INC_ASSIGN || op == DEC_ASSIGN || op == MUL_ASSIGN || op == DIV_ASSIGN|| op == MOD_ASSIGN)
+    {
+        const char *opName = NULL;
+        switch (op)
+        {
+        case INC_ASSIGN: opName = "add"; break;
+        case DEC_ASSIGN: opName = "sub"; break;
+        case MUL_ASSIGN: opName = "mul"; break;
+        case DIV_ASSIGN: opName = "div"; break;
+        case MOD_ASSIGN: opName = "mod"; break;
+        default: assert(false);
+        }
+        if (subExpr0->isRealOrLong())
+        {
+            assert(isRealOrLong());
+
+            if (!isReal() && (op == DIV_ASSIGN || op == MOD_ASSIGN) && (subExpr0->isSigned() || subExpr1->isSigned()))
+            {
+                // Special processing for DIV and MOD when one or both operands are signed.
+                return emitSignedDivOrModOnLong(out, op == DIV_ASSIGN);
+            }
+
+            if (resultDeclaration == NULL)
+            {
+                // emitRealOrLongOp() will store result in left side
+                return emitRealOrLongOp(out, opName);
+            }
+
+            // Emit operation that stores result in resultDeclaration, whose address will be left in X.
+            // Also ask that the address of the left side be left in the stack.
+            if (!emitRealOrLongOp(out, opName, true))
+                return false;
+
+            // Word at ,S is now address of left side.
+
+            assert(isLong());
+            assert(subExpr0->isLong());
+            assert(subExpr1->isReal());
+
+            out.ins("TFR", "X,D", "address of temporary");
+            out.ins("PULS", "X", "address of integral left side");
+            callUtility(out, "initDWordFrom" + string(subExpr1->isSingle() ? "Single" : "Double"),
+                             "assign result to l-value at X");
+            return true;
+        }
+        if (subExpr1->isRealOrLong())  // left side is integral, but not long
+        {
+            assert(isIntegral());
+            assert(!isLong());
+            assert(resultDeclaration != NULL);
+
+            if ((op == DIV_ASSIGN || op == MOD_ASSIGN) && (subExpr0->isSigned() || subExpr1->isSigned()))
+            {
+                // Special processing for DIV and MOD when one or both operands are signed.
+                if (!emitSignedDivOrModOnLong(out, op == DIV_ASSIGN))
+                    return false;
+
+                // The address of the variable represented by 'resultDeclaration' is now in X.
+                out.ins("PSHS", "U,X", "preserve frame ptr and addr of result dword");
+                if (!subExpr0->emitCode(out, true))  // re-obtain address of left side in X
+                    return false;
+                out.ins("PULS", "U", "addr of result dword");
+                if (subExpr0->getTypeSize() == 1)
+                {
+                    out.ins("LDB", "3,U", "low byte of result dword");
+                    out.ins("STB", ",X", "destination of " + string(op == DIV_ASSIGN ? "/" : "%") + "=");
+                }
+                else
+                {
+                    assert(subExpr0->getTypeSize() == 2);
+                    out.ins("LDD", "2,U", "low word of result dword");
+                    out.ins("STD", ",X", "destination of " + string(op == DIV_ASSIGN ? "/" : "%") + "=");
+                }
+
+                out.ins("PULS", "U", "restore frame ptr");
+                return true;  // finish with left side address in X
+            }
+
+            // Emit operation that stores result in resultDeclaration, whose address will be left in X.
+            // Also ask that the address of the left side be left in the stack.
+            if (!emitRealOrLongOp(out, opName, true))
+                return false;
+
+            // Word at ,S is now address of left side.
+
+            out.ins("TFR", "X,D", "address of temporary");
+            out.ins("PULS", "X", "address of integral left side");
+            callUtility(out, "init" + string(subExpr1->isLong() ? "" : (subExpr0->isSigned() ? "Signed" : "Unsigned"))
+                                    + (subExpr0->getType() == BYTE_TYPE ? "Byte" : "Word")
+                                    + "From" + (subExpr1->isLong() ? "DWord" : (subExpr1->isSingle() ? "Single" : "Double")),
+                             "assign result to l-value at X");
+            return true;
+        }
+    }
+
     // Process /= and %=.
     //
-    if (oper == DIV_ASSIGN || oper == MOD_ASSIGN)
+    if (op == DIV_ASSIGN || op == MOD_ASSIGN)
     {
         // Emit the dividend as an l-value, which puts its address in X.
         if (!subExpr0->emitCode(out, true))
@@ -1373,7 +2176,7 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
         callUtility(out, subExpr0->isSigned() && subExpr1->isSigned() ? "SDIV16" : "DIV16");
 
         // Store the result.
-        if (oper == DIV_ASSIGN)
+        if (op == DIV_ASSIGN)
         {
             out.ins("TFR", "X,D", "quotient to D");  // necessary in case lValue is false: r-value must be left in D
             if (getType() == BYTE_TYPE)
@@ -1396,9 +2199,16 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
     }
 
     // Process <<= and >>=.
-    if (oper == LEFT_ASSIGN || oper == RIGHT_ASSIGN)
+    if (op == LEFT_ASSIGN || op == RIGHT_ASSIGN)
     {
-        return emitShift(out, oper == LEFT_ASSIGN, true);
+        return emitShift(out, op == LEFT_ASSIGN, true, lValue);
+    }
+
+    // Process &=, |= and ^= for the 32-bit cases.
+    if (isLong() && (op == AND_ASSIGN || op == OR_ASSIGN || op == XOR_ASSIGN))
+    {
+        assert(lValue);
+        return emitLongBitwiseOpAssign(out);
     }
 
     /*  Prepare the assigned value argument, i.e., immediate, pushed,
@@ -1410,14 +2220,13 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
 
     const VariableExpr *ve0 = subExpr0->asVariableExpr();
 
-    // Emit code for the right side, except for <<= and >>=.
+    // Emit code for the right side.
     //
-    if (oper != LEFT_ASSIGN && oper != RIGHT_ASSIGN)
     {
         if (!subExpr1->emitCode(out, false))
             return false;
 
-        if (oper == ASSIGNMENT && ve0 != NULL)
+        if (op == ASSIGNMENT && ve0 != NULL)
         {
             // No need to save D because no code will be needed to obtain
             // the address of the left side, which is a variable (ve0).
@@ -1463,7 +2272,7 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
     }
 
 
-    if (oper == ASSIGNMENT)
+    if (op == ASSIGNMENT)
     {
         assert(getType() != VOID_TYPE);
         if (getType() == BYTE_TYPE)
@@ -1473,7 +2282,9 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
             // Even if 't' is a constant 0, a 'CLR destAddr' instruction, although faster,
             // would not comply with the condition.
             //
-            if (assignedValueArg == "#$00")
+            if (ve0 != NULL)  // if B already has assigned value
+                ;
+            else if (assignedValueArg == "#$00")
                 out.ins("CLRB");
             else if (!assignedValueArg.empty())
                 out.ins("LDB", assignedValueArg);
@@ -1490,6 +2301,10 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
                     out.ins("LDB", assignedValueArg);
                     out.ins(subExpr1->getConvToWordIns());
                 }
+                else if (assignedValueArg == ",S++")
+                {
+                    out.ins("PULS", "A,B", "retrieve value to store");
+                }
                 else
                 {
                     const VariableExpr *ve1 = subExpr1->asVariableExpr();
@@ -1504,6 +2319,10 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
                         else
                             out.ins("TFR", "X,D", "right-hand side in D");
                     }
+                    else if (startsWith(assignedValueArg, "#"))
+                    {
+                        // LDD already emitted subExpr1->emitCode(). Nothing to do.
+                    }
                     else  // otherwise: just load value in D; no need to use X
                     {
                         out.ins("LDD", assignedValueArg);
@@ -1514,13 +2333,13 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
             out.ins("STD", destAddr);
         }
     }
-    else if (oper == INC_ASSIGN || oper == DEC_ASSIGN)
+    else if (op == INC_ASSIGN || op == DEC_ASSIGN)
     {
         assert(getType() != VOID_TYPE);
         if (getType() == BYTE_TYPE)
         {
             out.ins("LDB", destAddr);
-            out.ins(oper == INC_ASSIGN ? "ADDB" : "SUBB", assignedValueArg);
+            out.ins(op == INC_ASSIGN ? "ADDB" : "SUBB", assignedValueArg);
             out.ins("STB", destAddr);
             out.ins("CLRA");
         }
@@ -1533,7 +2352,7 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
             out.ins("LSLB", "", "inc/dec on word pointer");
             out.ins("ROLA");
 
-            if (oper == INC_ASSIGN)
+            if (op == INC_ASSIGN)
                 out.ins("ADDD", destAddr);
             else
             {
@@ -1548,11 +2367,11 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
             assert(getType() != BYTE_TYPE);  // left side is word
             out.ins("LDD", destAddr);
             assert(assignedValueArg != ",S+");
-            out.ins(oper == INC_ASSIGN ? "ADDD" : "SUBD", assignedValueArg);
+            out.ins(op == INC_ASSIGN ? "ADDD" : "SUBD", assignedValueArg);
             out.ins("STD", destAddr);
         }
     }
-    else if (oper == MUL_ASSIGN)
+    else if (op == MUL_ASSIGN)
     {
         assert(getType() != VOID_TYPE);
         assert(getType() == subExpr0->getType());
@@ -1577,22 +2396,22 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
             out.ins("STD", destAddr);
         }
     }
-    else if (oper == XOR_ASSIGN || oper == AND_ASSIGN || oper == OR_ASSIGN)
+    else if (op == XOR_ASSIGN || op == AND_ASSIGN || op == OR_ASSIGN)
     {
         assert(getType() != VOID_TYPE);
-        string op;
-        switch (oper)
+        string opName;
+        switch (op)
         {
-        case XOR_ASSIGN: op = "EOR"; break;
-        case AND_ASSIGN: op = "AND"; break;
-        case OR_ASSIGN:  op = "OR";  break;
-        default: op = "_ERROR_";
+        case XOR_ASSIGN: opName = "EOR"; break;
+        case AND_ASSIGN: opName = "AND"; break;
+        case OR_ASSIGN:  opName = "OR";  break;
+        default: opName = "_ERROR_";
         }
 
         if (getType() == BYTE_TYPE)
         {
             out.ins("LDB", destAddr);
-            out.ins(op + "B", assignedValueArg);
+            out.ins(opName + "B", assignedValueArg);
             out.ins("STB", destAddr);
         }
         else
@@ -1602,8 +2421,8 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op oper) const
                 out.ins("LEAX", destAddr);
 
             out.ins("LDD", assignedValueArg);
-            out.ins(op + "A", ",X");
-            out.ins(op + "B", "1,X");
+            out.ins(opName + "A", ",X");
+            out.ins(opName + "B", "1,X");
             out.ins("STD", ",X");
         }
     }
@@ -1710,6 +2529,10 @@ BinaryOpExpr::getNumBytesPerMultiDimArrayElement(const Tree *tree)
             assert(cl);
             const ClassDef::ClassMember *member = cl->getDataMember(ome->getMemberName());
             std::vector<uint16_t> dims = member->getArrayDimensions();
+
+            // Add dimensions due to type of member, e.g. A member[N] where A is a typedef for an array.
+            member->getTypeDesc()->appendDimensions(dims);
+
             assert(dims.size() >= 1);
             assert(dimIndex <= dims.size());
             uint16_t rowSize = product(dims.begin() + dimIndex, dims.end());
@@ -1758,7 +2581,7 @@ BinaryOpExpr::emitArrayRef(ASMText &out, bool lValue) const
             out.ins("LDX", ve0->getFrameDisplacementArg(), "get pointer value");
 
             if (checkNullPtr)
-                out.ins("LBSR", "check_null_ptr_x");
+                callUtility(out, "check_null_ptr_x");
 
             if (imm != 0)
                 out.ins("LEAX", wordToString(imm) + ",X", "add index (" + wordToString(index)
@@ -1775,7 +2598,7 @@ BinaryOpExpr::emitArrayRef(ASMText &out, bool lValue) const
             {
                 out.ins("LEAX", ve0->getFrameDisplacementArg(0), comment);
 
-                out.ins("LBSR", "check_null_ptr_x");
+                callUtility(out, "check_null_ptr_x");
 
                 if (lValue)
                     out.ins("LEAX", wordToString(imm) + ",X", "l-value");
@@ -1803,6 +2626,8 @@ BinaryOpExpr::emitArrayRef(ASMText &out, bool lValue) const
         out.ins("LEAX", ve0->getFrameDisplacementArg(), "address of array " + ve0->getId());
     else if (ve0 && !leftIsArray)  // pointer
         out.ins("LDX", ve0->getFrameDisplacementArg(), "pointer " + ve0->getId());
+    else if (const StringLiteralExpr *sle = dynamic_cast<const StringLiteralExpr *>(subExpr0))
+        out.ins("LEAX", sle->getArg());
     else
     {
         bool wantLeftSideLValue = (subExpr0->getType() == ARRAY_TYPE);
@@ -1813,7 +2638,7 @@ BinaryOpExpr::emitArrayRef(ASMText &out, bool lValue) const
     }
 
     if (checkNullPtr)
-        out.ins("LBSR", "check_null_ptr_x");
+        callUtility(out, "check_null_ptr_x");
 
     // Optimization: right side is a numerical constant.
     //
@@ -1832,14 +2657,20 @@ BinaryOpExpr::emitArrayRef(ASMText &out, bool lValue) const
     {
         const VariableExpr *ve1 = subExpr1->asVariableExpr();
 
-        // If right side is variable, no need to preserve X during evaluation of index,
+        // If right side is variable (not of type long), no need to preserve X during evaluation of index,
         // because we can load right side directly into D or B.
         //
-        bool preserveX = !ve1;
+        bool preserveX = subExpr1->isLong() || !ve1;
         if (preserveX)
             out.ins("PSHS", "X", "preserve array address, then eval array index");
 
-        if (ve1)  // if index is var, load it directly into D or B: this does not affect X
+        if (subExpr1->isLong())
+        {
+            if (!subExpr1->emitCode(out, true))  // get address of long subscript in X
+                return false;
+            out.ins("LDD", "2,X", "low word of long array subscript");
+        }
+        else if (ve1)  // if index is var, load it directly into D or B: this does not affect X
             out.ins(getLoadInstruction(ve1->getType()), ve1->getFrameDisplacementArg(), "variable " + ve1->getId());
         else if (!subExpr1->emitCode(out, false))  // evaluate index into D or B
             return false;
@@ -1939,19 +2770,27 @@ BinaryOpExpr::emitBoolJumps(ASMText &out,
                 // We have "if ({something} == 0)" or "if ({something} != 0)".
                 // Simplify to "if (!{something})" or "if ({something})" respectively.
                 //
-                be->subExpr0->emitCode(out, false);  // {something}
-                if (be->subExpr0->getType() == BYTE_TYPE)
-                    out.ins("CMPB", "#0");    // TSTB does not affect C, which is needed for LBHI, etc.
+                if (be->subExpr0->isRealOrLong())
+                {
+                    be->subExpr0->emitCode(out, true);  // get address of {something} in X
+                    callUtility(out, be->subExpr0->isReal() ? "isSingleZero" : "isDWordZero");
+                }
                 else
-                    out.emitCMPDImmediate(0);
+                {
+                    be->subExpr0->emitCode(out, false);  // {something}
+                    if (be->subExpr0->getType() == BYTE_TYPE)
+                        out.ins("CMPB", "#0");    // TSTB does not affect C, which is needed for LBHI, etc.
+                    else
+                        out.emitCMPDImmediate(0);
+                }
             }
             else
                 if (!be->emitComparison(out, false, ""))
                     return false;
 
-            bool signedBranch = be->subExpr0->isSigned() && be->subExpr1->isSigned();
+            bool signedBranch = be->isSignedComparison();
 
-            string opcode;
+            const char *opcode = NULL;
             switch (binop)
             {
                 case BinaryOpExpr::EQUALITY:          opcode = "LBEQ"; break;
@@ -1970,6 +2809,16 @@ BinaryOpExpr::emitBoolJumps(ASMText &out,
 
 
     // Not ||, && or relational operator, so compare expression with zero:
+
+    if (condition->isRealOrLong())
+    {
+        if (!condition->emitCode(out, true))  // get address of number in X
+            return false;
+        callUtility(out, condition->isLong() ? "isDWordZero" : (condition->isSingle() ? "isSingleZero" : "isDoubleZero"));
+        out.ins("LBEQ", failureLabel);
+        out.ins("LBRA", successLabel);
+        return true;
+    }
 
     if (!condition->emitCode(out, false))
         return false;

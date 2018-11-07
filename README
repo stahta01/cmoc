@@ -17,3 +17,11 @@ Automake
 
     To do CMOC development, GNU Automake 1.12 or later is required
     (previous versions generate src/parser.h instead of src/parser.hh).
+
+Documentation
+
+    See doc/cmoc-manual.markdown. If the `markdown' preprocessor is
+    installed, then after running the configure script, `make html'
+    in the top source directory will generate doc/cmoc-manual.html,
+    which will include a table of contents.
+

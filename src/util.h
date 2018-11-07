@@ -1,4 +1,4 @@
-/*  $Id: util.h,v 1.22 2016/10/11 01:01:45 sarrazip Exp $
+/*  $Id: util.h,v 1.34 2018/05/23 03:34:13 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -20,7 +20,7 @@
 #ifndef _H_util
 #define _H_util
 
-#include "TypeManager.h"
+#include "TypeDesc.h"
 
 #include <typeinfo>
 #include <vector>
@@ -36,8 +36,10 @@
 #include <stdarg.h>
 #include <memory>
 
-#ifdef _MSC_VER  /* Hacks to help compiler under Visual C++. */
+#ifdef _MSC_VER  /* Hacks to help compile under Visual C++. */
+#define PACKAGE "cmoc"
 #pragma warning(disable:4996)  /* Tolerate so-called "unsafe" functions like _snprintf(). */
+#pragma warning(disable:4822)  /* "local class member function does not have a body" */
 #define snprintf _snprintf
 #define popen _popen
 #define pclose _pclose
@@ -66,13 +68,50 @@ enum TargetPlatform
 };
 
 
-// Representation used by ASMText::InsEffects.
+// Names PC to CC have the values that are expected by the PSHS instruction.
+//
+enum Register
+{
+    PC = 0x80, U = 0x40, Y = 0x20, X  = 0x10,
+    DP = 0x08, B = 0x04, A = 0x02, CC = 0x01,
+    D = A | B,
+    S = 0x100,
+    NO_REGISTER = 0xFFFF
+};
+
+
+// Type qualifier bits.
 //
 enum
 {
-    PC = 0x80, U = 0x40, Y = 0x20, X  = 0x10,
-    DP = 0x08, B = 0x04, A = 0x02, CC = 0x01
+    CONST_BIT = 1,
+    VOLATILE_BIT = 2,
 };
+
+
+// Integer that can combine CONST_BIT and VOLATILE_BIT.
+//
+typedef uint8_t TypeQualifierBitField;
+
+
+typedef std::vector<TypeQualifierBitField> TypeQualifierBitFieldVector;
+
+
+enum ConstCorrectnessCode { CONST_CORRECT, CONST_INCORRECT, INCOMPAT_TYPES };
+
+
+// Returns 0 if the pointer initialization is const-correct (and the types are compatible).
+// Returns -1 if not const-correct (and the types are compatible).
+// Returns -2 if the types are NOT compatible.
+//
+ConstCorrectnessCode isPointerInitConstCorrect(const TypeDesc *declPointedTypeDesc, const TypeDesc *initPointedTypeDesc);
+
+
+// name: Must be in upper-case. Does not have to end with '\0'.
+// Example: getRegisterFromName("DP,...") returns DP.
+// Returns REGISTER if no register name is recognized.
+//
+Register getRegisterFromName(const char *name);
 
 
 typedef std::vector<std::string> StringVector;
@@ -100,6 +139,20 @@ inline void
 appendVector(std::vector<T>& dest, const std::vector<T>& src)
 {
     std::copy(src.begin(), src.end(), std::inserter(dest, dest.end()));
+}
+
+
+// Returns an iterator on the first element of 'v' whose key is equal to 'key'.
+// Returns v.end() if no such element found.
+//
+template <typename Key, typename Value>
+typename std::vector< std::pair<Key, Value> >::iterator
+findInVectorOfPairsByKey(std::vector< std::pair<Key, Value> > &v, const Key &key)
+{
+    for (typename std::vector< std::pair<Key, Value> >::iterator it = v.begin(); it != v.end(); ++it)
+        if (it->first == key)
+            return it;
+    return v.end();
 }
 
 
@@ -163,6 +216,11 @@ struct BreakableLabels
 
 // In hex, returned string starts with dollar sign.
 //
+std::string dwordToString(uint32_t dw, bool hex = false);
+
+
+// In hex, returned string starts with dollar sign.
+//
 std::string wordToString(uint16_t w, bool hex = false);
 
 
@@ -170,6 +228,9 @@ std::string wordToString(uint16_t w, bool hex = false);
 //
 std::string intToString(int16_t n, bool hex = false);
 std::string int8ToString(int8_t n, bool hex = false);
+
+
+std::string doubleToString(double d);
 
 
 void stringToLower(std::string &s);
@@ -191,10 +252,45 @@ inline bool isAssemblyIdentifierChar(char c)
 }
 
 
+// Advances 'index' until s[index] is not a space character or 'index' is the length of 's'.
+// Does nothing if 'index' is already at or beyond the length of 's'.
+//
+inline void passSpaces(const std::string &s, size_t &index)
+{
+    for (size_t len = s.length(); index < len && isspace(s[index]); ++index)
+        ;
+}
+
+
+// Advances 'index' until s[index] is a space character or 'index' is the length of 's'.
+// Does nothing if 'index' is already at or beyond the length of 's'.
+//
+inline void passNonSpaces(const std::string &s, size_t &index)
+{
+    for (size_t len = s.length(); index < len && !isspace(s[index]); ++index)
+        ;
+}
+
+
 bool isRegisterName(const std::string &s);
 
 
 bool isPowerOf2(int16_t n);
+
+
+bool startsWith(const std::string &s, const char *suffix);
+
+bool endsWith(const std::string &s, const char *suffix);
+
+// Returns the removed extension, or an empty string if no period is found.
+//
+std::string removeExtension(std::string &s);
+
+// newExt: Must start with period, if a period is wanted in the new extension.
+//
+std::string replaceExtension(const std::string &s, const char *newExt);
+
+std::string getBasename(const std::string &filename);
 
 
 template <typename ForwardIterator>
@@ -248,6 +344,7 @@ std::string getSourceLineNo();
 
 void errormsg(const char *fmt, ...);
 void errormsgEx(const std::string &explicitLineNo, const char *fmt, ...);
+void errormsgEx(const std::string &sourceFilename, int lineno, const char *fmt, ...);
 
 // diagType: "error" or "warning".
 void diagnoseVa(const char *diagType, const std::string &explicitLineNo, const char *fmt, va_list ap);

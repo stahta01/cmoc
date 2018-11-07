@@ -1,7 +1,7 @@
-/*  $Id: Tree.cpp,v 1.22 2016/07/24 23:03:07 sarrazip Exp $
+/*  $Id: Tree.cpp,v 1.34 2018/05/23 03:34:13 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -22,6 +22,9 @@
 #include "TranslationUnit.h"
 #include "ClassDef.h"
 #include "WordConstantExpr.h"
+#include "DWordConstantExpr.h"
+#include "RealConstantExpr.h"
+#include "StringLiteralExpr.h"
 #include "VariableExpr.h"
 #include "IdentifierExpr.h"
 #include "Declaration.h"
@@ -255,7 +258,7 @@ Tree::getTypeDesc() const
 }
 
 
-string
+const string &
 Tree::getClassName() const
 {
     assert(typeDesc && typeDesc->isValid());
@@ -267,7 +270,7 @@ Tree::getClassName() const
 void
 Tree::setTypeDesc(const TypeDesc *td)
 {
-    assert(!td || td->isValid());
+    assert(td && td->isValid());
     assert(td->type != SIZELESS_TYPE);
     typeDesc = td;
 }
@@ -346,6 +349,26 @@ Tree::warnmsg(const char *fmt, ...) const
 }
 
 
+void
+Tree::errormsg(const Tree *optionalTree, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    diagnoseVa("error", optionalTree ? optionalTree->getLineNo() : getSourceLineNo(), fmt, ap);
+    va_end(ap);
+}
+
+
+void
+Tree::warnmsg(const Tree *optionalTree, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    diagnoseVa("warning", optionalTree ? optionalTree->getLineNo() : getSourceLineNo(), fmt, ap);
+    va_end(ap);
+}
+
+
 const VariableExpr *
 Tree::asVariableExpr() const
 {
@@ -387,10 +410,6 @@ Tree::evaluateConstantExpr(uint16_t &result) const
 uint16_t
 Tree::evaluateConstantExpr() const
 {
-    BasicType type = getTypeDesc()->type;
-    if (type != WORD_TYPE && type != BYTE_TYPE)
-        throw -1;
-
     if (const WordConstantExpr *wce = dynamic_cast<const WordConstantExpr *>(this))
         return wce->getWordValue();
 
@@ -478,7 +497,7 @@ Tree::evaluateConstantExpr() const
         switch (castExpr->getType())
         {
         case BYTE_TYPE:
-            return sub & 0xFF;
+            return castExpr->isSigned() ? sub : (sub & 0xFF);
         default:
             return sub;
         }
@@ -496,8 +515,54 @@ Tree::evaluateConstantExpr() const
 
 
 bool
+Tree::isNumericalLiteral() const
+{
+    if (dynamic_cast<const DWordConstantExpr *>(this))
+        return true;
+    if (dynamic_cast<const RealConstantExpr *>(this))
+        return true;
+
+    uint16_t dummy;
+    if (evaluateConstantExpr(dummy))
+        return true;
+
+    // If --no-relocatable has NOT been specified, no other cases are
+    // considered to be numerical literals.
+    //
+    if (TranslationUnit::instance().isRelocatabilitySupported())
+        return false;
+
+    // Check for identifier that designates a global array name.
+    //
+    if (const IdentifierExpr *ie = dynamic_cast<const IdentifierExpr *>(this))
+    {
+        const Declaration *globalDeclaration = TranslationUnit::instance().getGlobalScope().getVariableDeclaration(ie->getId(), false);
+        if (globalDeclaration)
+            return globalDeclaration->getTypeDesc()->isArray();
+        return ie->isFuncAddrExpr();
+    }
+
+    return false;
+}
+
+
+bool
+Tree::isCastToMultiByteType() const
+{
+    if (const CastExpr *castExpr = dynamic_cast<const CastExpr *>(this))
+    {
+        return castExpr->getTypeSize() > 1;
+    }
+    return false;
+}
+
+
+bool
 Tree::is8BitConstant() const
 {
+    if (isCastToMultiByteType())
+        return false;
+
     uint16_t value = 0;
     if (! evaluateConstantExpr(value))
         return false;

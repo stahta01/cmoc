@@ -170,11 +170,12 @@ DEPDIR = @DEPDIR@
 ECHO_C = @ECHO_C@
 ECHO_N = @ECHO_N@
 ECHO_T = @ECHO_T@
+EGREP = @EGREP@
 ENV = @ENV@
 EXEEXT = @EXEEXT@
 GREP = @GREP@
-HAVE_LWASM = @HAVE_LWASM@
 HEAD = @HEAD@
+HEXDUMP = @HEXDUMP@
 INSTALL = @INSTALL@
 INSTALL_DATA = @INSTALL_DATA@
 INSTALL_PROGRAM = @INSTALL_PROGRAM@
@@ -187,11 +188,13 @@ LEX_OUTPUT_ROOT = @LEX_OUTPUT_ROOT@
 LIBOBJS = @LIBOBJS@
 LIBS = @LIBS@
 LTLIBOBJS = @LTLIBOBJS@
+LWAR = @LWAR@
+LWASM = @LWASM@
+LWLINK = @LWLINK@
 MAKEINFO = @MAKEINFO@
 MANUAL_DATE_EN = @MANUAL_DATE_EN@
 MKDIR_P = @MKDIR_P@
 OBJEXT = @OBJEXT@
-OD = @OD@
 PACKAGE = @PACKAGE@
 PACKAGE_BUGREPORT = @PACKAGE_BUGREPORT@
 PACKAGE_FULL_NAME = @PACKAGE_FULL_NAME@
@@ -206,6 +209,7 @@ PATH_SEPARATOR = @PATH_SEPARATOR@
 PERL = @PERL@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
+STRINGS = @STRINGS@
 STRIP = @STRIP@
 TAIL = @TAIL@
 VERSION = @VERSION@
@@ -255,6 +259,8 @@ top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
 man_MANS = $(PACKAGE).1
 MARKDOWN = markdown
+HTML_DOC_FILES = $(PACKAGE)-manual.html $(PACKAGE)-implementation.html $(PACKAGE)-vectrex.html
+CLEANFILES = $(HTML_DOC_FILES)
 EXTRA_DIST = \
 	$(PACKAGE)-manual.markdown \
 	$(PACKAGE)-implementation.markdown \
@@ -404,6 +410,7 @@ install-strip:
 mostlyclean-generic:
 
 clean-generic:
+	-test -z "$(CLEANFILES)" || rm -f $(CLEANFILES)
 
 distclean-generic:
 	-test -z "$(CONFIG_CLEAN_FILES)" || rm -f $(CONFIG_CLEAN_FILES)
@@ -497,7 +504,7 @@ uninstall-man: uninstall-man1
 .PRECIOUS: Makefile
 
 
-html-local: $(PACKAGE)-manual.html $(PACKAGE)-implementation.html $(PACKAGE)-vectrex.html
+html-local: $(HTML_DOC_FILES)
 
 $(PACKAGE)-manual.html: $(PACKAGE)-manual.markdown toc.pl
 	$(MARKDOWN) $(PACKAGE)-manual.markdown > $(PACKAGE)-manual.html

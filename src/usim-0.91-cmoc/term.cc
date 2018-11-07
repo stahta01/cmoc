@@ -28,7 +28,7 @@ extern "C" int select(int, fd_set *, fd_set *, fd_set *,
 extern "C" int select(int, fd_set *, fd_set *, fd_set *, struct timeval *);
 #endif
 
-extern "C" void bzero(char *, int);
+//extern "C" void bzero(char *, int);
 
 Terminal::Terminal()
 :	input(NULL), output(NULL), input_fd(-1), oattr(), nattr()

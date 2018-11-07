@@ -1,4 +1,4 @@
-/*  $Id: BinaryOpExpr.h,v 1.15 2016/10/19 03:33:39 sarrazip Exp $
+/*  $Id: BinaryOpExpr.h,v 1.38 2018/10/03 06:09:07 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -72,7 +72,7 @@ public:
                                     const std::string &successLabel,
                                     const std::string &failureLabel);
 
-    static std::string getOperatorToken(Op oper);
+    static const char *getOperatorToken(Op op);
 
     virtual bool iterate(Functor &f);
 
@@ -86,10 +86,13 @@ public:
 
 private:
 
-    bool emitComparisonIfNoFuncAddrExprInvolved(ASMText &out) const;
+    bool emitIntegralComparisonIfNoFuncAddrExprInvolved(ASMText &out) const;
     bool emitAssignmentIfNoFuncAddrExprInvolved(ASMText &out,
                                                 bool lValue,
                                                 std::string &assignedValueArg) const;
+    CodeStatus emitRealOrLongComparison(ASMText &out) const;
+    CodeStatus emitNullPointerComparison(ASMText &out, const Tree &ptrExpr, bool invertRelationalOperator) const;
+    bool isSignedComparison() const;
 
     // Forbidden:
     BinaryOpExpr(const BinaryOpExpr &);
@@ -101,22 +104,33 @@ private:
     Tree *subExpr0;  // owns the Tree object
     Tree *subExpr1;  // owns the Tree object
     int16_t numBytesPerElement;
+    class Declaration *resultDeclaration;  // used when result is real number
+
+private:
 
     CodeStatus emitAddImmediateToVariable(ASMText &out,
                                           const VariableExpr *ve0,
                                           uint16_t imm) const;
     CodeStatus emitSubExpressions(ASMText &out, bool reverseOrder = false) const;
+    bool isArrayRefAndLongSubscript(const Tree *&arrayTree, const Tree *&subscriptTree) const;
 
     CodeStatus emitBitwiseOperation(ASMText &out, bool lValue, Op op) const;
     template <typename BinaryFunctor>
     bool emitBinOpIfConstants(ASMText &out, BinaryFunctor f) const;
     static void emitAddIntegerToPointer(ASMText &out, const Tree *subExpr0, bool doSub);
+    static char emitNumericalExpr(ASMText &out, const Tree &expr, bool pushRegister = true);
+    bool isRealAndLongOperation() const;
+    CodeStatus emitRealOrLongOp(ASMText &out, const char *opName, bool pushAddressOfLeftOperand = false) const;
+    CodeStatus emitSignedDivOrModOnLong(ASMText &out, bool isDivision) const;
     CodeStatus emitAdd(ASMText &out, bool lValue, bool doSub) const;
     CodeStatus emitMulDivMod(ASMText &out, bool lValue) const;
+    bool emitMulOfTypeUnsignedBytesGivingUnsignedWord(ASMText &out) const;
     CodeStatus emitLogicalAnd(ASMText &out, bool lValue) const;
     CodeStatus emitLogicalOr(ASMText &out, bool lValue) const;
-    CodeStatus emitShift(ASMText &out, bool isLeftShift, bool changeLeftSide) const;
-    CodeStatus emitAssignment(ASMText &out, bool lValue, Op oper) const;
+    CodeStatus emitShift(ASMText &out, bool isLeftShift, bool changeLeftSide, bool lValue) const;
+    CodeStatus emitLongBitwiseOpAssign(ASMText &out) const;
+    CodeStatus emitLeftSideAddressInX(ASMText &out, bool preserveD) const;
+    CodeStatus emitAssignment(ASMText &out, bool lValue, Op op) const;
     static bool isArrayOrPointerVariable(const Tree *tree);
     static int16_t getNumBytesPerMultiDimArrayElement(const Tree *tree);
     CodeStatus emitArrayRef(ASMText &out, bool lValue) const;

@@ -10,16 +10,16 @@ The CMOC C-like 6809-targeting cross-compiler
 
 `sarrazip@sarrazip.com`
 
-Copyright &copy; 2003-2016
+Copyright &copy; 2003-2018
 
 <http://sarrazip.com/dev/cmoc.html>
 
 Distributed under the **GNU General Public License**,
 **version 3 or later** (see the License section).
 
-Version of CMOC covered by this manual: **0.1.33**
+Version of CMOC covered by this manual: **0.1.54**
 
-Date of this manual: 2016-10-23
+Date of this manual: 2018-10-04
 
 
 Introduction
@@ -34,20 +34,14 @@ Disk Basic environment.  (As of version 0.1.18, targeting the
 [Vectrex](https://en.wikipedia.org/wiki/Vectrex) video game console
 is also supported.)
 
-CMOC is not meant to be able to compile existing C programs.
-It is a tool to develop new programs for the Color Computer (CoCo).
-
 The efficiency of the generated machine language is modest,
 but the resulting machine language will be faster
 than the equivalent interpreted
 [Color Basic](https://en.wikipedia.org/wiki/Color_BASIC) program.
 This was the initial goal of the CMOC project.
 
-The main features missing from C are longs, floats, const and
-separate compilation.
-
 CMOC itself is written in [C++](https://en.wikipedia.org/wiki/C%2B%2B)
-for a Unix-like system.  The C++ source code is somewhat complicated
+for a Unix-like system.  The source code is somewhat complicated
 because of the anarchic development process that gave rise to CMOC.
 Years ago, development was able to take off because having a working
 product had higher priority than having a clean but theoretical design.
@@ -58,21 +52,22 @@ Features
 
 ### Unsupported features
 
-- [Floating-point](https://en.wikipedia.org/wiki/Floating_point) arithmetic
-  (no float or double types).
+- `float` and `double` arithmetic for a target other than the CoCo Disk Basic
+  environment. (CMOC generates calls to the Color Basic floating point routines.)
 
-- 32-bit arithmetic (no long type). Type char is 8 bits and short and int are 16 bits.
+- Double-precision [floating-point](https://en.wikipedia.org/wiki/Floating_point)
+  arithmetic (the `double` keyword is accepted but is an alias for `float`).
 
-- The const keyword.
+- 64-bit arithmetic (no `long long` type).
 
-- Separate compilation (i.e., compiling several source files
-  to several object files that get linked together).
+- The `volatile` keyword. (It is accepted but ignored,
+  and using it causes a warning to be issued.)
 
-- Bit fields.
+- Bit fields. The _TYPE NAME : BITS_ notation is actually accepted by the compiler,
+  since version 0.1.52, but the field is allocated with the given _TYPE_,
+  regardless of the number of bits specified after the colon.
 
-- Type-safe function pointers.
-  (The address of a function has type `void *`
-  and the return type of a call through a pointer is assumed to be int.)
+- Arrays of function pointers (and typedefs thereof).
 
 - Typedefs local to a function (global typedefs are supported).
 
@@ -81,16 +76,14 @@ Features
 - Indirection of a pointer to a *struct* used as an r-value (e.g., `*ptr` alone).
   The l-value case is supported, e.g., `(*ptr).field`.
 
-- Passing a struct by value to a function.
-
-- Comma expressions (e.g., x = 1, y = 2, z = 3;).
-
-- register, extern, static, volatile. The register keyword is accepted but ignored.
+- The `register` keyword is accepted but ignored.
 
 - [K&R](https://en.wikipedia.org/wiki/C_%28programming_language%29#K.26R_C)
-  function definitions, i.e., f() int a; { ... }
+  function definitions, e.g., f() int a; { ... }
 
-- A continue statement in a switch() body.
+- A `continue` statement in a switch() body.
+
+- An expression of type long, float or double as an argument of a switch().
 
 - Implementing [Duff's device](https://en.wikipedia.org/wiki/Duff%27s_device)
   in a switch().
@@ -101,6 +94,14 @@ Features
 - Zero-element arrays.
 
 ### Supported C and C99 features
+
+- Single-precision [floating-point](https://en.wikipedia.org/wiki/Floating_point)
+  arithmetic (since version 0.1.40) under the Disk Basic environment (the `double`
+  keyword is accepted but is an alias for `float`).
+
+- 8-, 16- and 32-bit arithmetic. Type `char` is 8 bits, `short` and `int`
+  are 16 bits and `long` is 32 bits. Each of these types can be `signed`
+  or `unsigned`.
 
 - Pointers, including pointers to pointers, etc.
 
@@ -115,47 +116,49 @@ Features
   Initializing a struct from another one is also supported (e.g.,
   `struct S a; struct S b = a;`).
 
-- char (8 bits), int (16 bits), signed, unsigned, typedef (global only).
-  A function's return type can be void.
+- Passing a struct or union by value to a function (since version 0.1.40).
+  (If the size of the struct or union is 1 byte, then it is passed as a
+  16-bit word whose least significant byte is the struct or union.)
 
-- Declaring a variable in the middle of a function, as in
-  [C99](https://en.wikipedia.org/wiki/C99).
+- Returning a struct or union by value from a function (since version 0.1.40).
+
+- Declaring a variable after the function's code
+  has started, as in [C99](https://en.wikipedia.org/wiki/C99).
 
 - while, do, for, switch, continue, break.
 
 - Declaring a for() loop's control variable in the for() itself as in C99,
-  i.e., for (int i = 0; ...) {}.
+  e.g., for (int i = 0; ...) {}.
 
-- Declaring more than one variable on the same line, i.e., int a = 0, b = 1;
+- Declaring more than one variable on the same line, e.g., int a = 0, b = 1;
 
 - [Variadic functions](https://en.wikipedia.org/wiki/Variadic_function),
-  i.e., void foo(const char \*format, ...). There must be at least one named
+  e.g., void foo(char \*format, ...). There must be at least one named
   argument before the ellipsis (...), as in ISO C.
 
 - Ending an initializer list with a comma.
 
 - Use of the [C preprocessor](https://en.wikipedia.org/wiki/C_preprocessor)
   (the system's cpp is invoked): #include, #define, #ifdef, etc.
-  (Use #includes instead of separating the program in more than one .c file.)
 
-- Unions (since version 0.1.12).
+- Unions.
 
-- Enumerations (since version 0.1.29).
+- Enumerations.
 
-- Generating [OS-9](https://en.wikipedia.org/wiki/OS-9) executables (since
-  version 0.1.15, using the `--os9` command-line option).
+- Type-safe function pointers.
+
+- The `const` keyword. (Const-correctness issues are diagnosed as warnings,
+  not as errors, to avoid breaking code written before version 0.1.50.)
+
+- Comma expressions (e.g., x = 1, y = 2, z = 3;).
+
+- Binary literals (e.g., `0b101010` for 42). Note that this feature is not part
+  of Standard C.
+
+- Generating [OS-9](https://en.wikipedia.org/wiki/OS-9) executables
+  (using the `--os9` command-line option).
 
 - [Goto](https://en.wikipedia.org/wiki/Goto) and non-case labeled statements.
-
-
-Differences with C
-------------------
-
-CMOC is sometimes more strict than C on some points.
-For instance, it is an error to call an undeclared function.
-
-If a large discrepancy exists between C and CMOC,
-a bug report should be filed.
 
 
 Installing CMOC
@@ -170,15 +173,13 @@ Deploy the .tar.gz source archive in a directory, go to this directory,
 read the generic installation instructions in the INSTALL file, then (typically)
 give these commands:
 
-> tar -xzf cmoc-0.1.XX.tar.gz
-
-> cd cmoc-0.1.XX
-
-> ./configure --prefix=/some/installation/dir
-
-> make
-
-> make install
+<blockquote><pre>
+tar -xzf cmoc-X.Y.Z.tar.gz
+cd cmoc-X.Y.Z
+./configure --prefix=/some/installation/dir
+make
+make install
+</pre></blockquote>
 
 The sudo prefix may be needed to do a `make install`
 to a system directory like /usr/local/bin.
@@ -196,11 +197,13 @@ Running CMOC
 
 ### Compiling a C program
 
-The following must be in the path:
+The following must be in the search path:
 
 - A C preprocessor callable by the name "cpp".
 
-- The [LWTOOLS](http://lwtools.projects.l-w.ca/) lwasm assembler.
+- The [LWTOOLS](http://lwtools.projects.l-w.ca/) lwasm assembler,
+  and lwlink linker. If libraries are to be created, then the
+  lwar archiver must also be in the search path.
 
 To compile a program written in the file foo.c, run this command:
 
@@ -208,7 +211,7 @@ To compile a program written in the file foo.c, run this command:
 
 By default, the resulting .bin file will load at address $2800 on a CoCo
 (see the `#pragma org` directive elsewhere in this manual).
-The generated machine language is position-independent, so the .bin file
+The generated machine language is **position-independent**, so the .bin file
 can be loaded with an offset, by passing a second argument to Disk Basic's
 LOADM command.
 
@@ -219,7 +222,7 @@ to a 35-track Disk Basic diskette image file. For example:
 
 > writecocofile testing.dsk foo.bin
 
-Pass `--help` to writecocofile for more options.
+Pass `--help` to writecocofile for the available options.
 
 For more information on running a CoCo emulator on a GNU/Linux system, see
 <http://sarrazip.com/emul-coco.html>.
@@ -242,37 +245,42 @@ Option `-O2` is equivalent to using the default (full) optimization level.
 
 From the .c file passed to `cmoc`, the compiler generates these files:
 
-- **.asm**: The assembler file written by CMOC. It contains `#include`
-  statements that refer to stdlib.inc and stdlib-data.inc, which are
-  typically installed in /usr/share/cmoc, or elsewhere depending
-  on the installation prefix given to the `configure` script.
+- **.s**: The assembler file written by CMOC.
 
-- **.i**: The .asm file as processed by the C preprocessor (cpp), using
-  the include directories and defines passed to the `a09` assembler script.
-  This file contains pure assembly, without #include statements or comments.
+- **.o**: The object file generated by the assembler.
 
 - **.lst**: The listing generated by the 6809 assembler (lwasm).
   This is useful to see exactly where the code and data end up in memory.
 
-- **.hex**: The executable program in
-  [Intel HEX format](http://en.wikipedia.org/wiki/Intel_HEX).
-  This format is understood by the usim 6809 simulator that is used
-  by the `make check` test suite.
+When linking, these files are generated:
 
 - **.bin**: The executable in Disk Basic .bin format. This can be
   transfered to a CoCo or emulator and loaded with the LOADM command.
   (If compiling for OS-9&mdash;with the `--os9` command-line switch&mdash;the
   executable has the name of the C file without the extension.)
 
+- **.map**: The linking map generated by lwlink. It lists the sections
+  and symbols that appear in the final executable.
+
+- **.link**: The linking script for lwlink. It lists the sections that
+  must be gathered by the linker to produce the final executable.
+
 When distributing the .bin file to CoCo users, it is not
 necessary or useful to accompany it with the other generated files.
+
+These files are deleted automatically when the compiler finishes,
+except for the executable. To keep those intermediate files, pass
+`--intermediate` (or `-i`) on the command line.
 
 ### The Motorola S-record (SREC) format
 
 Pass the `--srec` option to cmoc to make
 it generate an executable in
 [Motorola S-record format](https://en.wikipedia.org/wiki/SREC_%28file_format%29).
-The additional file will have the .srec extension.
+The executable file will have the .srec extension.
+
+Since version 0.1.43 of the compiler, this format is the default one
+when targetting the USim 6809 simulator (with the `--usim` option).
 
 ### The Vectrex video game console
 
@@ -283,6 +291,291 @@ which can be viewed in a browser.
 
 Note that questions regarding Vectrex-specific issues should be
 addressed to **Johan Van den Brande** at `johan@vandenbrande.com`.
+
+
+Modular compilation and linking
+-------------------------------
+
+Since version 0.1.43, CMOC has supported modular (separate) compilation
+as well as linking several modules (object files) together.
+
+In other words, the user can now separate a large program into several
+.c files, compile each of these files to a .o object file, then have
+CMOC link them together into a final executable.
+
+LWTOOLS' lwasm and lwlink commands must be in the search path, otherwise,
+the user can use the `--lwasm=` and `--lwlink=` command-line options
+to specify the full path of these commands.
+
+
+### Creating libraries
+
+Object files (.o) can be grouped into a library by using LWTOOLS'
+lwar command:
+
+    lwar -c libstuff.a foo.o bar.o baz.o
+
+Library filenames should have the `lib` prefix and be given the `.a`
+extension, so that they will be compatible with the `-l` option that
+is used to specify a library to link with, e.g.:
+
+    cmoc -o prog.bin prog.c -lstuff
+
+In this case, only the .o files of libstuff.a that are actually needed
+will be copied to the executable.
+
+It is possible to specify `libstuff.a` on the CMOC command line, but
+then all of the library's object files get copied to the executable.
+
+The `-l` option must be specified after the source or object file(s).
+
+The `-L` option can be used to specify a directory in which to search
+for libraries specified by `-l`. The `-L` option can be specified
+before or after the source or object file(s).
+
+An object file is indivisible as far as the linker is concerned,
+and therefore, so is a C file. This means that either all of the
+functions and globals in a C file will end up in the executable, or
+none of them will.  When designing a library, it may be desirable to
+put each function in its own C file, so that only the functions used
+by the parent program will be copied into the executable.
+
+
+### Multiple definitions
+
+Because of the way the linker works, there is no error message when the
+same function or global variable is defined with external linkage by
+two modules. Only a warning is issued. Such a warning should be viewed
+as an error and the duplication should be resolved.
+
+For similar reasons, warnings will be issued when two modules define
+static functions or globals with the same name, e.g., `static int n;`.
+Such warnings may be safely ignored, because the symbols are static,
+thus not exported, and will not actually clash.
+
+These ambiguous diagnostic messages may be fixed by future versions of
+CMOC and LWTOOLS.
+
+
+### Specifying code and data addresses
+
+In a modular program, the address at which code and data must be
+positioned must _not_ be specify with the `#pragma org`
+and `#pragma data` directives. Those addresses must be specified
+with the `--org` and `--data` command-line options when invoking
+CMOC to perform linking:
+
+<blockquote><pre>
+cmoc -c mod1.c
+cmoc -c mod2.asm
+cmoc -o prog.bin --org=C000 --data=3000 mod1.o mod2.o
+</pre></blockquote>
+
+The same goes for `#pragma limit`: the `--limit` option must be
+used instead.
+
+Starting with version 0.1.43, these pragrams can only be used when:
+* compiling directly from a C file to an executable
+(i.e., the `-c` option is not used);
+* using the `--monolith` option.
+
+
+### Uncalled functions
+
+Non-static functions that are not called are still emitted, because
+they might be invoked by another module. This cannot be determined
+before the linking phase.
+
+
+### Assembly language modules
+
+An object file typically comes from a C file, but an assembly language
+file can also be passed to CMOC, which will invoke the assembler on it.
+That file's extension must be `.s` or `.asm`.
+
+There are conventions to be observed however:
+
+* Most of the code must be in an assembler section named `code`:
+
+<blockquote><pre>
+        SECTION code  
+_func   LDD     #42  
+        RTS  
+        ENDSECTION  
+</pre></blockquote>
+
+* The exception is code that initializes global variables.
+That code must be in a section called initgl.
+Such a section must **not** end with an RTS:
+
+<blockquote><pre>
+        SECTION initgl
+        LDD     #1000
+        STD     _someGlobal,PCR
+        ENDSECTION
+</pre></blockquote>
+
+* Functions and global variables that are to be made available to
+  other modules must be exported with an EXPORT directive,
+  e.g., `_func EXPORT`.
+
+* Functions and global variables that are expected to be provided
+  by _other_ modules must be imported with an IMPORT directive,
+  e.g., `_printf IMPORT`.
+
+* The code should preferrably be position-independent, but that is
+  not a requirement if the executable will always be loaded at the
+  address it was compiled for.
+
+* See the *Calling convention* section elsewhere in this manual
+for the rules to observe.
+
+* Read-only global variables and values must be in a section named
+`rodata`. This includes string literals.
+String literals must end with a null byte.
+If the `\\n` sequence is used in the literal, it must be encoded
+as byte 10 ($0A).
+
+* Writable global variables that have static initializers (typically
+arrays) must be in a section named `rwdata`.
+
+* Writable global variables that do not have initializers,
+or that are initialized by executing code in an `initgl` section,
+must be in a section named `bss`. This section must only give `RMB`
+directives, and no `FCC`, `FDB` or `FCB` directives. The `bss`
+section follows that rule so that it does not take any space in
+the executable file (at least with the Disk Basic BIN format).
+
+* Function names and global variable names must start with
+an underscore. In other words, if the C name is `foo`, then the
+assembly language name must be `_foo`.
+
+
+### Merging a binary file with the executable
+
+To include an arbitrary file in the final executable, LWASM's
+`INCLUDEBIN` directive can be used.
+
+As an example, assume the binary file is called `blob.dat` on the
+filesystem of the computer the program is being developed on.
+Create a `blob.asm` file that contains this:
+
+            SECTION rodata
+            EXPORT _blob
+            EXPORT _blob_end
+    _blob
+            INCLUDEBIN blob.dat
+    _blob_end
+            ENDSECTION
+
+Specifying `rodata` will put the data in the read-only section
+of the program. To put it in the read-write section, specify
+`rwdata` instead.
+
+Prefixing the symbols with an underscore is necessary to
+comply with CMOC's naming convention. This avoids conflicts with
+symbols generated by CMOC.
+
+Invoke LWASM to have it generate an object file:
+
+    lwasm -fobj --output=blob.o blob.asm
+
+In the C program, access the data this way:
+
+        unsigned char *start, *end;
+        asm
+        {
+    _blob     IMPORT  
+    _blob_end IMPORT  
+            leax    _blob,pcr
+            stx     :start
+            leax    _blob_end,pcr
+            stx     :end
+        }
+
+After this code, the `start` and `end` pointers delimit the data
+as loaded in memory on the target machine. (Note that there is no
+way to force the data to be loaded at a specific address. The position
+of the data is decided by the linker, the origin address set by `--org`
+and the offset passed to `LOADM` on a CoCo.)
+
+When invoking CMOC to perform the linking phase, add `blob.o` to
+the command line.
+
+See the [LWTOOLS](http://lwtools.projects.l-w.ca/) site for details
+on assembler directives.
+
+
+### Importing symbols used by inline assembly
+
+If an inline assembly block uses a global variable that is provided
+by another module, an import directive must be included:
+
+<blockquote><pre>
+void f()
+{
+    asm
+    {
+_foo    IMPORT
+        ldd     #42
+        std     _foo
+    }
+}
+</pre></blockquote>
+
+
+### Generating Prerequisites Automatically
+
+A multi-module project typically uses a makefile to manage the build
+process.
+
+CMOC can automatically generate a dependencies file, with a `.d`
+extension, that lists the source files that were encountered during
+the compilation of a C file. The dependency file will be compatible
+with GNU Make.
+
+This is done by passing either the `--deps-only` or `--deps` option
+to the compiler. A `.d` file will be generated with a makefile rule
+like this:
+
+<blockquote><pre>
+main.o main.d : main.c foo.h bar.h baz.h
+</pre></blockquote>
+
+Option `--deps-only` stops right after generating this dependency file.
+Option `--deps` can be used with `-c` to have the compiler both compile
+the C file and generate the dependency file.
+
+The [Generating Prerequisites Automatically](https://www.gnu.org/software/make/manual/html_node/Automatic-Prerequisites.html)
+section of the [GNU Make](https://www.gnu.org/software/make/manual/)
+manual should be consulted for details on how to write a makefile that
+uses this mechanism. GNU Make's `-M` is similar to `--deps-only`, while
+`-MMD` is similar to `--deps`.  Note that the `sed` command mentioned in
+that manual is not necessary with CMOC, which automatically includes the
+`.d` filename in the generated rule.
+
+The name of the `.d` file is formed from the name of the `.o` file to
+be generated.
+
+This option is not available in monolithic mode and it has no effect
+when also specifying the `-E` option (which prints the preprocessor
+output and stops).
+
+
+### Legacy monolithic mode
+
+The legacy "monolithic" mode is available when the
+`--monolith` option is passed. In that mode, only one `.c` file
+may be specified. It will be compiled directly to an executable.
+During that compilation the `CMOC_MONOLITH` preprocessor identifier
+is defined. This can be used to alter the code depending on the
+compilation mode.
+
+Monolithic mode is deprecated and may be removed in future versions
+of CMOC.
+
+As of version 0.1.43, OS-9 and Vectrex support is only available in the
+monolithic mode.
 
 
 Programming for CMOC
@@ -350,9 +643,9 @@ it uses initially:
         asm
         {
             leax    program_start,pcr
-            stx     s
+            stx     :s
             leax    program_end,pcr
-            stx     e
+            stx     :e
         }
         printf("START AT %p, END AT %p.\n", s, e);
         return 0;
@@ -370,18 +663,6 @@ block.  When using the `#pragma data` directive (see elsewhere
 in this manual), the *writable* globals will not be between
 `program_start` and `program_end`.
 
-As of version 0.1.20, CMOC automatically displays the program start
-and end addresses, as well as the start and end of the writable data
-section, when the `--verbose` option is passed.  In the following
-example, `#pragma org` and `data` have been used to position the
-code and data separately:
-
-    Notable addresses:
-      program_start             $C000
-      program_end               $DC39
-      writable_globals_start    $3800
-      writable_globals_end      $3B7A
-
 ### Enforcing a limit address on the end of the program
 
 As of version 0.1.20, CMOC accepts the `--limit=X` option.  When it
@@ -397,28 +678,45 @@ and for Basic's string space.
 It is not necessary to pass the `--verbose` option to use the
 `--limit` option.
 
+A `#pragma limit 0xNNNN` directive in the source code achieves
+the same purpose as `--limit`.
+
 ### Position-independent code
 
 All 6809 code generated by CMOC is position-independent, i.e.,
 it can be loaded at any address and will still work.
 
-### Targeting CoCo Disk Basic or the USim 6809 simulator
+### Determining that CMOC is the compiler
+
+Since version 0.1.48, CMOC automatically defines `_CMOC_VERSION_`
+to be a 32-bit number of the form XXYYZZZ when the version
+is X.Y.Z. For example, version 0.1.48 defines `_CMOC_VERSION_`
+as 1048. This can be useful when some C code needs to do something
+under CMOC but something else under another compiler.
+
+### Specifying the target platform
 
 By default, the compiler defines the `_COCO_BASIC_` preprocessor
 identifier.  This identifier can be used to adapt a program to
 make it use alternative code depending on whether it will run under
 Disk Extended Color Basic or not.
 
-By passing the `--usim` option, the compiler will target the USim
-6809 simulator, which comes with CMOC.  No .bin file is produced
-in this case.  The .hex file can be executed by passing its name to
+To target OS-9, pass the `--os9` option. The compiler will define `OS9`.
+
+To target the Vectrex, pass `--vectrex`. The compiler will define `VECTREX`.
+
+When passing `--usim`, the compiler targets the USim
+6809 simulator, which comes with CMOC.
+The `USIM` identifier will be defined.
+No .bin file is produced in this case.
+The .hex file can be executed by passing its path to
 `src/usim-0.91-cmoc/usim`.
 
 ### The standard library
 
 CMOC's standard library is small. The program must `#include <cmoc.h>`
 to use functions like printf(). See that file for a list of implemented C functions.
-Most are standard C functions while others are CMOC extensions.
+Many are standard C functions while others are CMOC extensions.
 
 dwtoa(), meaning "double word to ASCII", is not a standard C function.
 It takes an 11-character buffer and two
@@ -430,37 +728,27 @@ to a string equal to "65536".
     char buf[11];
     char *p = dwtoa(buf, 1, 0);
 
+Since version 0.1.41 however, it is simpler to use the `long` type and to
+call printf() or sprintf() with format %ld or %lu to obtain an ASCII decimal
+representation.
+
 readline() acts like Basic's LINE INPUT command and returns the address of
 the string entered.
-
-Each assembly program generated by CMOC includes stdlib.inc, which assembles
-to about 2000 bytes of machine code. In the future, a mechanism could be implemented
-in the compiler to reduce this overhead. In the mean time, one can remove the
-unneeded parts of this file, if memory is at a premium.
-
-#### Size of the standard library
-
-As of version 0.1.9, the standard library takes up almost 2048
-bytes when all of its functions are called by the program.
-
-But as of that version, only the standard library functions that
-are actually called are included in the final assembly program.
-
-A program that calls none of these functions will shed about 2000
-of those bytes.
 
 #### printf()
 
 CMOC's printf() function supports %u, %d, %x, %X, %p, %s,
-%c and %%. Specifying a field width is allowed, but
-a left justification is only supported for strings, i.e.,
+%c, %f and %%. Specifying a field width is allowed, except for %f.
+A left justification is only supported for strings, e.g.,
 `%-15s` will work, but `%-6u` will not.
-Zero padding for a number is supported (e.g., `%04x`).
+Zero padding for an integer is supported (e.g., `%04x`).
+
+The `l` modifier is supported for 32-bit longs (e.g., "%012ld");
 
 %p always precedes the hexadecimal digits with `$`, as per
 the CoCo assembly language notation. %x and %X do not generate
 such a prefix. %p, %x and %X always print letter digits as
-capital letters (A to F, not a to f).
+capital letters (`A` to `F`, not `a` to `f`).
 
 printf(), like putchar() and putstr(), sends its output one
 character at a time to Color Basic's PUTCHR routine, whose
@@ -485,9 +773,9 @@ first define the new routine:
         asm
         {
             pshs    x,b  // preserve registers used by this routine
-            sta     ch
+            sta     :ch
         }
-        
+
         // Insert C statements that print or otherwise process 'ch'.
 
         asm
@@ -564,8 +852,15 @@ The memory after that is presumed to be free for dynamic allocation.
 
 In the case of the CoCo, the assumption is that the program is loaded
 after the Basic program and variables. This means the space that
-sbrk() can allocate from goes from there to the top of the stack,
+`sbrk()` can allocate from goes from there to the top of the stack,
 which is around $3F00 on a 16K CoCo and $7F00 on a 32K-or-more CoCo.
+Do not use `sbrk()` if these assumptions do not apply, e.g., when
+using `--data` to position the writable globals elsewhere than
+right after the code and read-only data.
+
+Use the `--stack-space` option or the `#pragma stack_space` directive
+(documented elsewhere in this manual) when the program needs more than
+1024 bytes of stack space.
 
 To determine how much of that memory is available for sbrk(),
 call sbrkmax(), which returns the number of bytes as a size\_t
@@ -574,11 +869,6 @@ before the stack pointer, leaving those bytes to program calls and
 local variables.
 
 sbrkmax() returns 0 if the program is loaded after the stack space.
-
-Be careful when using both sbrk() and #pragma const\_data (see
-previous section). If the data is not positioned correctly, sbrk()
-calls may end up allocating memory that is used by some global
-variables.
 
 
 ### Inline assembly
@@ -600,6 +890,10 @@ end at the next blank line (or end of the `asm` block). Refer to the
 [LWASM manual about its symbols](http://lwtools.projects.l-w.ca/manual/manual.html#AEN237)
 for details on using local labels.
 
+The assembler may also support `$` as a local label marker, but it is not
+recommended to use it that way in inline assembly because it may hinder
+portability to OS-9, where `$` is not used as a local label marker.
+
 The following example fills array `out` with `n` copies of character `ch`,
 then returns the address that follows the region written to:
 
@@ -612,7 +906,7 @@ then returns the address that follows the region written to:
         {
             ldx     out         /* comments must be C style */
             lda     ch          // or C++ style
-            ldb     n
+            ldb     n           ; or semi-colon comment (passed to assembler)
     f_loop:
             sta     ,x+
             decb
@@ -653,6 +947,16 @@ be relocatable.
 The BSR instruction is not recommended because it is a short branch
 and if the called function is too far from the call, the assembly
 step will fail.
+
+Since 0.1.39, semi-colon comments are supported. They are passed verbatim
+to the assembler.
+
+Note that using inline assembly is likely to make the program non portable
+to other C compilers.
+
+See the *Calling convention* section elsewhere in this manual
+for the rules to observe. Namely, inline assembly must not modify
+U or Y. It is allowed to modify D, X and CC.
 
 
 #### Preprocessor identifiers in inline assembly
@@ -733,38 +1037,32 @@ in that function and the function's parameters cannot be accessed
 by name.  The assembly code is allowed to refer to global
 variables however.
 
-CMOC still ends the function with the RTS instruction
-(or RTI if the function is declared with the `interrupt` modifier.)
+By default, the compiler ends the function with the RTS instruction
+(or RTI if the function is declared with the `interrupt` modifier).
+To keep the compiler from emitting that instruction (RTI as well as RTS),
+add the `__norts__` keyword:
+
+    asm __norts__ int f(int m, int n) { ... }
 
 See the *Calling convention* section elsewhere in this manual
 for the rules to observe. In particular, note that byte arguments
 are promoted to words, which are pushed onto the stack in the big
 endian byte ordering.
 
-#### Functions that are only called by assembly code
-
-Normally, CMOC does not emit code for a function that is never
-called and whose address is never taken. But such a function
-could still be called by inline assembly. This can lead to an
-assembler error that complains that the LBSR or JSR argument
-is not defined.
-
-CMOC can be forced to emit all functions by passing it the
-`--emit-uncalled` option.
-
 
 ### Interrupt Service Routines
 
 CMOC supports the `interrupt` function modifier, which tells the
 compiler to end the function with an RTI instruction instead of
-an RTS. For example:
+an RTS. For example, the following function handles the VSYNC
+60 hertz interrupt:
 
     interrupt void newCoCoIRQRoutine()
     {
         asm
         {
             lda     $FF03           // check for 60 Hz interrupt
-            bpl     irqISR_end      // return if 63.5 us interrupt
+            lbpl    irqISR_end      // return if 63.5 us interrupt
             lda     $FF02           // reset PIA0, port B interrupt flag
         }
 
@@ -777,14 +1075,27 @@ an RTS. For example:
         // Nothing here, so that next instruction is RTI.
     }
 
+This routine could be hooked to the IRQ vector this way on a CoCo:
+
+    disableInterrupts();
+    unsigned char *irqVector = * (unsigned char **) 0xFFF8;
+    *irqVector = 0x7E;  // extended JMP extension
+    * (void **) (irqVector + 1) = (void *) newCoCoIRQRoutine;
+    enableInterrupts();
+
+Header `<coco.h>` defines macros disableInterrupts() and enableInterrupts().
+They set and reset the F and I condition codes.
+
+The FIRQ vector is at $FFF6.
+
+Note that using the `interrupt` keyword is likely to make
+the program non portable to other C compilers.
+
 
 ### Function pointers
 
 The address of a function can be taken and stored in order to be
-called through that pointer later. However, unlike in the C language,
-a CMOC function pointer expression always has type `void *`.
-
-This means that function pointers are not type-safe with CMOC.
+called through that pointer later.
 
 The following example shows that the two syntaxes used in C to call
 a function through a pointer are supported by CMOC:
@@ -792,35 +1103,26 @@ a function through a pointer are supported by CMOC:
     unsigned char f(int a, char b) { ... }
     int main()
     {
-        void *pf = f;
-        unsigned char c0 = (unsigned char) (*pf)(1000, 'x');
-        unsigned char c1 = (unsigned char) pf(1001, 'y');
+        unsigned char (*pf)(int a, char b) = f;
+        unsigned char c0 = (*pf)(1000, 'x');
+        unsigned char c1 = pf(1001, 'y');
         return 0;
     }
-
-Because CMOC does not know the return type of such a call, it is
-important to cast it to the exact type returned by the function
-that is actually called.
 
 A member of a struct can point to a function. For example:
 
     struct S
     {
-        void *fp;
+        void (*fp)();
     };
     void g() { ... }
     int main()
     {
         struct S s = { g };  // member 'fp' points to g()
         s.fp();  // call g()
+        (*s.fp)();  // call g()
         return 0;
     }
-
-Since version 0.1.28, CMOC supports the full function pointer
-notation, e.g., `int (*pf)(char, int *, char[])`, but the
-effective type of such a pointer is still `void *`. This full
-notation can be used to declare a variable but also a function
-parameter.
 
 
 ### Array initializers
@@ -856,17 +1158,133 @@ to the values in the initializer.
 
 For example:
 
+    #include <cmoc.h>
     int a[2] = { 13, 17 };
-    int main() { a[0]++; printf("%d\n", a[0]); }
+    int main() { a[0]++; printf("%d\n", a[0]); return 0; }
 
 The first time this program is executed, a[0] starts at 13,
-it is incremented to 14, which is the number that is printed.
+then is incremented to 14, which is the number that is printed.
 
 The second time this program is executed, a[0] starts at 14
 because array `a` is _not_ reinitialized upon entry.
 
 This is meant to save memory by not including a second copy
 of the initializer just for run-time initialization purposes.
+
+
+### Array sizes
+
+One must be careful when specifying an array size using an
+arithmetic expression, like this:
+
+    char a[256 * 192 / 8];
+
+This will generate an "invalid dimensions" error message.  This is
+because the three numerical constants are of type `int`, which means
+they are signed integers.  In 16-bit signed arithmetic, 256 \* 192 is
+-16384, which gets divided by 8, which is -2048. This size is rejected
+by the compiler, which only accepts array sizes between 1 and 32767
+bytes inclusively.
+
+The fix is to force the expression to be evaluated with
+unsigned integers:
+
+    char a[256U * 192U / 8U];
+
+This will be 6144 bytes, as intended.
+
+
+### Compiling a ROM image for a cartridge
+
+To help support the ROM cartridge format, CMOC supports directives
+that allow telling it to assemble the code, the string, long and real literals,
+and the read-only global variables at the typical CoCo cartridge ROM
+address of $C000, while mapping the writable global variables
+at a RAM address like $3800.
+
+This is achieved by using the four `#pragma` directives that
+appear in this example:
+
+    #pragma org $C000
+    #pragma data $3800
+
+    int f() { return 42; }
+
+    const int g = 100;
+    const unsigned char byteArray[3] = { 11, 22, 33 };
+    const char text[] = "hello";
+
+    int anotherWritableGlobal;
+
+    int main()
+    {
+        anotherWritableGlobal = 99;
+        return 0;
+    }
+
+`g` is read-only because it is of a constant type.
+`byteArray` and `text` are read-only because they are arrays whose
+elements are of a constant type.
+
+These three variables are thus automatically put in the read-only
+section, next to the code. This means they will be part of the
+cartridge ROM, instead of using up RAM space.
+
+In the case of `text`, the use of the empty brackets is necessary for
+that variable to be seen as read-only.
+Declaring this variable as `const char *text` would lead the compiler
+to see it as writable: the `text` pointer itself can be modified,
+although the characters it points to cannot.
+
+Using `sbrk()` can be dangerous when the writable data section is not
+in the default position.
+
+After compiling the program, the .bin file normally contains
+a single contiguous block of code. This block must be extracted from
+the .bin file and, for a test with the XRoar emulator, it must then be
+padded at the end with enough bytes so that the total file length is
+a multiple of 256. The following Perl script does this:
+
+    #!/usr/bin/perl
+    sysread(STDIN, $h, 5) == 5 or die;
+    sysread(STDIN, $rom, 0xFFFF) > 0 or die;
+    my $romLen = length($rom) - 5;
+    binmode STDOUT or die;
+    print substr($rom, 0, $romLen);
+    my $extra = $romLen % 256;
+    print chr(0) x (256 - $extra) if $extra;
+
+The script, in a file called bin2cart.pl, can be used this way:
+
+    perl bin2cart.pl < foo.bin > foo.rom
+
+This ROM image can be tested in the XRoar emulator this way:
+
+    xroar -machine cocous -cart-autorun -cart foo.rom
+
+Note that XRoar requires the image file to have the .rom extension.
+
+In a cartridge-based program written as above, the CoCo's 60 Hz IRQ interrupt is
+not enabled, so Basic's TIMER counter (at $0112) does not get
+incremented. To enable the IRQ in such a program,
+put this at the beginning of the `main()` function:
+
+    asm
+    {
+        // We come here from a JMP $C000 in Color Basic (normally at $A10A in v1.2).
+        // At this point, the 60 Hz interrupt has not been enabled yet, so enable it.
+        lda     $ff03   // get control register of PIA0, port B
+        ora     #1
+        sta     $ff03   // enable 60 Hz interrupt
+
+        // Unmask interrupts to allow the timer IRQ to be processed.
+        andcc   #$af
+    }
+
+Finally, it is preferable to use the command-line options `--org` and `--data`,
+instead of `#pragma org` and `#pragma data`, when developing a program made of
+multiple C files. The two command-line options should only be passed to the
+compiler invocation that links the executable from the object files.
 
 
 ### Enumerations (enum)
@@ -884,86 +1302,40 @@ Each enumerated name can have a specified value, e.g.,
 a constant expression.
 
 
-### Compiling a ROM image for a cartridge
+### Floating-point arithmetic
 
-To help support the ROM cartridge format, CMOC supports directives
-that allow telling it to assemble the code, the string literals
-and the read-only global variables at the typical cartridge ROM
-address of $C000, while mapping the writable global variables
-at a RAM address like $3800.
+The `float` and `double` keywords and floating-point numeric literals
+(e.g., `1.2f` or `-3.5e-17`) have been supported since version 0.1.40,
+but **only under the Color Computer's Disk Basic environment**.
 
-This is achieved by using the four #pragma directives that
-appear in this example:
+A warning is issued when the `double` keyword is encountered, so the
+user knows not to expect double-precision. There is also a warning
+when a numeric literal does not use the `f` suffix, which specifies
+that the literal is single-precision. There too, double-precision
+must not be expected. It is recommended to code programs using the
+`float` type and the `f` suffix.
 
-    #pragma org $C000
-    #pragma data $3800
+The compiler will fail to compile a program that uses floating-point
+arithmetic when a platform other than Disk Basic is targeted.
 
-    int f() { return 42; }
-    int writableGlobal = f();
+CMOC's printf() function supports the %f placeholder, but as of version
+0.1.40, it does not support the width or precision parameteres of %f
+(e.g., "%7.3f").
 
-    #pragma const_data start
-    int readOnlyGlobal = 100;
-    unsigned char byteArray[3] = { 11, 22, 33 };
-    char text[] = "hello";
-    #pragma const_data end
+The `<cmoc.h>` header file provides functions `strtof()` and `atoff()`
+to convert an ASCII decimal representation of a floating-pointer number
+into a float value, as well as `ftoa()`, to convert a float value into
+an ASCII decimal representation.
 
-    int anotherWritableGlobal;
 
-    int main()
-    {
-        anotherWritableGlobal = 99;
-        return 0;
-    }
+### Function Names as Strings
 
-Note that `writableGlobal` is allowed to have a run-time initializer
-because it is writable.
+The constants `__FUNCTION__` and `__func__` can be used to refer to
+the current function's name:
 
-`readOnlyGlobal`, `byteArray` and `text` are read-only because they appear
-between the `const_data` directives. More than one such section can
-appear in the same program.
+    printf("Now executing %s().\n", __func__);
 
-In the case of `text`, the use of the empty brackets is necessary:
-declaring text as `char *text` would be rejected by CMOC.
-This is because `text` would then be a pointer whose initialization
-would have to be at run-time, because the address of a string literal
-depends on where the program is loaded by the user.
-
-`anotherWritableGlobal` is writable because it is not in a `const_data`
-section. It is allowed to have no initializer because it is writable.
-
-Using sbrk() can be dangerous depending on where in memory the
-writable data section is positioned.
-
-After compiling the program, the .bin file normally contains
-a single contiguous block of code. Extract this block with
-this Perl command:
-
-    perl -e 'sysread(STDIN,$h,5)==5 or die;
-             sysread(STDIN,$rom,0xFFFF)>0 or die;
-             print substr($rom,0,length($rom)-5)' <foo.bin >foo.rom
-
-This ROM image can be tested in the XRoar emulator this way:
-
-    xroar -machine cocous -cart-autorun -cart color8.rom
-
-Note that XRoar requires the image file to have the .rom extension.
-
-Note that in a program written as above, the IRQ interrupt is
-not enabled, so Basic's TIMER counter (at $0112) does not get
-incremented. To enable the IRQ in your catridge-based program,
-put this at the beginning of the main() function:
-
-    asm
-    {
-        // We come here from a JMP $C000 in Color Basic (normally at $A10A in v1.2).
-        // At this point, the 60 Hz interrupt has not been enabled yet, so enable it.
-        lda     $ff03   // get control register of PIA0, port B
-        ora     #1
-        sta     $ff03   // enable 60 Hz interrupt
-
-        // Unmask interrupts to allow the timer IRQ to be processed.
-        andcc   #$af
-    }
+In the global namespace, these identifiers give the empty string.
 
 
 ### Detecting null pointer accesses at run time
@@ -1018,15 +1390,19 @@ This handler receives two arguments: the address of the failed check
 and the out-of-range stack pointer. The handler must not return.
 For example:
 
+    #ifdef _CMOC_CHECK_STACK_OVERFLOW_
     void stackOverflowHandler(char *addressOfFailedCheck, char *stackRegister)
     {
         printf("[FAIL: %p, %p]\n", addressOfFailedCheck, stackRegister);
         exit(1);
     }
+    #endif
     void recurse() { recurse(); }
     int main()
     {
+        #ifdef _CMOC_CHECK_STACK_OVERFLOW_
         set_stack_overflow_handler(stackOverflowHandler);
+        #endif
         recurse();
         return 0;
     }
@@ -1038,14 +1414,57 @@ in which function that stack overflow was detected.
 Using this option incurs a performance cost, so it is only recommended
 during debugging.
 
-CMOC allocates 1024 bytes for the stack. In a program that is compiled
-with the default layout, the stack is preceded by the memory managed
-by sbrk() (see elsewhere in this manual).
+The preprocessor identifier `_CMOC_CHECK_STACK_OVERFLOW_` is defined
+by CMOC when --check-stack is used. This identifier can be used to
+exclude stack check code when not needed.
+
+By default, CMOC allocates 1024 bytes for the stack on a CoCo
+(256 bytes on a Vectrex). In a program that is compiled with the
+default layout, the stack is preceded by the memory managed by sbrk()
+(see elsewhere in this manual).
+
+Note that this feature is not usable under **OS-9**, where stack
+checking is automatic and uses a different mechanism.
+
+#### Specifying the space allocated to the system stack
+
+Option `--stack-space=`_N_ (with _N_ > 0) can be used to specify
+the number of bytes (in decimal) to be reserved to the stack. This
+affects the quantity of memory available to sbrk() and the stack
+checking done by `--check-stack`.  Use this option when the program
+uses lots of stack space. Note that this option is not permitted when
+targeting the Vectrex.
+
+The stack space can also be specified with `#pragma stack_space` _N_.
+The command-line option has precedence over this pragma.
+
+Specifying the stack space must be done when compiling the C file
+that defines main(). It has no effect when compiling a file that
+does not define main(), nor when calling CMOC to perform linking
+on a list of object files.
+
+Note that this feature is not usable under **OS-9**, where stack
+checking is automatic and uses a different mechanism.
+
+#### OS-9 stack checking
+
+When targeting OS-9, by default, a stack check is performed upon
+entering each function, unless that function is assembly-only.
+
+The stack check verifies that there will be at least 64 bytes of free
+stack space once the function will have allocated stack space for its
+local variables. If this check fails, a "stack overflow" error
+message is printed in the standard output and the program exits.
+
+To change this 64 to another (non-zero) value, use the command-line
+`--function-stack` option. Pass 0 to this option to disable the
+stack check.
 
 
 ### Single-execution programs
 
-If a program is intended to be executable only once, i.e., that
+If a program to be run under Disk Basic
+is intended to be executable only once, i.e., that
 reloading it or rebooting the CoCo is required to run it again,
 then the code that initializes the writable global variables is
 not needed upon entry to function main().
@@ -1080,6 +1499,9 @@ process. Any code that needs to use Y must preserve its value and
 restore it when finished. For portability, this rule should also
 be observed on platforms other than OS-9.
 
+The compiler's low-level optimizer may emit code that uses Y when
+targeting a platform other than OS-9.
+
 The called function does not have to return any particular condition
 codes.
 
@@ -1099,6 +1521,20 @@ an ends with these:
 
         LEAS    ,U
         PULS    U,PC    
+
+
+### Calling a program as a DEF USR routine
+
+Typically, such a program gets loaded at the end of Basic's RAM area,
+i.e., `&H7A00`.
+Pass --org to the compiler to position the program at such an address.
+In the Basic program, reserve some high RAM to your CMOC program,
+i.e., `CLEAR 200,&H7A00`.
+Then use `LOADM`, then `DEF USR` to define a user routine that points
+to your CMOC program, e.g., `DEF USR5=&H7A00`.
+(The 5 in this example can be a number from 0 to 9.)
+Finally, call the routine using the routine number and an argument,
+e.g., `R=USR5(1000)`.
 
 
 ### Compiling a program executable by the DOS command
@@ -1126,14 +1562,30 @@ To uninstall the boot loader, use the `--uninstall` option:
     install-coco-boot-loader --uninstall foo.dsk
 
 
-### Unused functions
+### C Preprocessor portability issues
 
-A C function that is not called and whose address is not taken will
-not have assembly language generated for it by CMOC.
+For maximum portability, a CMOC program should not use the C Preprocessor's
+"[stringification](https://gcc.gnu.org/onlinedocs/gcc-4.7.0/cpp/Stringification.html)"
+operator (#), e.g.:
 
-This means that a library can be implemented as a header file
-containing several functions, without having to worry about bloating
-an executable that would only use some of those functions.
+    #define f(x) #x
+
+When this feature is supported by cpp, the expression `f(foobar)` yields
+`"foobar"`, including the double quotes.
+
+When this feature is not supported, the pound sign is left as is, so CMOC
+will see `#foobar`, which will typically give a syntax error. This has been
+observed on the Macintosh (Darwin) as of May 2017.
+
+Also to be avoided is the use of C++-style comments on a line to be
+processed by cpp, e.g.:
+
+    #define foo 42  // blargh
+
+Some preprocessors may leave the comment instead of stripping it away,
+so the following should be used instead:
+
+    #define foo 42  /* blargh */
 
 
 License

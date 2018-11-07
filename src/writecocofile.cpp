@@ -1,4 +1,4 @@
-/*  $Id: writecocofile.cpp,v 1.18 2016/10/11 01:01:36 sarrazip Exp $
+/*  $Id: writecocofile.cpp,v 1.20 2018/04/20 00:09:58 sarrazip Exp $
 
     writecocofile.cpp - A tool to write native files to a CoCo DECB disk image.
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -41,6 +41,18 @@ static const char *PROGRAM = "writecocofile";
 static bool verbose = false;
 static bool convertASCIIBasicNewlines = false;
 static bool printToStdOut = false;
+
+
+// Case-insensitive memcmp().
+//
+static int compareWithoutCase(const char *a, const char *b, size_t numChars)
+{
+    for (size_t i = 0; i < numChars; ++i)
+        if (tolower(a[i]) != tolower(b[i]))
+            return tolower(a[i]) < tolower(b[i]) ? -1 : +1;
+    return 0;
+}
+
 
 class CoCoDisk
 {
@@ -120,8 +132,9 @@ public:
     }
 
     // Does not keep a reference to the istream.
+    // May throw CoCoDisk::Error.
     //
-    CoCoDisk(istream &file) throw(CoCoDisk::Error);
+    CoCoDisk(istream &file);
 
     ~CoCoDisk();
 
@@ -145,7 +158,7 @@ public:
 
     int commit(ostream &file) const;
 
-    int extractFile(ostream &nativeFile, const string &cocoFilename, const string &cocoFileExt);
+    int extractFile(const char *filenameToExtract, const string &cocoFilename, const string &cocoFileExt);
 
     static void printErrorMessage(CoCoDisk::Error e);
 
@@ -161,7 +174,7 @@ public:
     {
         if (entryPtr == NULL || nameAndExt == NULL)
             return false;
-        return memcmp(entryPtr, nameAndExt, 11) == 0;
+        return compareWithoutCase((const char *) entryPtr, nameAndExt, 11) == 0;
     }
 
     static int parseEntry(const unsigned char *entryPtr,
@@ -287,7 +300,7 @@ private:
 };
 
 
-CoCoDisk::CoCoDisk(istream &file) throw(CoCoDisk::Error)
+CoCoDisk::CoCoDisk(istream &file)
   : imageFormat(RAW_FORMAT),
     numTracks(0),
     contents(NULL)
@@ -544,6 +557,8 @@ CoCoDisk::getDirEntryPtr(const string &filename, const string &extension)
     for ( ; !iter.atEnd(); iter.next())
     {
         entryPtr = iter.currentEntry();
+        if (entryPtr[0] == 0xFF)
+            return NULL;  // end of dir: fail
         if (doesEntryHaveNameAndExt(entryPtr, completeFilename.data()))
             return entryPtr;  // found entry
     }
@@ -588,8 +603,10 @@ CoCoDisk::commit(ostream &file) const
 }
 
 
+// filenameToExtract: If NULL, write contents to stdout.
+//
 int
-CoCoDisk::extractFile(ostream &nativeFile, const string &cocoFilename, const string &cocoFileExt)
+CoCoDisk::extractFile(const char *filenameToExtract, const string &cocoFilename, const string &cocoFileExt)
 {
     const unsigned char *entryPtr = getDirEntryPtr(cocoFilename, cocoFileExt);
     if (!entryPtr)
@@ -642,8 +659,21 @@ CoCoDisk::extractFile(ostream &nativeFile, const string &cocoFilename, const str
     if (verbose)
         cout << "Total file contents: " << fileContents.length() << " byte(s)\n";
 
-    nativeFile.write(fileContents.c_str(), fileContents.length());
-    if (!nativeFile.good())
+    ofstream nativeFile;
+    ostream *pDestFile = &cout;
+    if (filenameToExtract != NULL)
+    {
+        nativeFile.open(filenameToExtract, ios::binary);
+        if (!nativeFile)
+        {
+            cout << PROGRAM << ": ERROR: failed to create native file " << filenameToExtract << "\n";
+            return EXIT_FAILURE;
+        }
+        pDestFile = &nativeFile;
+    }
+
+    pDestFile->write(fileContents.c_str(), fileContents.length());
+    if (!pDestFile->good())
         return -2;
 
     return 0;
@@ -774,23 +804,10 @@ readFile(const char *dskFilename, const char *filenameToRead)
         return EXIT_FAILURE;
     }
 
-    ofstream fileCopy;
-    if (!printToStdOut)
-    {
-        fileCopy.open(filenameToRead, ios::binary);
-        if (!fileCopy)
-        {
-            cout << PROGRAM << ": ERROR: failed to create native file " << filenameToRead << "\n";
-            return EXIT_FAILURE;
-        }
-    }
-
-    ostream *pDestFile = (printToStdOut ? &cout : &fileCopy);
-
     try
     {
         CoCoDisk theCoCoDisk(dskFile);
-        int errorCode = theCoCoDisk.extractFile(*pDestFile, cocoFilename, cocoFileExt);
+        int errorCode = theCoCoDisk.extractFile(printToStdOut ? NULL : filenameToRead, cocoFilename, cocoFileExt);
         switch (errorCode)
         {
         case -1:
@@ -982,6 +999,8 @@ int listDirectory(const char *dskFilename)
         for (size_t entryIndex = 0; !iter.atEnd(); iter.next(), ++entryIndex)
         {
             const unsigned char *entryPtr = iter.currentEntry();
+            if (entryPtr[0] == 0xFF)
+                break;  // end of dir
             if (CoCoDisk::isEntryFree(entryPtr))
                 continue;
             string name, ext;

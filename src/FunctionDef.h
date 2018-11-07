@@ -1,4 +1,4 @@
-/*  $Id: FunctionDef.h,v 1.14 2016/10/05 03:17:31 sarrazip Exp $
+/*  $Id: FunctionDef.h,v 1.25 2018/01/29 00:46:57 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -24,7 +24,7 @@
 
 class DeclarationSpecifierList;
 class Declaration;
-class Scope;
+class Declarator;
 
 
 // The return type of a function is the type of the Tree base object,
@@ -34,10 +34,13 @@ class FunctionDef : public Tree
 {
 public:
 
+    // Takes ownership of the FormalParamList of 'declarator', if any.
+    // 'declarator' loses its FormalParamList in such a case.
+    //
     FunctionDef(const DeclarationSpecifierList &dsl,
-                const Declarator &declarator);
+                Declarator &declarator);
 
-    // Does NOT destroy the Scope objects used by this function.
+    // Calls delete on the FormalParamList pointer received for the constructor, if any.
     //
     virtual ~FunctionDef();
     
@@ -52,8 +55,6 @@ public:
     const TreeSequence *getBody() const;
     TreeSequence *getBody();
 
-    const Scope *getScope() const;
-    Scope *getScope();
     std::string getId() const;
     std::string getLabel() const;
     std::string getEndLabel() const;
@@ -85,11 +86,14 @@ public:
 
     virtual bool iterate(Functor &f);
 
+    // May return NULL.
     const FormalParamList *getFormalParamList() const;
 
     bool isInterruptServiceRoutine() const;
 
     bool isAssemblyOnly() const;
+
+    bool hasInternalLinkage() const;
 
     // Returns true if numArguments is exactly the number of formal parameters,
     // in the case of a non-variadic function, or if numArguments is at least
@@ -104,6 +108,13 @@ public:
 
     virtual bool isLValue() const { return false; }
 
+    // Number of bytes that a function is expected to use in addition to its local variables.
+    // Useful when targeting OS-9.
+    //
+    static uint16_t getFunctionStackSpace();
+
+    static void setFunctionStackSpace(uint16_t numBytes);
+
 private:
     // Forbidden:
     FunctionDef(const FunctionDef &);
@@ -116,16 +127,20 @@ private:
 private:
 
     std::string functionId;
-    FormalParamList *formalParamList;
+    FormalParamList *formalParamList;  // null in erroneous case like "int f {}"; owned by this object; must come from new
     std::string functionLabel;
     std::string endLabel;
-    Scope *scope;  // Scope NOT owned by this object
-    int16_t minDisplacement;  // set by allocateLocalVariables()
     TreeSequence *bodyStmts;  // owns the pointed object
     std::vector<Declaration *> formalParamDeclarations;  // owns the pointed objects
+    size_t numLocalVariablesAllocated;
+    int16_t minDisplacement;  // set by allocateLocalVariables()
     bool isISR;
+    bool isStatic;
     bool asmOnly;
+    bool noReturnInstruction;
     bool called;  // true means at least one call or address-of seen on this function
+
+    static uint16_t functionStackSpace;  // in bytes; 0 means no stack check
 
 };
 

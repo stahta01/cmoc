@@ -1,4 +1,4 @@
-/*  $Id: AssemblerStmt.h,v 1.9 2016/10/05 02:28:23 sarrazip Exp $
+/*  $Id: AssemblerStmt.h,v 1.11 2017/07/18 23:35:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -47,6 +47,11 @@ public:
 
     virtual void checkSemantics(Functor &f);
 
+    // Returns all names referred to with the :VAR notation, whether those names
+    // are recognized or not as declared variables.
+    //
+    void getAllVariableNames(std::set<std::string> &varNames) const;
+
     virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
 
     virtual bool isLValue() const { return false; }
@@ -61,6 +66,7 @@ private:
     static std::string resolveVariableReferences(const std::string &text,
                                                  const Scope &scope,
                                                  std::set<std::string> *recognizedVarNames,
+                                                 std::set<std::string> *undeclaredNames,
                                                  bool requireAllocatedVariables);
     static bool isGlobalVariable(const std::string &varName);
 

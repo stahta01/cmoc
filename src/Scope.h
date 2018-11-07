@@ -1,4 +1,4 @@
-/*  $Id: Scope.h,v 1.5 2016/09/18 06:10:52 sarrazip Exp $
+/*  $Id: Scope.h,v 1.9 2018/09/16 03:34:40 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -56,13 +56,17 @@ public:
     // they were added by declareVariable().
     // The declaractions in the sub-scopes are only processed if
     // 'processSubScopes' is true.
+    // displacement: Typically 0. (This method is recursive and the recursions
+    //               will typically pass a negative value.)
+    // numLocalVariablesAllocated: Caller must initialize this to 0.
     //
-    int16_t allocateLocalVariables(int16_t displacement, bool processSubScopes);
+    int16_t allocateLocalVariables(int16_t displacement, bool processSubScopes, size_t &numLocalVariablesAllocated);
 
     // Keeps a copy of the Declaration address.
     // This Scope object does NOT own the Declaration objects.
-    // Returns false if a declaration of the same ID is already present
+    // Returns false if 'd' is a non-extern declaration and another non-extern declaration of the same ID is already present
     // in this Scope.
+    // Returns false if there is already a declaration of the same ID but they are not exactly of the same type.
     // Returns true otherwise ('d' has been added to this Scope's
     // declaration table).
     //
@@ -89,19 +93,23 @@ public:
 
     const ClassDef *getClassDef(const std::string &className) const;
 
-    /** @param  f               functor that accepts a reference to a
-                                ClassDef object
+    /** @param  f               Functor that accepts a reference to a ClassDef object
+                                and returns a boolean (true to continue the iteration,
+                                false to stop it).
+        @returns                False if the function requested that the iteration stop.
     */
     template <class F>
-    void forEachClassDef(F &f);
+    bool forEachClassDef(F &f);
 
     virtual bool isLValue() const { return false; }
 
 private:
 
+    typedef std::vector< std::pair<std::string, Declaration *> > DeclarationTable;
+
     Scope *parent;  // NULL if global scope; 'parent' not owned by this Scope
     std::vector<Scope *> subScopes;  // OWNS the pointed objects
-    std::vector< std::pair<std::string, Declaration *> > declTable;
+    DeclarationTable declTable;
                                 // does not own the pointed objects
                                 // no two entries may have same string value
     std::map<std::string, ClassDef *> classTable;
@@ -115,12 +123,14 @@ private:
 
 
 template <class F>
-void
+bool
 Scope::forEachClassDef(F &f)
 {
     for (std::map<std::string, ClassDef *>::iterator it = classTable.begin();
                                                 it != classTable.end(); it++)
-        f(*it->second);
+        if (! f(*it->second))
+            return false;
+    return true;
 }
 
 

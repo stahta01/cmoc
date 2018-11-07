@@ -1,4 +1,4 @@
-/*  $Id: IdentifierExpr.h,v 1.6 2016/09/15 03:34:57 sarrazip Exp $
+/*  $Id: IdentifierExpr.h,v 1.8 2017/08/06 02:06:00 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -23,6 +23,8 @@
 #include "Tree.h"
 
 class VariableExpr;
+class Declaration;
+class StringLiteralExpr;
 
 
 class IdentifierExpr : public Tree
@@ -50,6 +52,21 @@ public:
     //
     const VariableExpr *getVariableExpr() const;
 
+    // Returns the declaration of the variable represented by this identifier,
+    // if applicable. Returns null otherwise.
+    //
+    const Declaration *getDeclaration() const;
+
+    // Sets the name to be used when this identifier expression is __FUNCTION__ or __func__.
+    // Returns the private StringLiteralExpr created by this operation; the caller must not destroy it.
+    //
+    StringLiteralExpr *setFunctionNameStringLiteral(const std::string &newName);
+
+    // Returns a string literal created by the most recent call to setFunctionNameStringLiteral(),
+    // or NULL if that method has never been called.
+    //
+    const StringLiteralExpr *getFunctionNameStringLiteral() const;
+
     bool isFuncAddrExpr() const;
 
     virtual bool iterate(Functor &f);
@@ -68,6 +85,8 @@ private:
 
     std::string identifier;
     VariableExpr *variableExpr;  // may be null; owned by this IdentifierExpr
+    StringLiteralExpr *functionNameStringLiteral;  // only used when identifier is __FUNCTION__ or __func__
+                                                   // owned by this IdentifierExpr
 
 };
 

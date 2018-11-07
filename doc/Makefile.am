@@ -5,7 +5,9 @@ man_MANS = $(PACKAGE).1
 
 MARKDOWN = markdown
 
-html-local: $(PACKAGE)-manual.html $(PACKAGE)-implementation.html $(PACKAGE)-vectrex.html
+HTML_DOC_FILES = $(PACKAGE)-manual.html $(PACKAGE)-implementation.html $(PACKAGE)-vectrex.html
+
+html-local: $(HTML_DOC_FILES)
 
 $(PACKAGE)-manual.html: $(PACKAGE)-manual.markdown toc.pl
 	$(MARKDOWN) $(PACKAGE)-manual.markdown > $(PACKAGE)-manual.html
@@ -19,6 +21,8 @@ $(PACKAGE)-implementation.html: $(PACKAGE)-implementation.markdown toc.pl
 
 $(PACKAGE)-vectrex.html: $(PACKAGE)-vectrex.markdown
 	$(MARKDOWN) $(PACKAGE)-vectrex.markdown > $(PACKAGE)-vectrex.html
+
+CLEANFILES = $(HTML_DOC_FILES)
 
 EXTRA_DIST = \
 	$(PACKAGE)-manual.markdown \

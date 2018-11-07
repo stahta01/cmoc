@@ -1,4 +1,4 @@
-/*  $Id: UnaryOpExpr.h,v 1.10 2016/09/15 03:34:57 sarrazip Exp $
+/*  $Id: UnaryOpExpr.h,v 1.12 2017/07/25 01:21:53 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -50,6 +50,7 @@ public:
 
     const Tree *getSubExpr() const;
 
+    // Returns null in the case of the SIZE_OF operator.
     Tree *getSubExpr();
 
     virtual void checkSemantics(Functor &f);
@@ -95,6 +96,7 @@ private:
     bool dereferencingVoidAllowed;  // applies to INDIRECTION only
     Tree *subExpr;  // owns the Tree object (not used by sizeof(type) operator)
     const TypeDesc *sizeofArgTypeDesc;   // used by sizeof operator
+    class Declaration *resultDeclaration;  // used when result is real number
 
 };
 

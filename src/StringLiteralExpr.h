@@ -1,4 +1,4 @@
-/*  $Id: StringLiteralExpr.h,v 1.8 2016/09/15 03:34:57 sarrazip Exp $
+/*  $Id: StringLiteralExpr.h,v 1.10 2017/09/04 18:58:30 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -31,7 +31,8 @@ public:
 
     virtual ~StringLiteralExpr();
 
-    std::string getLiteral() const;
+    const std::string &getLiteral() const;  // before backslash interpretation
+    const std::string &getValue() const;  // after backslash interpretation
     std::string getLabel() const;
     void setLabel(const std::string &newLabel);
     std::string getArg() const;
@@ -43,7 +44,9 @@ public:
     std::string decodeEscapedLiteral(bool &hexEscapeOutOfRange,
                                      bool &octalEscapeOutOfRange) const;
     size_t getDecodedLength() const;
+    bool wasEmitted() const { return emitted; }
     static void emitStringLiteralDefinition(ASMText &out, const std::string &value);
+    void emitStringLiteralDefinition(ASMText &out) const;
 
     virtual bool isLValue() const { return false; }
 
@@ -54,7 +57,9 @@ private:
                                         bool &octalEscapeOutOfRange) const;
 
     std::string stringLiteral;  // contents of the literal (between the quotes, before backslash interpretation)
-    std::string stringLabel;
+    std::string stringValue;  // contents of string (between the quotes, after backslash interpretation)
+    std::string asmLabel;
+    mutable bool emitted;  // true when at least one use of this literal has been recorded
 
 };
 

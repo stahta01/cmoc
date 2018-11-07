@@ -10,6 +10,15 @@
 
 #ifndef __GNUC__
 
+#ifndef _CMOC_CONST_
+#define _CMOC_CONST_ const
+#endif
+
+// Gives the offset in bytes of the specified 'member' in the struct
+// or union named 'Type'.
+//
+#define offsetof(Type, member) ((unsigned) &((Type *) 0)->member)
+
 typedef unsigned size_t;
 
 #ifndef VECTREX
@@ -18,40 +27,40 @@ typedef unsigned size_t;
 // %-15s will work, but %-6u will not. Zero padding for a number is supported
 // (e.g., %04x).
 //
-int printf(char *format, ...);
+int printf(_CMOC_CONST_ char *format, ...);
 #endif
 
 // Writes to 'dest'. Not thread-safe. Does not check for buffer overflow.
-int sprintf(char *dest, char *format, ...);
+int sprintf(char *dest, _CMOC_CONST_ char *format, ...);
 
 #ifndef VECTREX
 // Writes the first 'n' characters designated by 's', regardless of any
 // null characters encountered among them.
 //
-void putstr(char *s, size_t n);
+void putstr(_CMOC_CONST_ char *s, size_t n);
 
 void putchar(int c);
 #endif
 
-int strcmp(char *s1, char *s2);
-int memcmp(void *s1, void *s2, size_t n);
-void *memcpy(void *dest, void *src, size_t n);
+int strcmp(_CMOC_CONST_ char *s1, _CMOC_CONST_ char *s2);
+int memcmp(_CMOC_CONST_ void *s1, _CMOC_CONST_ void *s2, size_t n);
+void *memcpy(void *dest, _CMOC_CONST_ void *src, size_t n);
 void *memset(void *s, int c, size_t n);
-size_t strlen(char *s);
-char *strcpy(char *dest, char *src);
-char *strcat(char *dest, char *src);
-char *strncpy(char *dest, char *src, size_t n);
-char *strchr(char *s, int c);
+size_t strlen(_CMOC_CONST_ char *s);
+char *strcpy(char *dest, _CMOC_CONST_ char *src);
+char *strcat(char *dest, _CMOC_CONST_ char *src);
+char *strncpy(char *dest, _CMOC_CONST_ char *src, size_t n);
+char *strchr(_CMOC_CONST_ char *s, int c);
 char *strlwr(char *s);
 char *strupr(char *s);
 
 // Converts an ASCII unsigned decimal string into an unsigned word.
 //
-unsigned atoui(char *s);
+unsigned atoui(_CMOC_CONST_ char *s);
 
 // Converts an ASCII signed decimal string into a signed word.
 //
-int atoi(char *s);
+int atoi(_CMOC_CONST_ char *s);
 
 // Double-word to ASCII.
 // Converts the unsigned 32-bit integer formed by hi * 65536 + lo into
@@ -62,14 +71,26 @@ int atoi(char *s);
 // buffer, or to "0" if hi and lo are both zero.
 // Example: char s[11]; char *p = dwtoa(s, 1, 2);
 //          s will get the string "
+// NOTE: This operation can also be done with the 'long' type and by
+//       calling sprintf() with the "%lu" or "%ld" placeholders.
 //
 char *dwtoa(char *out, unsigned hi, unsigned lo);
 
 // Divides an unsigned 32-bit integer by an unsigned 8-bit integer.
-// The 4 bytes designated by 'dividendInQuotientOut' are the input dividend.
-// The 32-bit quotient is left in those 4 bytes.
+// The two words designated by 'dividendInQuotientOut' are the input dividend.
+// The 32-bit quotient is left in those two words.
 //
-void div328(char *dividendInQuotientOut, unsigned char divisor);
+void divdwb(unsigned dividendInQuotientOut[2], unsigned char divisor);
+
+// Previous name of divdwb().
+//
+#define div328 divdwb
+
+// Divides an unsigned 32-bit integer by an unsigned 16-bit integer.
+// The two words designated by 'dividendInQuotientOut' are the input dividend.
+// The 32-bit quotient is left in those two words.
+//
+void divdww(unsigned dividendInQuotientOut[2], unsigned divisor);
 
 // Multiply a word by a byte.
 // Stores the high word of the product in *hi and returns the low word.
@@ -88,6 +109,67 @@ void zerodw(unsigned *twoWords);
 //
 void adddww(unsigned *twoWords, unsigned term);
 
+// Subtracts the 16-bit integer 'term' from the 32-bit integer designated by
+// twoWords[0] and twoWords[1].
+//
+void subdww(unsigned *twoWords, unsigned term);
+
+// Returns 0 if the 32-bit unsigned word composed of left[0] and left[1]
+// (where left[0] is the high word) is equal to 'right';
+// returns +1 if left > right; -1 if left < right.
+//
+char cmpdww(unsigned left[2], unsigned right);
+
+#ifdef _COCO_BASIC_
+
+// Converts an ASCII decimal floating point number to a float.
+// The string is allowed to contain a suffix (e.g., "1.2E6XYZ");
+// endptr: Receives the address where the parsing stopped.
+// Caution: Passing a string whose value does not fit in a float
+//          may have undefined behavior.
+// An 'E' used in exponential notation must be in upper-case.
+//
+float strtof(_CMOC_CONST_ char *nptr, char **endptr);
+
+// Like strtof(), but does not return the end pointer.
+//
+float atoff(_CMOC_CONST_ char *nptr)
+{
+    char *endptr;
+    return strtof(nptr, &endptr);
+}
+
+// Writes an ASCII decimal representation of 'f' in the buffer
+// at 'out' which must contain at least 38 bytes.
+// Returns 'out' upon success, or null upon failure.
+//
+char *ftoa(char out[38], float f);
+
+#endif  /* _COCO_BASIC_ */
+
+// CAUTION: base is ignored, only base 10 is supported.
+//
+unsigned long strtoul(_CMOC_CONST_ char *nptr, char **endptr, int base);
+
+unsigned long atoul(_CMOC_CONST_ char *nptr)
+{
+    char *endptr;
+    return strtoul(nptr, &endptr, 10);
+}
+
+// CAUTION: base is ignored, only base 10 is supported.
+//
+long strtol(_CMOC_CONST_ char *nptr, char **endptr, int base)
+{
+    return (long) strtoul(nptr, endptr, base);
+}
+
+long atol(_CMOC_CONST_ char *nptr)
+{
+    char *endptr;
+    return (long) strtoul(nptr, &endptr, 10);
+}
+
 int tolower(int c);
 int toupper(int c);
 void exit(int status);
@@ -99,12 +181,17 @@ int rand();
 // See the CMOC manual.
 void *sbrk(size_t increment);
 size_t sbrkmax();
-void set_null_ptr_handler(void *newHandler);
-void set_stack_overflow_handler(void *newHandler);
+void set_null_ptr_handler(void (*newHandler)(void *));
+void set_stack_overflow_handler(void (*newHandler)(void *, void *));
+
+
+// Function pointer type used by setConsoleOutHook().
+//
+typedef void (*ConsoleOutHook)();
 
 
 // Redirect printf() et al. to the function at 'routine', which will
-// receive each character to be printed, in register A.
+// receive each character to be printed in register A.
 //
 // That routine MUST preserve registers B, X, Y and U.
 //
@@ -115,7 +202,7 @@ void set_stack_overflow_handler(void *newHandler);
 // To uninstall the new routine, call this function again with
 // the original routine address.
 //
-void *setConsoleOutHook(void *routine);
+ConsoleOutHook setConsoleOutHook(ConsoleOutHook routine);
 
 
 #ifndef VECTREX
