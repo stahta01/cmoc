@@ -1,4 +1,4 @@
-/*  $Id: CastExpr.h,v 1.7 2016/09/15 03:34:56 sarrazip Exp $
+/*  $Id: CastExpr.h,v 1.10 2021/10/29 01:27:37 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -35,9 +35,15 @@ public:
 
     Tree *getSubExpr();
 
+    virtual void checkSemantics(Functor &f);
+
     virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
 
-    static CodeStatus emitCastCode(ASMText &out, const TypeDesc *castTD, const TypeDesc *subTD);
+    // The emitted code must be in B or D.
+    // tree: Should designate the statement or expression that is emitting the cast.
+    //       Used when an error or warning message must be issued.
+    //
+    static CodeStatus emitCastCode(ASMText &out, const TypeDesc *castTD, const TypeDesc *subTD, const Tree &tree);
 
     virtual bool iterate(Functor &f);
 
@@ -50,6 +56,8 @@ public:
 
     virtual bool isLValue() const { return false; }
 
+    static bool isZeroCastToVoidPointer(const Tree &tree);
+
 private:
 
     // Forbidden:
@@ -59,6 +67,7 @@ private:
 private:
 
     Tree *subExpr;  // owns the Tree object
+    class Declaration *resultDeclaration;  // used when result is real number
 
 };
 

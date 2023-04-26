@@ -1,4 +1,4 @@
-/*  $Id: util.h,v 1.22 2016/10/11 01:01:45 sarrazip Exp $
+/*  $Id: util.h,v 1.52 2023/01/22 03:30:09 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -20,7 +20,7 @@
 #ifndef _H_util
 #define _H_util
 
-#include "TypeManager.h"
+#include "TypeDesc.h"
 
 #include <typeinfo>
 #include <vector>
@@ -36,8 +36,10 @@
 #include <stdarg.h>
 #include <memory>
 
-#ifdef _MSC_VER  /* Hacks to help compiler under Visual C++. */
+#ifdef _MSC_VER  /* Hacks to help compile under Visual C++. */
+#define PACKAGE "cmoc"
 #pragma warning(disable:4996)  /* Tolerate so-called "unsafe" functions like _snprintf(). */
+#pragma warning(disable:4822)  /* "local class member function does not have a body" */
 #define snprintf _snprintf
 #define popen _popen
 #define pclose _pclose
@@ -63,16 +65,64 @@ enum TargetPlatform
     OS9,            // OS-9 or NitrOS-9
     USIM,           // USim 6809 simulator
     VECTREX,        // Vectrex video game console
+    DRAGON,         // Dragon 32/64
+    VOID_TARGET,    // target with no I/O system known to this compiler
+    THOMMO,         // Thomson MO
+    THOMTO,         // Thomson TO
+    FLEX,           // FLEX by Technical Systems Consultants
 };
 
 
-// Representation used by ASMText::InsEffects.
+// Names PC to CC have the values that are expected by the PSHS instruction.
+//
+enum Register
+{
+    PC = 0x80, U = 0x40, Y = 0x20, X  = 0x10,
+    DP = 0x08, B = 0x04, A = 0x02, CC = 0x01,
+    D = A | B,
+    S = 0x100,
+    NO_REGISTER = 0xFFFF
+};
+
+
+// Type qualifier bits.
 //
 enum
 {
-    PC = 0x80, U = 0x40, Y = 0x20, X  = 0x10,
-    DP = 0x08, B = 0x04, A = 0x02, CC = 0x01
+    CONST_BIT = 1,
+    VOLATILE_BIT = 2,
 };
+
+
+// Integer that can combine CONST_BIT and VOLATILE_BIT.
+//
+typedef uint8_t TypeQualifierBitField;
+
+
+typedef std::vector<TypeQualifierBitField> TypeQualifierBitFieldVector;
+
+
+enum ConstCorrectnessCode { CONST_CORRECT, CONST_INCORRECT, INCOMPAT_TYPES };
+
+
+// Returns 0 if the pointer initialization is const-correct (and the types are compatible).
+// Returns -1 if not const-correct (and the types are compatible).
+// Returns -2 if the types are NOT compatible.
+//
+ConstCorrectnessCode isPointerInitConstCorrect(const TypeDesc *declPointedTypeDesc, const TypeDesc *initPointedTypeDesc);
+
+
+// name: Must be in upper-case. Does not have to end with '\0'.
+// Example: getRegisterFromName("DP,...") returns DP.
+// Returns REGISTER if no register name is recognized.
+//
+Register getRegisterFromName(const char *name);
+
+
+// Returns the upper-case name of the given register, or NULL if 'reg'
+// is NO_REGISTER or an invalid numerical value.
+//
+const char *getRegisterName(Register reg);
 
 
 typedef std::vector<std::string> StringVector;
@@ -103,21 +153,35 @@ appendVector(std::vector<T>& dest, const std::vector<T>& src)
 }
 
 
+// Returns an iterator on the first element of 'v' whose key is equal to 'key'.
+// Returns v.end() if no such element found.
+//
+template <typename Key, typename Value>
+typename std::vector< std::pair<Key, Value> >::iterator
+findInVectorOfPairsByKey(std::vector< std::pair<Key, Value> > &v, const Key &key)
+{
+    for (typename std::vector< std::pair<Key, Value> >::iterator it = v.begin(); it != v.end(); ++it)
+        if (it->first == key)
+            return it;
+    return v.end();
+}
+
+
 // Tag used in comments for asm(INS, ARG) statements.
 // Also used by ASMText.
 //
 extern const std::string inlineASMTag;
 
 
-std::string getLoadInstruction(BasicType t);
+const char *getLoadInstruction(BasicType t);
 
-std::string getAddInstruction(BasicType t);
+const char *getAddInstruction(BasicType t);
 
-std::string getSubInstruction(BasicType t);
+const char *getSubInstruction(BasicType t);
 
-std::string getAddOrSubInstruction(BasicType t, bool isAdd);
+const char *getAddOrSubInstruction(BasicType t, bool isAdd);
 
-std::string getStoreInstruction(BasicType t);
+const char *getStoreInstruction(BasicType t);
 
 // Inserts 'element' in 'v' in sorted order. Takes logarithmic time.
 //
@@ -154,11 +218,16 @@ struct FilenameAndLineNo
 struct BreakableLabels
 {
     std::string breakLabel;
-    std::string continueLabel;
+    std::string continueLabel;  // only allowed to be empty in the case of a switch() statement
 
     BreakableLabels()
       : breakLabel(), continueLabel() {}
 };
+
+
+// In hex, returned string starts with dollar sign.
+//
+std::string dwordToString(uint32_t dw, bool hex = false);
 
 
 // In hex, returned string starts with dollar sign.
@@ -172,14 +241,25 @@ std::string intToString(int16_t n, bool hex = false);
 std::string int8ToString(int8_t n, bool hex = false);
 
 
+std::string doubleToString(double d);
+
+
 void stringToLower(std::string &s);
 
 
-// Determines if 'c' is a character that can appear in a C identifier.
+// Determines if 'c' is a character that can be the first character of a C identifier.
+//
+inline bool isCIdentifierStartingChar(char c)
+{
+    return isalpha(c) || c == '_';
+}
+
+
+// Determines if 'c' is a character that can be in a C identifier.
 //
 inline bool isCIdentifierChar(char c)
 {
-    return isalnum(c) || c == '_';
+    return isCIdentifierStartingChar(c) || isdigit(c);
 }
 
 
@@ -191,10 +271,50 @@ inline bool isAssemblyIdentifierChar(char c)
 }
 
 
+// Advances 'index' until s[index] is not a space character or 'index' is the length of 's'.
+// Does nothing if 'index' is already at or beyond the length of 's'.
+//
+inline void passSpaces(const std::string &s, size_t &index)
+{
+    for (size_t len = s.length(); index < len && isspace(s[index]); ++index)
+        ;
+}
+
+
+// Advances 'index' until s[index] is a space character or 'index' is the length of 's'.
+// Does nothing if 'index' is already at or beyond the length of 's'.
+//
+inline void passNonSpaces(const std::string &s, size_t &index)
+{
+    for (size_t len = s.length(); index < len && !isspace(s[index]); ++index)
+        ;
+}
+
+
 bool isRegisterName(const std::string &s);
 
 
-bool isPowerOf2(int16_t n);
+bool isPowerOf2(uint16_t n);
+
+
+bool startsWith(const std::string &s, const char *prefix);
+
+bool endsWith(const std::string &s, const char *suffix);
+
+// Returns the removed extension, or an empty string if no period is found.
+//
+std::string removeExtension(std::string &s);
+
+// newExt: Must start with period, if a period is wanted in the new extension.
+//
+std::string replaceExtension(const std::string &s, const char *newExt);
+
+// Replaces the part of 's' that precedes the last directory separator with 'newDir'.
+// If no directory separator is found, returns newDir + "/" + s.
+//
+std::string replaceDir(const std::string &s, const std::string &newDir);
+
+std::string getBasename(const std::string &filename);
 
 
 template <typename ForwardIterator>
@@ -226,20 +346,85 @@ join(const std::string &delimiter, const std::vector<T> &vec)
 }
 
 
-// Prints a vector's elements, separated by ", ".
+template <typename T>
+class VectorToString
+{
+public:
+    VectorToString(const std::vector<T> &_vec, const char *_delimiter, const char *_opening, const char *_closing)
+    : vec(_vec), delimiter(_delimiter), opening(_opening), closing(_closing) {}
+
+    const std::vector<T> &vec;
+    const char *delimiter;
+    const char *opening;
+    const char *closing;
+};
+
+
+// Manipulator to print vectors: e.g., with vector<T> v, do cout << vectorToString(v);
 //
 template <typename T>
-inline std::ostream &
-operator << (std::ostream &out, const std::vector<T> &vec)
+inline VectorToString<T>
+vectorToString(const std::vector<T> &_vec, const char *_delimiter = ", ", const char *_opening = "{", const char *_closing = "}")
 {
-    for (typename std::vector<T>::const_iterator it = vec.begin(); it != vec.end(); ++it)
+    return VectorToString<T>(_vec, _delimiter, _opening, _closing);
+}
+
+
+template <typename T>
+std::ostream &operator << (std::ostream &out, const VectorToString<T> &vts)
+{
+    out << vts.opening;
+    for (typename std::vector<T>::const_iterator it = vts.vec.begin(); it != vts.vec.end(); ++it)
     {
-        if (it != vec.begin())
-            out << ", ";
+        if (it != vts.vec.begin())
+            out << vts.delimiter;
         out << *it;
     }
+    out << vts.closing;
     return out;
 }
+
+
+// Array that makes no dynamic allocations and imposes a maximum compile-time capacity.
+//
+template <typename T, size_t capacity>
+class StaticArray
+{
+public:
+    StaticArray()
+    :   array(),
+        arraySize(0)
+    {
+    }
+
+    // Returns false if there is no room left.
+    //
+    bool push_back(const T &x)
+    {
+        if (arraySize >= capacity)
+            return false;
+        array[arraySize++] = x;
+        return true;
+    }
+
+    size_t size() const
+    {
+        return arraySize;
+    }
+
+    // index must lower than size().
+    //
+    const T &operator[](size_t index) const
+    {
+        if (index >= arraySize)
+            throw -1;
+        return array[index];
+    }
+
+private:
+    T array[capacity];
+    size_t arraySize;
+};
 
 
 // Returns a string of the form "foo.cpp:42".
@@ -248,6 +433,7 @@ std::string getSourceLineNo();
 
 void errormsg(const char *fmt, ...);
 void errormsgEx(const std::string &explicitLineNo, const char *fmt, ...);
+void errormsgEx(const std::string &sourceFilename, int lineno, const char *fmt, ...);
 
 // diagType: "error" or "warning".
 void diagnoseVa(const char *diagType, const std::string &explicitLineNo, const char *fmt, va_list ap);

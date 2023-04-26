@@ -1,4 +1,4 @@
-/*  $Id: FunctionDef.h,v 1.14 2016/10/05 03:17:31 sarrazip Exp $
+/*  $Id: FunctionDef.h,v 1.30 2022/08/12 03:44:18 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -24,7 +24,7 @@
 
 class DeclarationSpecifierList;
 class Declaration;
-class Scope;
+class Declarator;
 
 
 // The return type of a function is the type of the Tree base object,
@@ -34,10 +34,16 @@ class FunctionDef : public Tree
 {
 public:
 
-    FunctionDef(const DeclarationSpecifierList &dsl,
-                const Declarator &declarator);
+    // Takes ownership of the FormalParamList of 'declarator', if any.
+    // 'declarator' loses its FormalParamList in such a case.
+    // dsl: Specifies the return type of this function.
+    //      The FunctionDef does not keep a reference to the DeclarationSpecifierList.
+    //      NULL is accepted: a signed int return value is then assumed.
+    //
+    FunctionDef(const DeclarationSpecifierList *dsl,
+                Declarator &declarator);
 
-    // Does NOT destroy the Scope objects used by this function.
+    // Calls delete on the FormalParamList pointer received for the constructor, if any.
     //
     virtual ~FunctionDef();
     
@@ -52,8 +58,6 @@ public:
     const TreeSequence *getBody() const;
     TreeSequence *getBody();
 
-    const Scope *getScope() const;
-    Scope *getScope();
     std::string getId() const;
     std::string getLabel() const;
     std::string getEndLabel() const;
@@ -85,11 +89,16 @@ public:
 
     virtual bool iterate(Functor &f);
 
+    // May return NULL.
     const FormalParamList *getFormalParamList() const;
 
     bool isInterruptServiceRoutine() const;
 
+    bool isFunctionReceivingFirstParamInReg() const;
+
     bool isAssemblyOnly() const;
+
+    bool hasInternalLinkage() const;
 
     // Returns true if numArguments is exactly the number of formal parameters,
     // in the case of a non-variadic function, or if numArguments is at least
@@ -104,6 +113,19 @@ public:
 
     virtual bool isLValue() const { return false; }
 
+    // Returns an instruction argument.
+    // Only relevant when a function receives a hidden parameter that points
+    // to where the return value must be stored.
+    //
+    std::string getAddressOfReturnValue() const;
+
+    // Number of bytes that a function is expected to use in addition to its local variables.
+    // Useful when targeting OS-9.
+    //
+    static uint16_t getFunctionStackSpace();
+
+    static void setFunctionStackSpace(uint16_t numBytes);
+
 private:
     // Forbidden:
     FunctionDef(const FunctionDef &);
@@ -112,20 +134,36 @@ private:
 private:
 
     void declareFormalParams();
+    bool hasHiddenParam() const;
 
 private:
 
     std::string functionId;
-    FormalParamList *formalParamList;
+    FormalParamList *formalParamList;  // null in erroneous case like "int f {}"; owned by this object; must come from new
     std::string functionLabel;
     std::string endLabel;
-    Scope *scope;  // Scope NOT owned by this object
-    int16_t minDisplacement;  // set by allocateLocalVariables()
     TreeSequence *bodyStmts;  // owns the pointed object
     std::vector<Declaration *> formalParamDeclarations;  // owns the pointed objects
+    Declaration *hiddenParamDeclaration;  // non null when hidden param received in reg but spilled in stack
+    size_t numLocalVariablesAllocated;
+    int16_t minDisplacement;  // set by allocateLocalVariables()
     bool isISR;
+    bool isStatic;
     bool asmOnly;
+    bool noReturnInstruction;
     bool called;  // true means at least one call or address-of seen on this function
+    bool firstParamReceivedInReg;
+            // If true, uses a yet unsupported calling convention (as of August 2022).
+            // If the first parameter (explicit or hidden) is 1 or 2 bytes, but not a
+            // struct or union, then it is passed in B or X instead of being pushed
+            // on the stack.  At the start of the function body, this register gets
+            // spilled (saved) in a hidden local variable ($hidden) on the stack. The
+            // low-level optimizer may be able to remove this spill instruction in
+            // some cases. The caller typically saves a PSHS instruction. It may also
+            // save an LEAS instruction when the function only has one parameter.
+            // See TranslationUnit::getFirstParameterRegister().
+
+    static uint16_t functionStackSpace;  // in bytes; 0 means no stack check
 
 };
 

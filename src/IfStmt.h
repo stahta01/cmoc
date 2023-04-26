@@ -1,4 +1,4 @@
-/*  $Id: IfStmt.h,v 1.7 2016/09/15 03:34:57 sarrazip Exp $
+/*  $Id: IfStmt.h,v 1.8 2017/07/22 15:36:11 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -36,6 +36,8 @@ public:
     const Tree *getConsequence() const { return consequence; }
 
     const Tree *getAlternative() const { return alternative; }
+
+    virtual void checkSemantics(Functor &f);
 
     virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
 

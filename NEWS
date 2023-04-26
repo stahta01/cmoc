@@ -1,3 +1,1299 @@
+2023-02-03: Version 0.1.81 released
+
+    Fixed a bug where the compiler crashed on a struct member array with
+    an invalid array size. An intelligible error message is now issued.
+
+    Fixed usim compilation problems when building CMOC on Cygwin.
+
+    Added sqrt32() to CMOC's standard library (declared by <cmoc.h>).
+    It computes the integer part of the square root of the given
+    32-bit number.
+
+    Added an optimized routine for dividing an unsigned byte by 3 that
+    is faster than the general byte division routine.
+
+    Optimized the case where an unsigned char value that is cast to an
+    int is multiplied by another unsigned char value on the right.
+
+    Fixed a bug where the compiler gave a superfluous error message when
+    a break or continue keyword was used outside of a breakable statement
+    (in addition to the normal error message).
+
+    Fixed bugs in memcmp(), memicmp(), strcmp(), stricmp() for OS-9.
+
+    readDECBFile() now avoids reading a data sector for nothing in the
+    case of an empty file. Note that the destination buffer must be at
+    least 256 bytes, even if the file to be read is shorter than that.
+
+2022-09-16: Version 0.1.80 released
+
+    Options --raw and --srec are now usable with --dragon. Previously,
+    they caused a fatal error.
+
+    Fixed a bug with the code generated when += or -= were used on
+    pointers to multi-byte types other than int.
+
+    Fixed a bug where an OS-9 executable that used %f in a printf() call
+    would crash.
+
+    readDECBFile() now returns the file length in bytes, not the total
+    length of the sectors read.
+
+    Fixed printf() format string warnings. A warning is now issued for
+    "%04 ", where there is no conversion specifier.
+
+2022-08-24: Version 0.1.79 released
+
+    Floating-point arithmetic using the float type is now supported
+    when targeting the DragonDOS environment.
+
+    Added option --add-os9-stack-space, which allows specifying a number
+    of bytes to add to the stack space normally allocated by OS-9.
+
+    Fixed a bug with the references to `fixserr' in the OS-9 runtime
+    (crt.asm) and to `chrtomem' in the OS-9 version of sprintf().
+
+    The compiler now issues a warning when passing a struct or union to
+    printf() or sprintf().
+
+    The BSS section is now emitted at the end, to avoid a hole in the
+    executable. This helps shrink the executable file in some formats
+    like the DECB .bin format. As a consequence, #pragma exec_once
+    has been removed.
+
+    Inline assembly statements can now refer to fields of a struct variable,
+    e.g., asm { inc :player.score }.
+
+    Fixed a potential bug involving the += operator applied to a long on
+    the left side and a float on the right side.
+
+    Indexes into C arrays in inline assembly statements are in array elements,
+    not in bytes. A warning is issued on such an index when it is not zero.
+    This warning can be disabled with -Wno-inline-asm-array-indexes.
+    Indexes into non-arrays are in bytes.
+
+    Pointers to pointers to functions are now supported without having
+    to create a typedef for the pointer-to-function type.
+    Similarly for arrays.
+
+    Added minor optimizations.
+
+2022-07-05: Version 0.1.78 released
+
+    Added more optimizations. The branch shortening optimization is
+    slightly more aggressive. Assembly errors about short branches
+    being out of range should be reported.
+
+    Functions rand(), sbrkmax(), readword(), readline() and typedef
+    ConsoleOutHook are now declared rand(void), etc.
+
+    Added support for compilers that need an explicit option (e.g.,
+    -std=c++11) to recognize the C++11 features used by the CMOC
+    source code.
+
+    Fixed bugs with local static variable support: one that prevented
+    having two functions in the same translation unit that defined a
+    local static of the same name, and one that omitted the assembly
+    language definition of a local static that did not have an
+    initializer.
+
+    Fixed a bug with negating a float variable containing 0.0f (the
+    resulting mantissa was not entirely zeroes).
+
+    Fixed a potential bug with the compile-time evaluation of a name
+    that is an enumerator name hidden by a local variable name.
+
+    Fixed a potential bug with the compile-time evaluation of a signed
+    byte getting cast to a signed integer.
+
+    Fixed a potential bug where structs whose initializers contain fewer
+    values than there are fields would leave those bytes undefined.
+    They are now initialized to null bytes.
+    This also applies to array initializers.
+
+    Fixed a bug where a global character array initialized from a literal
+    that is shorter than the array would be generated without the trailing
+    null bytes.
+
+    Fixed a K&R prototype bug where a prototype without any parameters
+    would forbid calls with parameters.
+
+    Added a -Wno-missing-field-initializers command-line option to
+    disable warnings about a struct being initialized with fewer values
+    than there are fields.
+
+    Fixed a failed assertion triggered by declaring a void variable.
+
+    The --no-relocate option now makes the compiler emit a JSR instead
+    of an LBSR for most function calls.
+
+    Removed optimizations removeUselessLdb() and removeUselessLdd()
+    because they are not safe anymore.
+
+    A warning is now given when applying an increment or decrement
+    operator to a function pointer.
+
+2022-04-23: Version 0.1.77 released
+
+    Added functions sinf, cosf, tanf, atanf, logf, expf, sqrtf, fabsf,
+    floorf, truncf and roundf to <coco.h>.
+    These functions only work on the CoCo and only if Extended Color Basic
+    is present. Passing them an invalid argument may display a Basic error
+    message and end the execution of the program.
+
+    Emit an error instead of crashing when a floating-point value
+    cannot be represented on the targeted platform (typically because
+    it is too large or too small).
+
+2022-03-05: Version 0.1.76 released
+
+    Local static variables are now supported.
+
+    Option --decb added as a synonym for --coco.
+
+    Retired optimizeTfrOp.
+
+2022-02-19: Version 0.1.75 released
+
+    Added support for the FLEX operating system (--flex).
+
+    Added abs() and labs() to CMOC's standard library (declared by <cmoc.h>).
+
+    Fixed a bug that rejected "long int/signed/unsigned".
+
+    Fixed a bug with the switch() statement where a large sparse array
+    of switch values would generate a huge assembly language sequence.
+    (The jump table cost calculator had a 16-bit overflow.)
+
+    Fixed a bug where a static function was seen as not used, which
+    caused a warning, even though it was used in a variable's initializer.
+
+    Fixed a bug with K&R function definition parsing to support more than
+    one declarator per declarator speficier, e.g. f(x, y) int x, y; {}.
+
+    Passing a non-enum integral expression to a function that expects an
+    enum value is now a warning instead of an error.
+
+    Using an #pragma directive that is unknown to CMOC is now a warning
+    instead of an error.
+
+    pmode(), screen() and setPmodeGraphicsAddressEx() (declared by <coco.h>)
+    are now in their own .c file in CMOC's standard library, to help reduce
+    executable size.
+    setPmodeGraphicsAddress() is now a macro defined in <coco.h>.
+
+    readDECBFile() now returns an error code and has a different signature.
+
+2022-01-14: Version 0.1.74 released
+
+    K&R C function definitions are now accepted, experimentally.
+    (Bug reports are welcome.)
+
+    Replaced Unicode characters in dskcon-standalone.c to resolve
+    compilation issues with gcc 11.2.0.
+
+    Minor fixes to compile without warnings with gcc 11.2.0.
+
+    No warning is issued anymore for a missing return statement if the last
+    statement in the function body is an asm{} statement, because the return
+    value will typically be stored directly in B or D by that inline assembly
+    code.
+
+    Minor optimizations added.
+
+    Minor optimizations to the compiler's low-level optimizer's performance.
+
+    Some of the compiler's C++ sources now use the 'auto' keyword to declare
+    some variables.
+
+2022-01-02: Version 0.1.73 released
+
+    Added readDECBFile() to <coco.h>.
+    This function reads a Disk Basic floppy file into memory.
+
+    Added <dskcon-standalone.h> to CMOC's standard library.
+    It provides a function that reads or writes a CoCo floppy sector.
+
+    Added memset16(), which fills a memory region with a 16-bit word.
+
+    The rgb() and cmp() functions are now independent of Color Basic.
+
+    Minor optimizations added.
+
+    Resolved a memory leak when compiling an unnamed bit field.
+
+    No warning anymore on the number of elements in an initializer used to
+    initialize a union variable.
+
+    The makefiles do not define docdir anymore, since that variable is
+    defined by Autoconf.
+
+2021-11-19: Version 0.1.72 released
+
+    Fixed a code generation bug with an array whose initializer has fewer
+    values that the length of the array.
+
+    Fixed a code generation bug with casting a long to a pointer.
+
+    Fixed a bug where some writable arrays would be put in the read-only
+    section.
+
+    New -Wno-uncalled-static option to disable the warning on a static
+    function that is not called.
+
+    Added C functions memmove(), memichr() and vsprintf() to CMOC's library.
+
+    Bug fix: Option --check-null now covers an assignment through a
+    literal null pointer.
+
+    Fixed a problem with -nodefaultlibs that caused struct assignments to
+    cause a linking error. Note that struct assignments require the program
+    to provide memcpy() when the program is built with -nodefaultlibs.
+
+    Command-line option -Wgives-byte now gives no warning about binary
+    operations on bytes yielding a byte, if both operands have a cast,
+    e.g., (char) x + (char) y. A warning is still given on x + y.
+
+    Command-line --deps-only now takes an optional argument to specify
+    the path of the .d file to create.
+
+    When the --no-relocate option is specified and optimizations are enabled,
+    program-counter-relative addressing is typically replaced with absolute
+    addressing (e.g., LEAX foo,PCR is replaced with LDX #foo).
+
+    ultoa10() and sqrt16() have been slightly optimized.
+
+    Header cmoc.h now defines SIZE_MAX, which gives the highest value that
+    can be stored by the size_t type.
+
+    Fixed a bug with the listing of a function's formal parameters and locals
+    in the generated assembly language, where variables declared in sub-scopes
+    were not listed.
+
+    Fixed portability issues concerning FreeBSD.
+
+2021-06-05: Version 0.1.71 released
+
+    Added support for the Thomson MO and TO computers (--thommo, --thomto).
+
+    Added C functions vprintf(), strncmp(), memchr(), isspace(),
+    isdigit(), isalpha() and isalnum() to CMOC's library.
+
+    New -Wno-printf option to disable the warning normally issued when
+    the format argument of printf() or sprintf() is not a string literal.
+
+    Fixed a bug with initializers for a struct that contains a matrix
+    of characters.
+
+    Fixed a bug where an error message would be given on an array
+    parameter of a size given by the sum of a constant and an enum
+    itself defined as sum. (E.g., enum {N=1+2}; void f(char a[N+1]) {}).
+
+    Fixed a bug where the compiler crashed on a function parameter type
+    mismatch instead of issuing an error message. 
+
+    Fixed a bug where the compiler crashed on evaluating a sizeof
+    argument that incorrectly used a dot instead of an arrow to refer
+    to a member of a struct through a pointer, e.g., sizeof(obj.n)
+    with struct S *obj.
+
+    Bug fix: Option --check-null now covers an assignment through a
+    pointer variable.
+
+    Minor optimization in the CMOC library's multiplication utility
+    routines and the memset() function.
+
+2021-03-07: Version 0.1.70 released
+
+    Added the --void-target command-line option, which targets a generic
+    platform whose I/O system is not known to CMOC.  This target may
+    be useful to users of 6809-based single-board computers or other
+    unsupported platforms. Functions like putchar() and printf() do
+    nothing when compiling for that target, but the setConsoleOutHook()
+    function can be used to redirect those functions to a user-defined
+    character output routine. (See the CMOC manual for details.)
+
+    Added the --raw command-line option, which forces the compiler
+    to generate an executable in "raw" format, as defined by LWTOOLS'
+    linker (i.e., --format=raw is passed to lwlink). (This option is
+    not supported when targeting OS-9.)
+
+    Fixed a bug where the assembler failed on a reference to an external
+    variable because the extern declaration was local rather than global.
+
+    Fixed a potential problem by preventing the Vectrex exit() function
+    from executing the destructors repeatedly.
+
+    Optimized the passing of structs by value to function calls. Affects
+    structs of less than 256 bytes.
+
+2021-01-24: Version 0.1.69 released
+
+    Fixed a bug with code emitted from array initializers containing
+    string literals for a character matrix, e.g., char a[2][6] = {...}.
+
+    Fixed a bug where an error message would have the wrong number when
+    the error happens after an inline assembly block that contains an
+    #if directive that generates a preprocessor line number directive
+    (of the form '# <num> <filename>').
+
+    Passing a pointer argument to a function parameter of integral type
+    now gives a warning.
+
+2020-12-20: Version 0.1.68 released
+
+    Fixed a bug that prevented a numerical cast to a pointer, e.g.,
+    NULL, from being used as an initializer.
+
+    Fixed a bug that prevented initializing a struct local variable
+    from a const struct.
+
+    Fixed a bug that affected += and -= when applied to a function
+    pointer variable.
+
+    An error message is now given when a struct member is of type void.
+
+    Optimized copied shifting of an unsigned long by 8, 16 or 24 bits,
+    left or right.
+
+    Added an optimization to avoid EOR or OR with 0 and ANDing a byte
+    with 255.
+
+    Optimized conditional expressions (c ? x : y).
+
+    Using float or double when targeting platforms that do not support
+    those types is now an error instead of a warning.
+
+    Resolved "POSIX Yacc does not support %expect" warning by removing
+    the %expect directive from parser.yy and passing -Wno-conflicts-sr
+    to the Yacc wrapper.
+
+2020-06-07: Version 0.1.67 released
+
+    Fixed an issue with the unsigned long shifting optimization
+    introduced in version 0.1.66.
+
+2020-06-06: Version 0.1.66 released
+
+    New -Wlocal-var-hiding command line switch makes the compiler issue
+    a warning when a local variable declaration hides another one of the
+    same name.
+
+    Fixed a bug where a global variable initializer of the form &array[N]
+    was rejected as being non constant.
+
+    Added a low-level optimization that removes an unneeded LDB instruction
+    when a byte gets compared with two values.
+
+    Added an optimization for in-place shifting of an unsigned long by
+    8, 16 or 24 bits, left or right.
+
+    Added an optimization for the evaluation of a loop condition based
+    on a comma-expression.
+
+    Removed non-breakable spaces from several source files.
+
+    Monolith compilation mode is not offered anymore. This also means that
+    the --emit-uncalled command-line switch has been removed.
+
+2020-04-24: Version 0.1.65 released
+
+    Added stricmp() and memicmp() (for ASCII case-insensitive comparisons)
+    to the CMOC library. (To be declared by #including <cmoc.h>.)
+
+    Fixed a crash that happened on |=, &= and ^=, or some casts, when used
+    inside an if() statement.
+
+    Fixed an internal error that happened on some array references whose
+    left side is an addition operation.
+
+2020-04-05: Version 0.1.64 released
+
+    Fixed a bug with enumerated names that depended on a sizeof expression
+    and with array declarations that depended on such enumerated names.
+
+2020-03-21: Version 0.1.63 released
+
+    Fixed a 16-bit by 8-bit multiplication code generation bug to make
+    sure that a 16-bit multiplication is done in those cases.
+
+2020-03-01: Version 0.1.62 released
+
+    Fixed global variable initialization so that non-constant initializer
+    expressions are rejected as in Standard C.
+
+    Fixed crashes where a class definition was not associated with its
+    type descriptor.
+
+    Added the --intdir=D command-line option, which can be used to have
+    the intermediate files generated in directory D.
+
+    Added strstr() to CMOC's library.
+
+    The 'pdf' makefile target in the 'doc' subdirectory creates a PDF
+    of the manual, provided that the pandoc and pdflatex commands are
+    installed and in the path.
+
+2019-10-21: Version 0.1.61 released
+
+    New command-line option -Wgives-byte tells CMOC to warn about
+    binary operations on bytes yielding a byte. For example,
+    (char) a * (char) b yields a byte under CMOC, while it yields
+    an int under Standard C.     
+
+    Fixed a bug with comparisons between an int and a long.
+
+    Fixed support for bitwise negation on a long value.
+
+    Fixed support for logical AND and OR on long and float values.
+
+    Fixed a crash on a constant cast to a long. 
+
+    An implicit cast from a void pointer is now a warning instead
+    of an error.
+
+    The --monolith mode is deprecated and is not tested anymore.
+
+2019-08-25: Version 0.1.60 released
+
+    Fixed bugs related to function parameters of types based on
+    array typedefs.
+
+    Fixed under-reported const-correctness errors about assigning,
+    incrementing or decrementing members of structs.
+
+    Fixed a bug where an extern declaration in a function was taken
+    as a local variable declaration instead of a declaration of a
+    global defined in another file.
+
+    A struct initializer is now allowed to have a lower number of
+    expressions than the number of members to initialize.
+
+    A struct whose initializer allows it to be defined with static values
+    is now defined this way instead of using initialization code.
+
+    A function whose return type is pointer to void is now allowed
+    to return a pointer to any type.
+
+    sizeof(void) now returns 1 (as with GCC) instead of 0.
+    This fixes a bug where applying + or += to a void pointer failed
+    to advance the pointer.
+
+    C functions qsort() and bsearch() have been added to the
+    standard library.
+
+    Omitting a return statement in a non-void function is now a
+    warning instead of an error.
+
+    A warning is now issued instead of an error when passing a pointer
+    to a signed type to a function expecting a pointer to an unsigned
+    type (or vice versa).
+
+    A warning is now issued instead of an error when the return type
+    of main() is not int.
+
+    A few low-level optimizations have been added.
+
+    Fixed a bug where an initializer with a string literal would be
+    rejected in a case where the compiler thought that the initialized
+    struct was supposed to be suitable for ROM. (A string literal's address
+    gets resolved at run-time, in order to support relocatability.)
+
+    A bug with the CMP instruction and overflows has been fixed in the
+    USim 6809 simulator. 
+
+2019-06-03: Version 0.1.59 released
+
+    A library is now allowed to provide "constructor" and "destructor"
+    code sections that contain code to be run before and after main()
+    respectively.
+    See the manual in the "User library constructors and destructors"
+    section for details. 
+
+    Fixed a bug where a string literal used to initialize a global
+    character array was emitted with backslashes taken literally
+    instead of with interpreted backslash escapes. For example,
+    const char vec[] = "\r" gave a 3-character array (92, 114, 0)
+    instead of a 2-character array (13, 0).
+
+    Fixed a bug where the string "<command line>" would end up in
+    a .d prerequisite file on a Mac. 
+
+    Fixed inline assembly statements so that referring to "2,s"
+    is not seen as a reference to a C variable named 's'.
+
+    Fixed a linking bug where passing subdir/foo.o would fail because
+    cmoc would pass foo.o (without "subdir/") to lwlink.
+
+    Changed the interface of the OS-9 stack check routine (_stkcheck)
+    so that it does not trash the D register.
+    OS-9 code that was compiled with previous versions of this compiler
+    must not be linked with code compiled with this version or a more
+    recent one.
+
+    initCoCoSupport() and its global variables (isCoCo3, textScreenWidth,
+    textScreenHeight) are now part of CMOC's OS-9 library. 
+
+    --org, --dos and --data are now disallowed when targetting OS-9.
+
+    The emitted assembly text now includes funcsize_* labels that give
+    the function's size in the assembly listing file.
+
+    Fixed an error re: return values in the "Calling convention" section
+    of the manual.
+
+2019-03-30: Version 0.1.58 released
+
+    Fixed a crash when adding an offset to a struct member matrix,
+    e.g., struct S { char m[50][15]; } s; return s.m + 42;
+    Note that s.m + 42 is equivalent to s.m[42]. Both are the address
+    of a 15-character array. 
+
+    Fixed the switch() statement so that an empty body is allowed,
+    and so that a body containing only a default statement is allowed.
+
+    Fixed a case where using an enum name before it was defined caused
+    a compiler crash.
+
+    The main() return value, and the exit() argument, are now guaranteed
+    to be returned in D upon exiting the program, when compiled for the
+    CoCo Basic environment or for the Dragon. This can be useful to return
+    a 16-bit address from one program for use by another program. Note that
+    registers U and Y must be preserved (typically with PSHS and PULS) when
+    calling another program.
+
+    Case and default statements are now rejected when they are not
+    inside a switch() statement.
+
+    Restored optimization "optimize8BitStackOps" thanks to a fix
+    provided by Jamie Cho.
+
+    Fixed a potential bug in low-level optimization "coalesceConsecutiveLeax".
+
+    Optimized the "* (byte/word *) ptr_or_array + k = ..." case.
+
+    Optimized array indexing when the index and the element size are
+    both unsigned bytes.
+
+    Floating point and long constants are now only emitted when they are
+    used by emitted code. This resolves double emissions that could happen
+    with an array of constants of those types.
+
+    Introduced itoa10(), utoa10(), ltoa10() and ultoa10(), which all
+    convert an integer to a decimal string, and made itoa(), utoa(),
+    ltoa() and ultoa() into macros that point to those functions, to
+    reduce the code size. (The current implementations only support
+    base 10.)
+
+    16-bit multiplications by 10 are now optimized by the use of a
+    specialized utility routine.
+
+2019-01-01: Version 0.1.57 released
+
+    The invalid statement "(void *) p = q" is not a syntax error
+    anymore, but is now diagnosed as "l-value required as left operand
+    of assignment".
+
+    Reimplemented rand() as an Xorshift random number generator to
+    reduce the predictability of each of the 15 bits returned.
+    The previous implementation returned numbers that alternated between
+    even and odd.
+
+    Optimized assignments to long variables and to 4-byte structs.
+
+    Optimized some comparisons of byte-sized operands.
+
+    Fixed comparisons involving a signed byte and an unsigned 8-bit constant.
+
+    Invalid inline assembly array references of the form "var[var]"
+    are now rejected.
+
+    Suspended optimization "optimize8BitStackOps" because of a problem
+    concerning comparisons with a byte-sized function argument. 
+
+    Modified optimization "storeLoad" so that a load of an absolute address
+    is assumed to deal with a volatile memory location, like an I/O port.
+
+    The USim simulator now accepts a --binary option to turn off translation
+    of carriage returns to line feeds when writing bytes to $FF00 (stdout).
+
+2018-11-25: Version 0.1.56 released
+
+    CMOC now directly supports the generation of Dragon executables,
+    when the --dragon option is passed. CMOC's standard library is
+    expected to work on the Dragon. The float and double types are
+    not supported. The <disk.h> library is not supported. 
+
+    Added itoa(), utoa(), ltoa() and ultoa() to the standard library
+    (declared in <cmoc.h>), although only base 10 is supported at
+    this time.
+
+    Fixed a bug with the substraction of a an immediate from a
+    pointer that caused the compiler to fail an assertion.
+
+    Fixed bad code generation in the case of a subtraction of
+    a pointer from an array name.  
+
+    Fixed a bug that prevented a program from subtracting a value
+    of type T[] from a value of type const T *.  
+
+    Fixed a bug in the USim 6809 simulator (used by CMOC for self-
+    testing) that incorrectly simulated indexed addressing of the
+    form A,R or B,R, where 8-bit accumulator A or B is used as the index.
+    USim took that 8-bit index as unsigned, when it really is signed on
+    a real 6809. See the end of page 3-28 of the Leventhal 6809 book.
+
+    Moved atoff() from the stdlib library to the float library.
+
+    readJoystickPositions() does not turn the audio back on anymore
+    after reading the positions.
+
+    The <cmoc.h> header file now defines the NULL macro, unless
+    it is already defined. 
+
+    The delay() function does not preserve D anymore. Preserving D
+    is not necessary under CMOC's calling convention.
+
+    Stopped building a USim version of the float library.
+
+2018-10-14: Version 0.1.55 released
+
+    Fixed a bug that gave an error when returning a non-const
+    pointer from a function that returns a const pointer (e.g.,
+    const char *f(char *p) { return p; }).
+
+    Fixed a bug where C errors would still be reported when
+    --deps-only was specified.
+
+2018-10-04: Version 0.1.54 released
+
+    The compiler now tolerates the use of NULL (e.g., (void *) 0) in
+    contexts that expect a non-void pointer, e.g., int *p = NULL;
+
+    Additional optimizations of unsigned byte multiplications.
+
+    Added new function setPmodeGraphicsAddressEx(), which allows
+    the caller to change the screen buffer address for pcls() without
+    changing the currently displayed screen.
+
+2018-09-20: Version 0.1.53 released
+
+    Fixed an OS-9 extern array problem by fixing the way the compiler
+    determines if a variable can go to the read-only section or not.
+    This determination does not depend on an array's initializer anymore. 
+
+    Fixed a bug where an external variable declaration and a variable
+    definition of the same name were accepted even when they were not
+    of the same type. 
+
+    Fixed a bug with the generation of some assignments involving an array
+    variable on the right side.
+
+    Added functions pmode(), screen(), rgb() and cmp() to the library that
+    ships with CMOC. These functions, which are close to their Color Basic
+    equivalents, are declared and documented in <coco.h>.
+
+    Function pcls() now takes only one argument. It used to take the screen
+    address, but does not anymore because it now uses the address passed to
+    pmode(). The latter must be called before calling pcls().
+
+    Removed misnamed function showPmode0() from <coco.h>: pmode() and
+    screen() should be used instead. 
+
+    Fixed showGraphicsAddress() so that it supports PMODEs other than
+    PMODE 4. This requires passing a second argument, i.e., the new value
+    to assign to the SAM chip's V register. Using the pmode() and screen()
+    functions is easier however.
+
+    Added function setPmodeGraphicsAddress() that only changes the PMODE
+    graphics screen address without changing the graphics mode.
+
+    Fixed a crash that happened when the user program tried to typedef
+    a function instead of a function pointer, e.g., typedef void F();
+
+    Using a non-integer as an array subscript is now an error (as with GCC)
+    instead of a warning.
+
+    A warning is now issued when using a 32-bit array subscript. (Only the
+    low 16 bits of the value are used.)
+
+    Fixed the output format for Vectrex so that the resulting file is the
+    loadable binary, with the proper header.
+
+2018-07-21: Version 0.1.52 released
+
+    Binary literals (e.g., `0b101010` for 42). Note that this feature is
+    not part of Standard C.
+
+    The --deps-only option does not emit code anymore.
+
+    Fixed a linking bug where inline assembly code would call a function
+    declared only by a prototype.
+
+    A warning is now issued when declaring a variable with both the
+    `extern' keyword and an initializer (e.g., extern int n = 1;).
+
+    An error is now issued when a declaration or typedef involves
+    an empty name (e.g., int a, ;).
+
+    Fixed a bug that prevented calling a function through a dereference
+    of the function's name(), e.g., void f() {}  void g() { (*f)(); }
+
+    Hexadecimal literals prefixed with 0X (with a capital X) are now
+    supported. Invalid characters in such a literal are now properly
+    reported.
+
+    Bit fields are now accepted by the compiler, but each field is
+    allocated as a full char, int or long.
+
+    A prototype for main() does not cause a warning anymore.
+
+    Removed leading underscores from the names of assembly language
+    source files in directories src/stdlib and src/float.
+
+    Minor optimizations to the compiler's low-level optimizer.
+
+    writecocofile:
+    - The search for a filename is now case-insensitive.
+    - When failing to extract a file because its name is not found in the
+      disk image, an empty native file is not created anymore.
+    - An iteration through the directory now stops at the first entry
+      that starts with an 0xFF byte, instead of scanning all 68 entries,
+      when the goal is to find an existing entry or to list all entries.     
+
+2018-03-31: Version 0.1.51 released
+
+    Fixed a bug that prevented defining a const long or real global
+    with an initializer.
+
+    Fixed the determination of which globals go in the `rodata' section,
+    in order to allow const arrays of function pointers.
+
+    Added command-line option --no-relocate to tell the compiler to
+    assume that the program will only be loaded at the addresses specified
+    by --org and --data. Not compatible with OS-9. Default for Vectrex.
+
+    Fixed a bug with how const function pointer types were printed out
+    in some error messages.
+
+    Option --switch=jump is now overridden by the compiler when the
+    jump table size would be much larger than an if-else sequence.
+
+    disk.h: Fixed the documentation of close(). Fixed the interface
+    of getFileLength() and computeFileLength() so that they can return
+    the file length in bytes.
+
+    Resolved several compilation warnings.
+
+2018-03-20: Version 0.1.50 released
+
+    The `const' keyword is now supported. Warnings are issued for
+    statements that are not const-correct. The <cmoc.h> header now
+    defines _CMOC_CONST_ to be `const', which allows a user to
+    redefine it to an empty string in order to use the compiler
+    library without const-correct function prototypes. The warnings
+    can be silenced by giving the command-line option "-Wno-const".
+    Global arrays of const integers are automatically put in the
+    `rodata' section, which should make the #pragma const_data directive
+    obsolete. 
+
+    Function setConsoleOutHook() now takes and returns a function
+    pointer of type ConsoleOutHook, instead of void *.
+
+    set_null_ptr_handler() and set_stack_overflow_handler() now
+    take a properly-typed function pointer argument.
+
+    Identifier __cplusplus is now explicitly undefined during the
+    C preprocessor pass.
+
+    A semi-colon is now tolerated after the closing brace of a
+    function's body, e.g., void f() {};
+
+    The expression "string-literal"[index] is now supported.
+
+    Fixed the low-level optimizer so that it recognizes the EXG
+    instructon properly. It also now issues a proper error message
+    when an unsupported instruction is encountered.
+
+    The install-coco-boot-loader script is now quiet, unless
+    --verbose is passed as an option.
+
+2018-02-26: Version 0.1.49 released
+
+    Returning a char or int from a function that must return a long
+    is now allowed. The returned value is automatically promoted to
+    a long.
+
+    Arrays of longs, floats or doubles whose initializer is composed
+    entirely of numerical literals are now initialized statically. 
+
+    Fixed a bug that made sizeof() return the wrong value for an array
+    that was declared both with and without the extern keyword.
+
+    An error is now issued when the sizeof operator is applied to an
+    incomplete type, e.g., int v[] without an initializer. 
+
+    A warning is now issued instead of an error when declaring an array
+    without a size and without an initializer, e.g., "int v[];". Such an
+    array is assumed to have size 1.
+
+2018-02-16: Version 0.1.48 released
+
+    Fixed a low-level optimization that was incompatible with
+    some signed long divisions.
+
+    Fixed a bug that gave a false error ("has no initializer") when
+    declaring an external global variable in a const_data section.
+
+    The compiler now automatically defines _CMOC_VERSION_, which
+    represents a 32-bit number of the form XXYYZZZ when the version
+    is X.Y.Z. Version 0.1.48 defines _CMOC_VERSION_ as 1048.
+
+    The uninitialized global variables are now zeroed out in the
+    (deprecated) "monolith" mode also.
+
+    An empty file can now be compiled successfully with the -c option,
+    i.e., to produce an empty object file. (Compiling an empty file as
+    a full program still gives a linking error.)
+
+    Added more experimental support for OS-9.
+
+    Vectrex is now supported in linker mode. It is not supported
+    in monolith mode anymore.
+
+2018-02-03: Version 0.1.47 released
+
+    The uninitialized global variables are now zeroed out at the
+    start of execution, on all platforms. This is the behavior expected
+    by the C standard.
+
+    Fixed the rand() function to improve its distribution.
+
+    rand()'s seed's global variable is now only allocated when rand()
+    or srand() is called. 
+
+    Fixed a low-level optimization phase that caused problems
+    with pointer arithmetic.
+
+    New keyword __norts__ can be applied to an assembly-only function
+    to keep the compiler from emitting an RTS (or RTI) instruction
+    at the end of the function's body. See the "Assembly-only functions"
+    section of the manual for details.  
+
+    Added more experimental support for OS-9.
+
+    New -nodefaultlibs command-line option excludes the compiler
+    provided libraries from the linking phase. The C-like run-time
+    object file is still included however. Using this option excludes
+    functions like CMOC's printf() for example.
+
+    Improved the efficiency of the code that returns a long, a float,
+    a double or a struct or union.
+
+    The code to evaluate a while() or do-while() condition is now
+    emitted after the loop body, instead of before, to save one branch
+    instruction per iteration. This optimization was already applied
+    to for() loops.
+
+2018-01-16: Version 0.1.46 released
+
+    Function pointers are now type-safe. Arrays of function pointers
+    are now supported. Returning a long, float, double or struct
+    through a function pointer call is now supported. 
+
+    Comma expressions are now supported (e.g., "x = 1, y = 2;").
+
+    Header <disk.h> now requires the user to call initdisk() before
+    opening a file, in order to provide a 68-byte FAT buffer to the
+    library. (Previously, the library allocated this buffer with a
+    call to sbrk().) Function open() has been renamed to openfile()
+    to force client code to be aware of this change.
+
+    Added more experimental support for OS-9.
+
+    Fixed the low-level optimizer so that it properly analyzes
+    instructions that involve register Y.
+
+    Added the NULL definition to <coco.h>.
+
+    The `const' and `volatile' keywords are now accepted but ignored.
+    A warning is issued about when they are encountered.
+
+    Several new low-level optimization phases (contributed by Jamie Cho),
+    including one that improves code with lots of constant pointers to 
+    memory (e.g., video memory).
+
+    The compiler now detects the case where a struct is passed to
+    a function that expects a numerical parameter, or vice versa.
+
+    Fixed a linking bug that prevented taking the address of a static
+    function in some situations. (The linker would complain about an
+    external symbol not being found.)
+
+    Fixed a bug that prevented the use of function pointer fields
+    in structs.
+
+    Fixed a bug where the assembler pass failed when using switch()
+    in monolith mode.
+
+    Fixed a bug where a success exit code was returned by the cmoc
+    command when the assembler pass failed.  
+
+2017-11-26: Version 0.1.45 released
+
+    Fixed a bug with a declaration initializer that used a signed
+    byte conditional expression.
+
+    Fixed a clang-related compilation error (re: SwitchStmt.h).
+
+    Resolved a clang-related compilation warning (re: yyinput()). 
+
+2017-11-19: Version 0.1.44 released
+
+    The switch() statement now uses a jump table in most situations
+    where this takes less memory than a series of compare and
+    branch instructions. The command line now accepts options
+    --switch=ifelse and --switch=jump to force the compiler to
+    always use one mode or the other.
+
+    Fixed a bug on Mac OS X where the cpp preprocessor failed to
+    generate its result in its standard output because the -D
+    options were passed to it after the C filename. The options
+    are now all passed before the filename.  
+
+    Added --deps-only and --deps command-line options that create
+    a makefile dependency file for the C file being compiled.
+    See the "Generating Prerequisites Automatically" section of
+    the manual. Not available in monolith mode.  
+
+    Comparing a pointer or array with a zero of type long is
+    now supported.
+
+    Comparing a pointer or array to an integer is now detected
+    as an error unless the integer is a constant. 
+
+    Fixed a bug that prevented the user from giving the compiler
+    a .asm file to assemble as a module (the other accepted
+    assembly language extension is .s).
+
+    Fixed a bug with arrays whose size was specified by an enum
+    name which was the product of two other enum names.
+
+    Added sqrt16() to the standard library. It returns the integer
+    part of the square root of its 16-bit argument. Not available
+    in monolith mode. 
+
+    Added divmod16() and divmod8(), which return a quotient and
+    remainder in a single operation (on unsigned integers).
+
+    Fixed a problem that caused two consecutive load instructions
+    to be emitted when assigning a constant to a variable (although
+    the low-level optimizer typically got rid of the extra load).
+
+    An error message is now given when the switch() expression is
+    a real or long type. These cases are not supported as of this
+    version.
+
+    Fixed a bug where a false error was given when using the
+    dereference operator (&) on the name of an array being passed
+    to a function call.  
+
+    Fixed a bug where a string literal in inline assembly was
+    misparsed, which led to an invalid error message.
+
+    An empty array initializer is not a syntax error anymore.
+    A proper error message is now issued instead. (Zero-length
+    arrays are not supported by CMOC.)
+
+    Converting a void pointer to a non-void pointer variable does not
+    cause a warning to be issued anymore.
+
+    Added a typedef for BOOL in <coco.h>. It can be avoided by
+    defining _CMOC_HAVE_BOOL_ before #including that header file.
+
+2017-11-02: Version 0.1.43 released
+
+    Linking and modular compilation are now supported. Pass -c to
+    compile a C file to an object file (whose extension is .o by
+    default). Pass object files to CMOC to have it link them into
+    an executable. Passing a single C file, for both compilation
+    and linking, is also supported. 
+
+    - The legacy "monolith" mode can still be used by passing the
+      --monolith option, but this mode should be considered deprecated.
+
+    - Overriding a function of CMOC's standard library is not
+      supported anymore.
+
+    - Multiple definitions are only flagged as warnings, not errors,
+      because the detection is based on lwlink's map files, which
+      lists both exported and non-exported symbols. This means that
+      two modules defining a static global of the same name will link
+      but the two names will appear in the map file. However, if two
+      modules define non-static functions with the same name, the
+      duplication should be seen as an error by the user.
+
+    - The header files that come with CMOC (cmoc.h, coco.h, etc.)
+      now exist in two versions. The legacy versions, which contain
+      function bodies, are installed in $prefix/share/cmoc, while the
+      new headers, suitable for new the linker mode, do not contain
+      function bodies and are installed in $prefix/share/cmoc/include.
+      The compiler uses the right versions depending on the mode used.
+
+    - In linker mode, all functions are emitted, even those that are
+      not called.
+
+    - #pragmas org, data and limit are not permitted in linker mode.
+      Use command-line options --org, --data and --limit instead.
+
+    - Linker mode is not supported when targeting OS-9 and Vectrex.
+      Using --monolith may work for those targets. Version 0.1.42
+      is also an option.
+
+    Intermediate compilation files are now removed, unless the
+    --intermediate command-line option is given. 
+
+    New --data command-line option mirrors #pragma data.
+
+    The USim simulator now accepts an executable in the SREC format.
+    The executable filename must have the ".srec" extension. 
+
+2017-10-21: Version 0.1.42 released
+
+    Fixed a bug with adding a signed short integer to a long integer.
+
+    Fixed an array initialization bug that happened on ARM platforms.
+
+    Fixed a relocatability problem with code that compares a float
+    with an unsigned integer.
+
+    Replaced short branches in the floating-point library with long
+    branches, to prevent assembly errors.
+
+2017-10-09: Version 0.1.41 released
+
+    32-bit arithmetic using the long type (signed and unsigned) is
+    now supported. Header file <coco.h> now defines dword, sdword,
+    uint32_t and int32_t as typedefs for long types. Header file
+    <disk.h> has been adapted to use uint32_t for file offsets
+    (calls to getFileLength() and seek() must be adapted).
+
+    More low-level optimizations contributed by Jamie Cho.
+
+    Fixed bugs concerning the initializer of an array of floats.
+
+    Fixed a bug that prevented the compilation of a function call that
+    returns a struct by value that is not received by the caller. 
+
+    Fixed a bug where a sign extension was missing when initializing
+    an int array from a signed character initializer.
+
+    The exit status returned by main() and the one passed to exit()
+    are not stored in Color Basic's floating point accumulator #0
+    anymore, upon exit. This allows a program that serves as a
+    USR() function to return whatever it wants in FPA0, including
+    are now supported (e.g., '\12' gives character 10).
+
+    Initializing a variable from a larger type is now allowed, although
+    a warning is issued.
+
+    Moved some (CoCo-specific) floating-point routines from stdlib.inc
+    to float-ecb.inc.
+
+    Fixed a potential bug in divIntSingle where Color Basic routine
+    $B4F4 was called with LBSR instead of JSR. A relocated program
+    would probably have crashed in this situation. 
+
+    stdlib.inc, float-ecb.inc: Calls from a utility routine to another
+    now use LBSR, to avoid assuming that the caller and the callee are
+    close to each other in the final executable.   
+
+    Header file <coco.h> now defines macros disableInterrupts() and
+    enableInterrupts().
+
+    The printf() checks that can lead to compilation warnings are now
+    performed on sprintf() calls also. 
+
+    Resolved compilation warnings issued by GCC 7.2.0.
+
+2017-08-12: Version 0.1.40 released
+
+    Floating-point arithmetic using the float type is now supported
+    when targeting the Color Basic environment.
+
+    Structs and unions can now be returned by value and passed by value
+    to a function.
+
+    The boolean negation operator (!) now returns 1 for true, instead of 4.
+
+    Fixed a bug where casting a negative 1-byte constant to char would
+    yield a positive number.
+
+    Passing a word-sized argument to a function that expects a byte-sized
+    argument is now permitted (a warning is now issued instead of an error).
+
+    The ternary operator (? :) does not give a warning anymore when the
+    two subexpressions differ only by being a pointer and an array to
+    the same type (e.g., char * and char[]).  
+
+    Referring to a variable from an inline assembly statement before that
+    variable has been declared is now reported as an error.
+
+    Added KEY_PROBE_* and KEY_BIT_* enum names in <coco.h> to
+    facilitate the use of isKeyPressed(), a function that was
+    added to that header file with version 0.1.39 of CMOC.
+
+    Added readJoystickPositions() and readJoystickButtons()
+    functions to <coco.h>.
+
+    Using a struct in a boolean context or with an operator that cannot
+    act on a struct is now reported before the code emission phase. 
+
+2017-07-02: Version 0.1.39 released
+
+    Fixed a bug where a typedef for a function pointer type was
+    registered as a typedef for the return type only.
+
+    Fixed a typedef bug that caused a syntax error when declaring
+    a variable of a named struct defined by the typedef, e.g.,
+    typedef struct X { int n; } Y; struct X foo;.
+
+    Fixed a bug that prevented declaring a variable of an empty struct.
+
+    Referring to an undeclared C variable or enumerator in the argument
+    of an inline assembly instruction (e.g., asm { std :foo }) is now
+    reported as an error by the compiler instead of by the assembler. 
+
+    Referring to a global variable before its declaration is now reported
+    as an error.
+
+    Inline assembly statements now support comments introduced by
+    a semi-colon. These comments are transmitted verbatim to the
+    assembler. 
+
+    Fixed a crash that happened on a function definition whose
+    formal parameter list was omitted (e.g., void f {}).
+
+    Removed a spurious warning message given by the optimizer when
+    it would encounter JSR [___,PCR].
+
+    The syntax error message on a non-printable character now
+    represents that character in hexadecimal, to avoid sending such
+    a character to the terminal. 
+
+    Added function isKeyPressed() to CMOC-provided <coco.h>, which
+    helps determine if a key is currently down or not.
+
+    Cleaned up unused GNU gettext internationalization definitions.
+
+2017-06-23: Version 0.1.38 released
+
+    Fixed a compiler crash that happened in somes cases where an
+    enumerator was defined from other enumerators, or from an unknown
+    enumerator name.
+
+    Fixed a bug where void return values were not ignored as they
+    should have been (e.g., if (voidFunction() == 0) {}).
+
+    Added -o FILE command-line option to specify an output filename
+    other than the default, which is to replace the .c extension of
+    the source file with .bin.
+
+2017-06-02: Version 0.1.37 released
+
+    Fixed a bug in the optimizer that made the compiler crash when
+    compiling most unit tests, on some platforms (typically Mac OS X,
+    sometimes on PC with Clang).
+
+    Fixed an erroneous -O2 optimization related to register value
+    prediction (re: ASMText::removeAndOrMulAddSub()).
+
+    A portability bug was fixed in WordConstantExpr.cpp by avoiding
+    a conversion of a negative floating point value to an integer type.
+
+    The test suite now avoids using the C preprocessor's stringification
+    operator (#), because this operator is not guaranteed to be supported
+    by all C preprocessors. (The problem was observed on Mac OS X.)
+
+    For portability to Mac OS X, the makefiles do not use the od(1)
+    command anymore, nor the -e option of the echo command.
+
+2017-05-13: Version 0.1.36 released
+
+    Fixed a portability problem with the Raspberry Pi (ARM processor).
+    WordConstantExpr::getWordValue() converted directory from double
+    to unsigned short, which has undefined behavior. Now, the conversion
+    goes from double to signed short to unsigned short.
+    Also, lexer.ll and parser.yy now explicitly use signed char, instead
+    of just char, to represent a character literal.
+
+    The level 2 optimizer (-O2) is now significantly faster, thanks to a
+    reduction in dynamic memory allocations.
+
+    Added subdww() to the standard library, to subtract a 16-bit unsigned
+    word from a 32-bit unsigned word.
+
+    Added cmpdww() to the standard library, to compare a 32-bit unsigned
+    word to a 16-bit unsigned word.
+
+    Added divdww() to divide a 32-bit unsigned integer by a 16-bit
+    unsigned integer. Existing function div328() has been renamed divdwb().
+    (The old name is kept for backward compatibility.) However, the first
+    argument of divdwb() must now be unsigned * instead of unsigned char *. 
+
+2017-01-14: Version 0.1.35 released
+
+    Identifiers __FUNCTION__ and __func__ can now be used to refer to
+    the current function's name (e.g., printf("%s\n", __func__)).
+    In the global namespace, these identifiers give the empty string.
+
+    Added an offsetof() macro to header file <cmoc.h>.
+
+    Fixed a crash that happened when trying to use the array reference
+    operator ([]) on a void pointer. Such an expression now gives an
+    "invalid use of void expression" error message.
+
+    Fixed bugs related to the interactions between array initializers,
+    array typedefs and string literals.
+
+    The compiler now detects the use of an undefined struct or union
+    to declare a member of a struct or union.
+
+    Some optimizations that were suspended with version 0.1.34 have
+    been restored after fixes to the optimizer. 
+
+    The U suffix on a numerical constant is now applied to the type
+    of the constant instead of being ignored.
+
+    New command-line option --stack-space=N tells the compiler to assume
+    the stack may use as many as N bytes. This affects --check-stack and
+    the sbrk() function. This option is ignored when targeting the Vectrex.
+    One can also use #pragma stack_space N. The command-line option has
+    precedence over this pragma.
+
+    The compiler now stops compiling after the parsing phase if an error
+    message is issued, to avoid spurious error messages. 
+
+    The routine that implements --check-stack now preserves the registers
+    it uses, to avoid interfering with normal program execution.
+
+    Declarator::getNumDimensions() now avoids computing the number of
+    elements in a array just to get the number of dimensions, e.g.,
+    for int m[3][5], we want 2 and we do not care that the array has
+    15 elements. 
+
+2016-12-26: Version 0.1.34 released
+
+    Fixed a bug that over-optimized operations involving a byte-sized
+    constant cast to a word.
+
+    Fixed a bug that over-optimized loads of the X register. 
+
+    Fixed an inline assembly problem in vectrex/bios.h. This only
+    affects compilations that target the Vectrex console (--vectrex).
+
+    Casting a variable name to void does not emit an instruction anymore.
+
 2016-10-23: Version 0.1.33 released
 
     Fixed bugs with array typedefs.

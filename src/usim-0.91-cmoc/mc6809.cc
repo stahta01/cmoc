@@ -531,10 +531,10 @@ Word mc6809::do_effective_address(Byte post)
 				addr = refreg(post);
 				break;
 			case 0x05: case 0x15:
-				addr = b + refreg(post);
+				addr = extend8(b) + refreg(post); // extend8() call added by sarrazip 2018-11-11
 				break;
 			case 0x06: case 0x16:
-				addr = a + refreg(post);
+				addr = extend8(a) + refreg(post); // extend8() call added by sarrazip 2018-11-11
 				break;
 			case 0x08: case 0x18:
 				addr = refreg(post) + extend8(fetch());

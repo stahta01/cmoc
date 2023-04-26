@@ -1,4 +1,4 @@
-/*  $Id: AssemblerStmt.cpp,v 1.15 2016/10/05 02:28:23 sarrazip Exp $
+/*  $Id: AssemblerStmt.cpp,v 1.28 2022/07/13 03:27:19 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -22,6 +22,7 @@
 #include "TranslationUnit.h"
 #include "SemanticsChecker.h"
 #include "ASMText.h"
+#include "ClassDef.h"
 
 using namespace std;
 
@@ -52,6 +53,12 @@ AssemblerStmt::AssemblerStmt(const char *_asmText)
     scopeOfAsmOnlyFunction(NULL),
     argIsVariable(false)
 {
+    // Fix the source line number so that it points to the start of the text
+    // instead of the end.
+    int numNewlines = 0;
+    for (const char *s = _asmText; (s = strchr(s, '\n')) != NULL; ++s)
+        ++numNewlines;
+    setIntLineNo(getIntLineNo() - numNewlines);
 }
 
 
@@ -81,9 +88,17 @@ AssemblerStmt::setAssemblyOnly(const Scope *functionScope)
 // The second rule allows to parse an array reference as a single token, e.g.,
 // "ldd someIntegerArray[12]".
 //
-// A variable name may be precedes by an escape character (given by variableNameEscapeChar).
-// This is useful when the name is that of a register. The escape character forces the name
-// to refer to the variable instead of the register.
+// A variable name may be preceded by an escape character (given by variableNameEscapeChar).
+// This is useful when the C variable name is also the name of of a register.
+// The escape character forces the name to refer to the C variable instead of the register.
+//
+// A semi-colon introduces a comment. The text from that semi-colon (inclusively)
+// up to the end of the line (excluding the newline character) is considered as
+// a comment to be ignored. WHITESPACE is returned, and the comment text (including
+// the semi-colon) is stored in 'tokenText'.
+// Note that the assembler may give special meaning to the presence of a semi-colon
+// comment. With LWASM in particular, as of 2017, such a comment line can be used
+// to avoid breaking the scope of local labels (those with an initial @).
 //
 AssemblerStmt::Token
 AssemblerStmt::getToken(const string &text, size_t &i, string &tokenText)
@@ -92,13 +107,13 @@ AssemblerStmt::getToken(const string &text, size_t &i, string &tokenText)
 
     if (i >= text.length())
     {
-        tokenText = "";
+        tokenText.clear();
         return END;
     }
     if (text[i] == '\n')
     {
         ++i;  // pass the newline
-        tokenText = "\n";
+        tokenText = '\n';
         return NEWLINE;
     }
 
@@ -107,13 +122,36 @@ AssemblerStmt::getToken(const string &text, size_t &i, string &tokenText)
     // Parse a sequence of white space, or of non-space characters.
     // Such a sequence stops before a ']', which is considered a word by itself.
     //
-    bool isFirstCharSpace = isspace(text[i]);
+    int isFirstCharSpace = isspace(text[i]);
     ++i;  // pass 1st char of token
     if (isFirstCharSpace)
     {
         for ( ; i < text.length() && text[i] != '\n' && isspace(text[i]); ++i)  // accumulate sequence of spaces
             tokenText += text[i];
         return WHITESPACE;
+    }
+
+    // Return a comment introduced by a semi-colon or asterisk as white space.
+    // A space or start-of-line is required before the comment character.
+    //
+    assert(i != 0);
+    if ((i == 1 || isspace(text[i - 2])) && (text[i - 1] == ';' || text[i - 1] == '*'))
+    {
+        for ( ; i < text.length() && text[i] != '\n'; ++i)  // advance until end of line
+            tokenText += text[i];
+        return WHITESPACE;
+    }
+
+    if (text[i - 1] == '\"')  // if string literal (e.g., argument for FCC directive)
+    {
+        for ( ; i < text.length() && text[i] != '\"'; ++i)
+            tokenText += text[i];
+        if (i < text.length())
+        {
+            tokenText += '\"';
+            ++i;  // pass closing quote
+        }
+        return WORD;
     }
 
     if (!isAssemblyIdentifierChar(text[i - 1]) && text[i - 1] != variableNameEscapeChar)
@@ -127,6 +165,7 @@ AssemblerStmt::getToken(const string &text, size_t &i, string &tokenText)
     // because this is the "foo[bar]" case.
     // If no '[' is encountered, we want to stop before the "]",
     // because this is the "[var]" case.
+    // Dots are accepted; they are used to introduce a struct field name.
     //
     bool gotOpeningBracket = false;
     for ( ; ; ++i)
@@ -139,7 +178,7 @@ AssemblerStmt::getToken(const string &text, size_t &i, string &tokenText)
             break;
         if (text[i] == '[')  // remember this
             gotOpeningBracket = true;
-        else if (!gotOpeningBracket && !isAssemblyIdentifierChar(text[i]))  // stop on '+', '-' etc.
+        else if (!gotOpeningBracket && !isAssemblyIdentifierChar(text[i]) && text[i] != '.')  // stop on '+', '-' etc.
             break;
         tokenText += text[i];
     }
@@ -193,11 +232,20 @@ AssemblerStmt::parseVariableNameAndOffset(const string &tokenText, string &varia
     if (i == 0)
         return false;  // closing bracket found, but not opening bracket: fail
     if (i == 1)
-        return false;  // closing bracket found at beginning of tokenText: fail
+        return false;  // opening bracket found at beginning of tokenText: fail
     if (i == tokenLen - 1)
         return false;  // nothing inside bracket: fail
 
-    // 'i' points to first char of decimal string.
+    // 'i' points to first char of expected decimal string.
+    // If brackets contain non-digit chars, fail.
+    for (size_t k = i; k < tokenLen - 1; ++k)
+        if (!isdigit(tokenText[i]))
+            return false;
+
+    // Reject octal.
+    if (tokenText[i] == '0' && isdigit(tokenText[i + 1]))
+        return false;
+
     long n = atol(tokenText.c_str() + i);
     if (n < -32768 || n > 32767)
         return false;  // overflow: fail
@@ -208,33 +256,250 @@ AssemblerStmt::parseVariableNameAndOffset(const string &tokenText, string &varia
 }
 
 
+// If an identifier is found at s + offset, returns its length.
+// Returns 0 if no identifier was seen at s + offset.
+//
+static size_t
+getIdentifier(const string s, size_t offset)
+{
+    if (offset >= s.length() || !isCIdentifierStartingChar(s[offset]))
+        return 0;
+    size_t start = offset;
+    do
+        ++offset;
+    while (offset < s.length() && isCIdentifierChar(s[offset]));
+    return offset - start;
+}
+
+
+// Support decimal only. Does not support hex or octal.
+//
+static size_t
+getIntegerString(const string s, size_t offset)
+{
+    if (offset >= s.length() || (!isdigit(s[offset]) && s[offset] != '-'))
+        return 0;
+    size_t start = offset;
+    do
+        ++offset;
+    while (offset < s.length() && isdigit(s[offset]));
+    return offset - start;
+}
+
+
+// Parse a C expression of the form var or var.field, or var.field[index].field[index]...field[index], etc.
+// result: Upon success, receives strings for variable names and struct field names,
+//         a decimal strings for array indexes. Example: obj.v[42] gives { "obj", "v", "42" }.
+// Returns: size_t(-1) upon success.
+//          Upon failure, returns the character index in tokenText where an error was detected.
+//
+static size_t
+parseCVariableExpression(vector<string> &result, const string &tokenText)
+{
+    // Expect an identifier first.
+    //
+    size_t idLength = getIdentifier(tokenText, 0);
+    if (idLength == 0)
+        return 0;  // error: expected an identifier at start
+
+    result.push_back(string(tokenText, 0, idLength));
+
+    // Accept sequence of ".field" or "[index]".
+    //
+    for (size_t offset = idLength; ; )
+    {
+        if (tokenText[offset] == '.')
+        {
+            ++offset;
+            idLength = getIdentifier(tokenText, offset);
+            if (idLength == 0)
+                return offset;  // error: expected struct field name after '.'
+            result.push_back(string(tokenText, offset, idLength));
+            offset += idLength;
+        }
+        else if (tokenText[offset] == '[')  // if integer index into an array
+        {
+            ++offset;
+            size_t intLength = getIntegerString(tokenText, offset);
+            if (intLength == 0)
+                return offset;  // error: expected integer after '['
+            result.push_back(string(tokenText, offset, intLength));
+            offset += intLength;
+            if (tokenText[offset] != ']')
+                return offset;  // error: expected closing ']'
+            ++offset;
+        }
+        else
+        {
+            if (offset != tokenText.length())
+                return offset;  // error: unexpected chars at end
+            break;
+        }
+    }
+    return size_t(-1);  // success
+}
+
+
+// scope: Declaration scope of the asm{} statement.
+// errorMessageTree: If not null, error messages are issued by calling errormsg() on this.
+// Returns: 0 if tokenText refers to a C variable (possibly with array indexes and/or struct fields).
+//          -1 if tokenText does not refer to a C variable.
+//          -2 if tokenText refers to a C variable but is partly invalid (an error message is issued).
+// variableDecl: When 0 is returned, this receives the address of the declaration of the C variable referred to.
+// byteOffsetIntoVar: When 0 is returned, this receives the offset in bytes into the start of the C variable layout.
+//
+int
+parseCVariableRefAndByteIndex(const string &tokenText,
+                              const Scope &scope,
+                              const Tree *errorMessageTree,
+                              const Declaration *&variableDecl,
+                              int16_t &byteOffsetIntoVar)
+{
+    variableDecl = NULL;
+    byteOffsetIntoVar = 0;
+
+    vector<string> expr;
+    size_t errorOffset = parseCVariableExpression(expr, tokenText);
+    if (errorOffset != size_t(-1))
+        return -1;  // tokenText is not a C var ref
+
+    variableDecl = scope.getVariableDeclaration(expr[0], true);
+    if (!variableDecl)
+    {
+        // Check if enum name.
+        //
+        uint16_t enumValue = 0;
+        if (TranslationUnit::getTypeManager().getEnumeratorValue(expr[0], enumValue))
+        {
+            if (expr.size() > 1)
+            {
+                if (errorMessageTree)
+                    errorMessageTree->errormsg("invalid characters after enum name `%s' in inline assembler statement", expr[0].c_str());
+                return -2;
+            }
+        }
+
+        return -1;  // tokenText is not a C var ref; might be a hex value starting with letter, e.g., "ff00"
+    }
+
+    const TypeDesc *currentTD = variableDecl->getTypeDesc();
+
+    // Interpret the rest of 'expr'.
+    //
+    string lastName = expr[0];
+    for (size_t i = 1; i < expr.size(); ++i)
+    {
+        const string &s = expr[i];
+        if (isdigit(s[0]) || s[0] == '-')  // if array index
+        {
+            long intValue = strtol(s.c_str(), NULL, 10);  // decimal assumed
+            if (intValue < -32768 || intValue > 32767)
+                return -2;  // error: invalid array index
+
+            // Check that we are indexing an array, and get the array element size.
+            if (!currentTD->isArray())
+            {
+                // When [index] is applied to non-array, it is a byte offset and it ends the expression.
+                if (i + 1 != expr.size())
+                {
+                    if (errorMessageTree)
+                        errorMessageTree->errormsg("extra characters in C variable reference after [%s]",
+                                                    s.c_str());
+                }
+                else
+                    byteOffsetIntoVar += intValue;
+                break;
+            }
+            else
+            {
+                if (intValue != 0 && TranslationUnit::instance().warnAboutInlineAsmArrayIndexes())
+                {
+                    if (errorMessageTree)
+                        errorMessageTree->warnmsg("index `%s' into array `%s' in inline assembly statement taken as element index, not byte index",
+                                                    s.c_str(), lastName.c_str());
+                }
+
+                const TypeDesc *arrayElemTD = currentTD->getPointedTypeDesc();
+                size_t arrayElemSize = TranslationUnit::instance().getTypeSize(*arrayElemTD);
+                currentTD = arrayElemTD;
+                
+                byteOffsetIntoVar += int16_t(intValue * arrayElemSize);
+            }
+        }
+        else  // variable name or struct field name
+        {
+            lastName = s;
+
+            if (!currentTD->isStruct())
+            {
+                if (errorMessageTree)
+                    errorMessageTree->errormsg("referring to field `%s' of non-struct expression", s.c_str());
+                return -2;
+            }
+            const ClassDef *cl = TranslationUnit::instance().getClassDef(currentTD->className);
+            if (!cl)
+            {
+                if (errorMessageTree)
+                    errorMessageTree->errormsg("unknown struct or union `%s'", currentTD->className.c_str());
+                return -2;
+            }
+            const ClassDef::ClassMember *member = NULL;
+            int16_t memberOffset = cl->getDataMemberOffset(s, member);
+            if (memberOffset < 0)
+            {
+                if (errorMessageTree)
+                    errorMessageTree->errormsg("struct or union `%s' has no field named `%s'",
+                                            cl->getName().c_str(), s.c_str());
+                return -2;
+            }
+            byteOffsetIntoVar += memberOffset;
+            currentTD = member->getTypeDesc();
+        }
+    }
+
+    return 0;
+}
+
+
 // Processes assembly language text.
 // Resolves each 3rd column name to a program variable, if any.
 // If a name in the 3rd column is not a program variable, it is left as is,
 // without error or warning.
-// Returns the resulting text.
+// Calls FunctionDef::setCalled() on each recognized function referenced by the text.
+//
+// Stores the resulting text in resolvedAsmText,.
 //
 // text: Must not contain comments.
 // scope: Scope object to use to resolve variable names.
 // recognizedVarNames: If not null, the set accumulates the names of declared
 //                     C variables that were referred to in 'text'.
 //                     (Does not accumulate enumerated names.)
+// unrecognizedNames: If not null, accumulates the names that refer to undeclared
+//                    C variables or enumerators.
 // requireAllocatedVariables: Require the variables used by the assembly code
 //                            to have received a valid frame displacement.
-//                            Must only be set to true when the returned text
-//                            will not be used in the final emitted code.
+//                            Passing false is useful when the caller only wants
+//                            wants the referenced variable names or register
+//                            the called functions.
+// errorMessageTree: If not null, error messages are issued by calling errormsg() on this.
 //
-string
+bool
 AssemblerStmt::resolveVariableReferences(const string &text,
                                          const Scope &scope,
+                                         string &resolvedAsmText,
                                          set<string> *recognizedVarNames,
-                                         bool requireAllocatedVariables)
+                                         set<string> *unrecognizedNames,
+                                         bool requireAllocatedVariables,
+                                         const Tree *errorMessageTree)
 {
     string result;
+    result.reserve(text.length() * 2);
 
     size_t colNum = 1;  // 1 = label column, 2 = instr. col., 3 = arg. col.
     Token tok = END;
     string tokenText, lastCol2;
+    tokenText.reserve(256);
+    lastCol2.reserve(256);
     size_t i = 0;  // offset in 'text'
     bool currentInstructionCanRefVariables = false;
 
@@ -255,31 +520,32 @@ AssemblerStmt::resolveVariableReferences(const string &text,
         case WORD:
             if (colNum == 3 && currentInstructionCanRefVariables)  // if instruction argument that could refer to variable or enum
             {
-                int16_t offset = 0;
-                string variableName;
-                if (!parseVariableNameAndOffset(tokenText, variableName, offset))
-                    variableName = tokenText;
-
-                // If a C variable name escape is used, remove it.
-                string unescapedVariableName = variableName;
-                if (variableName.length() > 0 && variableName[0] == variableNameEscapeChar)
-                    unescapedVariableName.erase(0, 1);
-
-                const Declaration *variableDecl = scope.getVariableDeclaration(unescapedVariableName, true);
+                int16_t offset = 0;  // offset into the C variable, if tokenText refers to a C variable
+                bool escapeCharUsed = (tokenText.length() > 0 && tokenText[0] == variableNameEscapeChar);
+                string unescapedVarRef = (escapeCharUsed ? string(tokenText, 1) : tokenText);
+                const Declaration *variableDecl = NULL;
+                int code = -1;
+                if (!isRegisterName(tokenText))
+                {
+                    code = parseCVariableRefAndByteIndex(unescapedVarRef, scope, errorMessageTree, variableDecl, offset);
+                    if (code == -2)  // if error message issued re: bad C var ref
+                        return false;
+                }
+                bool gotVariableAndOffset = (code == 0);
 
                 uint16_t enumValue = 0;
 
-                if (isRegisterName(variableName))
+                if (!gotVariableAndOffset && isRegisterName(tokenText))
                 {
                     result += tokenText;  // no substitution allowed on register name
                 }
-                else if (variableDecl != NULL)
+                else if (variableDecl != NULL)  // if tokenText is a C ref var
                 {
                     if (requireAllocatedVariables)
                         result += variableDecl->getFrameDisplacementArg(offset);
 
                     if (recognizedVarNames != NULL)
-                        recognizedVarNames->insert(unescapedVariableName);
+                        recognizedVarNames->insert(variableDecl->getVariableId());
                 }
                 else if (FunctionDef *fd = TranslationUnit::instance().getFunctionDef(tokenText))
                 {
@@ -308,13 +574,23 @@ AssemblerStmt::resolveVariableReferences(const string &text,
                     fd->setCalled(); // make sure the code for 'fd' gets emitted
                     TranslationUnit::instance().registerFunctionCall(caller->getId(), fd->getId());
                 }
-                else if (TranslationUnit::getTypeManager().getEnumeratorValue(unescapedVariableName, enumValue))
+                else if (TranslationUnit::getTypeManager().getEnumeratorValue(unescapedVarRef, enumValue))
                 {
                     result += wordToString(enumValue);
+                }
+                else if (escapeCharUsed && !variableDecl)
+                {
+                    if (errorMessageTree)
+                        errorMessageTree->errormsg(
+                                "undeclared identifier `%s' in assembly language statement",
+                                unescapedVarRef.c_str());
                 }
                 else  // no match: keep text as is
                 {
                     result += tokenText;
+
+                    if (escapeCharUsed && unrecognizedNames != NULL)
+                        unrecognizedNames->insert(unescapedVarRef);
                 }
             }
             else
@@ -333,7 +609,9 @@ AssemblerStmt::resolveVariableReferences(const string &text,
                     currentInstructionCanRefVariables = (tokenText != "pshs"
                                                       && tokenText != "puls"
                                                       && tokenText != "pshu"
-                                                      && tokenText != "pulu");
+                                                      && tokenText != "pulu"
+                                                      && tokenText != "tfr"
+                                                      && tokenText != "exg");
                 }
             }
             break;
@@ -344,7 +622,8 @@ AssemblerStmt::resolveVariableReferences(const string &text,
         }
     }
 
-    return result;
+    resolvedAsmText = result;
+    return true;
 }
 
 
@@ -380,9 +659,10 @@ AssemblerStmt::checkSemantics(Functor &f)
         // (via FunctionDef::setCalled() and TranslationUnit::registerFunctionCall()).
         //
         set<string> recognizedVarNames;
-        const Scope *scope = (scopeOfAsmOnlyFunction ? scopeOfAsmOnlyFunction : parentFunctionDef->getScope());
-        assert(scope);
-        (void) resolveVariableReferences(removeComments(asmText), *scope, &recognizedVarNames, false);
+        const Scope *sc = (scopeOfAsmOnlyFunction ? scopeOfAsmOnlyFunction : TranslationUnit::instance().getCurrentScope());
+        assert(sc);
+        string resolvedAsmText;
+        (void) resolveVariableReferences(removeComments(asmText), *sc, resolvedAsmText, &recognizedVarNames, NULL, false);
 
         // An assembly-only function is not allowed to refer to local C variables because such a function
         // has no stack frame. (It is allowed to call functions however.)
@@ -390,23 +670,35 @@ AssemblerStmt::checkSemantics(Functor &f)
         if (parentFunctionDef->isAssemblyOnly() && recognizedVarNames.size() > 0)
         {
             // Create and issue an error message.
-            stringstream enumeration;
+            stringstream varNames;
             size_t numLocals = 0;
             for (set<string>::const_iterator it = recognizedVarNames.begin(); it != recognizedVarNames.end(); ++it)
             {
-                string varName = *it;
+                const string &varName = *it;
                 if (isGlobalVariable(varName))
                     continue;  // allow asm{} text to refer to globals
                 if (numLocals > 0)
-                    enumeration << ", ";
-                enumeration << "`" << varName << "'";
+                    varNames << ", ";
+                varNames << "`" << varName << "'";
                 ++numLocals;
             }
             if (numLocals > 0)
                 errormsg("assembly-only function refers to local C variable%s %s",
-                         numLocals > 1 ? "s" : "", enumeration.str().c_str());
+                         numLocals > 1 ? "s" : "", varNames.str().c_str());
         }
     }
+}
+
+
+void
+AssemblerStmt::getAllVariableNames(set<string> &varNames) const
+{
+    set<string> unrecognizedNames;
+    const Scope *sc = (scopeOfAsmOnlyFunction ? scopeOfAsmOnlyFunction : TranslationUnit::instance().getCurrentScope());
+    assert(sc);
+    string resolvedAsmText;
+    (void) resolveVariableReferences(removeComments(asmText), *sc, resolvedAsmText, &varNames, &unrecognizedNames, false);
+    varNames.insert(unrecognizedNames.begin(), unrecognizedNames.end());
 }
 
 
@@ -419,9 +711,13 @@ AssemblerStmt::emitCode(ASMText &out, bool lValue) const
 
     if (!asmText.empty())  // if multi-line assembly language text instead of single instruction:
     {
+        writeLineNoComment(out, "inline assembly");
+
         const Scope *cs = TranslationUnit::instance().getCurrentScope();
         assert(cs);
-        string resolvedAsmText = resolveVariableReferences(removeComments(asmText), *cs, NULL, true);
+        string resolvedAsmText;
+        if (!resolveVariableReferences(removeComments(asmText), *cs, resolvedAsmText, NULL, NULL, true, this))
+            return false;
         out.emitInlineAssembly(resolvedAsmText);
         return true;
     }

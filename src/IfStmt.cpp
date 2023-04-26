@@ -1,4 +1,4 @@
-/*  $Id: IfStmt.cpp,v 1.7 2016/05/06 03:42:55 sarrazip Exp $
+/*  $Id: IfStmt.cpp,v 1.14 2022/07/22 02:44:23 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -44,17 +44,31 @@ IfStmt::~IfStmt()
 
 
 /*virtual*/
+void
+IfStmt::checkSemantics(Functor &)
+{
+    if (condition->getType() == CLASS_TYPE && !condition->isRealOrLong())
+        condition->errormsg("invalid use of %s as condition of if statement",
+                            condition->getTypeDesc()->isUnion ? "union" : "struct");
+}
+
+
+/*virtual*/
 CodeStatus
 IfStmt::emitCode(ASMText &out, bool lValue) const
 {
     if (lValue)
         return false;
 
-    if (condition->isExpressionAlwaysTrue())
-        return consequence->emitCode(out, lValue);
-
-    if (condition->isExpressionAlwaysFalse())
+    if (condition->isExpressionAlwaysTrue())  // if condition always true, only emit "then" clause
     {
+        out.emitComment("The if() condition at " + getLineNo() + " is always true");
+        return consequence->emitCode(out, lValue);
+    }
+
+    if (condition->isExpressionAlwaysFalse())  // if condition always false, only emit "else" clause, if any
+    {
+        out.emitComment("The if() condition at " + getLineNo() + " is always false");
         if (alternative != NULL && !alternative->emitCode(out, lValue))
             return false;
         return true;
@@ -62,23 +76,31 @@ IfStmt::emitCode(ASMText &out, bool lValue) const
     
     string thenLabel = TranslationUnit::instance().generateLabel('L');
     string elseLabel = TranslationUnit::instance().generateLabel('L');
-    string endifLabel = TranslationUnit::instance().generateLabel('L');
 
     condition->writeLineNoComment(out, "if");
 
     if (! BinaryOpExpr::emitBoolJumps(out, condition, thenLabel, elseLabel))
         return false;
 
-    out.emitLabel(thenLabel, "then");
+    out.emitLabel(thenLabel, "then clause of if() started at " + condition->getLineNo());
+    consequence->writeLineNoComment(out, "");
 
-    consequence->emitCode(out, false);
+    if (!consequence->emitCode(out, false))
+        return false;
+
+    string endifLabel = TranslationUnit::instance().generateLabel('L');
+
     if (alternative != NULL)
         out.ins("LBRA", endifLabel, "jump over else clause");
 
-    out.emitLabel(elseLabel, "else");
+    out.emitLabel(elseLabel, "else clause of if() started at " + condition->getLineNo());
     if (alternative != NULL)
-        alternative->emitCode(out, false);
-    out.emitLabel(endifLabel, "end if");
+    {
+        alternative->writeLineNoComment(out, "");
+        if (!alternative->emitCode(out, false))
+            return false;
+    }
+    out.emitLabel(endifLabel, "end of if() started at " + condition->getLineNo());
     return true;
 }
 

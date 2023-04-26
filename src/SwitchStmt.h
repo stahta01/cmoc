@@ -1,7 +1,7 @@
-/*  $Id: SwitchStmt.h,v 1.8 2016/09/15 03:34:57 sarrazip Exp $
+/*  $Id: SwitchStmt.h,v 1.11 2019/01/18 02:42:20 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2017 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -28,6 +28,12 @@ class SwitchStmt : public Tree
 {
 public:
 
+    enum JumpMode { IF_ELSE, JUMP_TABLE };
+
+    static void forceJumpMode(JumpMode _forcedJumpMode);
+
+    // Represents a case statement or the default statement.
+    //
     struct SwitchCase
     {
         bool isDefault;  // false means 'case'
@@ -64,10 +70,19 @@ public:
 
     virtual bool isLValue() const { return false; }
 
+    // first = case value; second = index in cases[].
+    typedef std::pair<uint16_t, uint32_t> CaseValueAndIndexPair;
+
 private:
 
     bool isDuplicateCaseValue(uint16_t caseValue, std::string &originalCaseValueLineNumber) const;
     bool compileLabeledStatements(TreeSequence &statements);
+    void getSignedMinAndMaxCaseValues(uint16_t &minValue, uint16_t &maxValue) const;
+    void getUnsignedMinAndMaxCaseValues(uint16_t &minValue, uint16_t &maxValue) const;
+
+    static bool signedCaseValueComparator(const CaseValueAndIndexPair &a, const CaseValueAndIndexPair &b);
+    static bool unsignedCaseValueComparator(const CaseValueAndIndexPair &a, const CaseValueAndIndexPair &b);
+    size_t computeJumpModeCost(JumpMode jumpMode, const std::vector<CaseValueAndIndexPair> &caseValues) const;
 
     // Forbidden:
     SwitchStmt(const SwitchStmt &);
@@ -77,7 +92,10 @@ public:
 
     Tree *expression;  // owns the pointed object
     Tree *statement;   // owns the pointed object
-    SwitchCaseList cases;
+    SwitchCaseList cases;  // includes the 'default' clause, if any
+
+    static bool isJumpModeForced;
+    static JumpMode forcedJumpMode;
 
 };
 

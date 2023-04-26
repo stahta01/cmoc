@@ -1,4 +1,4 @@
-/*  $Id: ClassDef.h,v 1.8 2016/10/08 18:15:05 sarrazip Exp $
+/*  $Id: ClassDef.h,v 1.15 2022/12/28 20:47:52 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -43,11 +43,20 @@ public:
 
         std::string getName() const;
 
-        int16_t getNumArrayElements() const;
+        // Computes and returns the total number of array elements, i.e., the product of all dimensions.
+        // Example: For m[10][5], 50 will be returned.
+        // Returns 1 for a non-array class member.
+        //
+        int16_t getTotalNumArrayElements() const;
 
         // Returns the size in bytes occupied by this member.
         int16_t getSizeInBytes() const;
 
+        // Returns the dimensions due to the declarator, e.g., 3 in 'int m[3]'.
+        // If the type of this member is itself an array (e.g., typedef int A[4]; A m[3];)
+        // then the caller may want to call getTypeDesc()->appendDimensions() to get the 4,
+        // in this example.
+        //
         std::vector<uint16_t> getArrayDimensions() const;
 
         bool isArray() const;
@@ -82,10 +91,14 @@ public:
     void addDataMember(ClassMember *m);
 
     // Returns the size in bytes occupied by an instance of this class.
+    //
     int16_t getSizeInBytes() const;
 
     size_t getNumDataMembers() const { return dataMembers.size(); }
 
+    // memberIndex: Zero-based index of the member in the struct.
+    //              The indexes correspond to the order of the members' declaration in the struct.
+    //
     const ClassMember *getDataMember(size_t memberIndex) const
     {
         if (memberIndex >= dataMembers.size())
@@ -93,11 +106,18 @@ public:
         return dataMembers[memberIndex];
     }
 
-    const ClassMember *getDataMember(const std::string &name) const;
+    const ClassMember *getDataMember(const std::string &memberName) const;
 
-    // Returns -1 if name not found.
-    int16_t getDataMemberOffset(const std::string &name,
+    // Returns a number of bytes, or -1 if the name is not found.
+    //
+    int16_t getDataMemberOffset(const std::string &memberName,
                                 const ClassMember *&member) const;
+
+    // Returns a number of bytes, or -1 if the index is not found.
+    // member: If not null, *member receives the address of the ClassMember found, if any.
+    //
+    int16_t getDataMemberOffset(size_t memberIndex,
+                                const ClassMember **member) const;
 
     void clearMembers();
 
@@ -105,6 +125,11 @@ public:
 
     static std::vector<ClassMember *> *createClassMembers(DeclarationSpecifierList *dsl,
                                                           std::vector<Declarator *> *memberDeclarators);
+
+    // Issue errors and warnings, if any, about the validity of each member of this class,
+    // including array sizes.
+    //
+    void check();
 
 private:
 

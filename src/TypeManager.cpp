@@ -1,4 +1,4 @@
-/*  $Id: TypeManager.cpp,v 1.18 2016/10/08 18:15:06 sarrazip Exp $
+/*  $Id: TypeManager.cpp,v 1.58 2022/08/19 01:23:06 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -22,10 +22,14 @@
 #include "util.h"
 #include "Declarator.h"
 #include "WordConstantExpr.h"
-#include "ExpressionTypeSetter.h"
 #include "ClassDef.h"
 #include "Scope.h"
 #include "Declarator.h"
+#include "FunctionDef.h"
+#include "IdentifierExpr.h"
+#include "VariableExpr.h"
+#include "Declaration.h"
+#include "TranslationUnit.h"
 
 using namespace std;
 
@@ -54,7 +58,7 @@ TypeManager::createBasicTypes()
 
 
 void
-TypeManager::createInternalStructs(Scope &globalScope)
+TypeManager::createInternalStructs(Scope &globalScope, TargetPlatform targetPlatform)
 {
     // Internal structs that represent 'float', 'double', 'long' and 'unsigned long', e.g.,
     // struct _Float { unsigned char bytes[N]; };
@@ -65,8 +69,8 @@ TypeManager::createInternalStructs(Scope &globalScope)
     //
     createStructWithPairOfWords(globalScope, "_Long",   true);
     createStructWithPairOfWords(globalScope, "_ULong", false);
-    createStructWithArrayOfBytes(globalScope, "_Float",  5);  // TODO: make these sizes changeable with command-line param.
-    createStructWithArrayOfBytes(globalScope, "_Double", 8);
+    createStructWithArrayOfBytes(globalScope, "_Float",  getFloatingPointFormatSize(targetPlatform, false));
+    createStructWithArrayOfBytes(globalScope, "_Double", getFloatingPointFormatSize(targetPlatform, true));
 }
 
 
@@ -77,7 +81,7 @@ TypeManager::createStructWithArrayOfBytes(Scope &globalScope, const char *struct
     ClassDef *theStruct = new ClassDef();
     theStruct->setName(structName);  // use same name as TypeDesc
     const TypeDesc *memberTypeDesc = getIntType(BYTE_TYPE, false);
-    Declarator *memberDeclarator = new Declarator("bytes", "<internal>", 0);  // no source filename and line no
+    Declarator *memberDeclarator = new Declarator("bytes", 0, "<internal>", 0);  // no source filename and line no
     memberDeclarator->addArraySizeExpr(new WordConstantExpr(numBytesInArray, true, false));  // make the declarator an array
     assert(memberDeclarator->isArray());
     ClassDef::ClassMember *structMember = new ClassDef::ClassMember(memberTypeDesc, memberDeclarator);  // this appends 'unsigned char[]' to types[]
@@ -89,15 +93,15 @@ TypeManager::createStructWithArrayOfBytes(Scope &globalScope, const char *struct
 void
 TypeManager::createStructWithPairOfWords(Scope &globalScope, const char *structName, bool isHighWordSigned)
 {
-    types.push_back(new TypeDesc(CLASS_TYPE, NULL, structName, false, false));
+    types.push_back(new TypeDesc(CLASS_TYPE, NULL, structName, isHighWordSigned, false));
     ClassDef *theStruct = new ClassDef();
     theStruct->setName(structName);  // use same name as TypeDesc
 
     const TypeDesc *highWordTypeDesc = getIntType(WORD_TYPE, isHighWordSigned);
     const TypeDesc *lowWordTypeDesc  = getIntType(WORD_TYPE, false);
 
-    Declarator *highMemberDeclarator = new Declarator("hi", "<internal>", 0);  // no source filename and line no
-    Declarator *lowMemberDeclarator  = new Declarator("lo", "<internal>", 0);
+    Declarator *highMemberDeclarator = new Declarator("hi", 0, "<internal>", 0);  // no source filename and line no
+    Declarator *lowMemberDeclarator  = new Declarator("lo", 0, "<internal>", 0);
 
     ClassDef::ClassMember *highStructMember = new ClassDef::ClassMember(highWordTypeDesc, highMemberDeclarator);
     ClassDef::ClassMember *lowStructMember  = new ClassDef::ClassMember(lowWordTypeDesc,  lowMemberDeclarator);
@@ -116,7 +120,7 @@ TypeManager::~TypeManager()
         delete *it;
 
     // Destroy the Enumerator objects.
-    for (EnumeratorMap::iterator it = enumerators.begin(); it != enumerators.end(); ++it)
+    for (EnumeratorList::iterator it = enumerators.begin(); it != enumerators.end(); ++it)
         delete it->second;
 }
 
@@ -157,7 +161,7 @@ TypeManager::getLongType(bool isSigned) const
 
 
 const TypeDesc *
-TypeManager::getFloatType(bool isDoublePrecision) const
+TypeManager::getRealType(bool isDoublePrecision) const
 {
     return types[isDoublePrecision ? 11 : 9];
 }
@@ -189,15 +193,60 @@ TypeManager::getPointerTo(const TypeDesc *pointedTypeDesc) const
 }
 
 
-// Example: getPointerTo([byte], 3) will return byte ***.
-// Level zero means typeDesc itself.
+// typeQualifierBitFieldPerPointerLevel: List of bitfields containing CONST_BIT or not.
+// The number of elements determines the pointer level.
+// Example 1: getPointerTo('char', {0, 0, 0}) will return 'char ***'.
+// Example 2: getPointerTo('int', {CONST_BIT}) will return 'int * const', i.e., a constant pointer to an int.
+// Example 3: getPointerTo('const int', {0}) will return 'const int *', i.e., a non-constant pointer to a constant integer.
+// Example 4: getPointerTo('int', {0, CONST_BIT}) will return 'int ** const'.
+// Example 5: getPointerTo('int', {}) will return 'int'.
 //
 const TypeDesc *
-TypeManager::getPointerTo(const TypeDesc *typeDesc, size_t level) const
+TypeManager::getPointerTo(const TypeDesc *typeDesc, const TypeQualifierBitFieldVector &typeQualifierBitFieldPerPointerLevel) const
 {
-    for ( ; level > 0; --level)
+    for (size_t i = 0; i < typeQualifierBitFieldPerPointerLevel.size(); ++i)
+    {
+        typeDesc = getPointerTo(typeDesc);
+        if (typeQualifierBitFieldPerPointerLevel[i] & CONST_BIT)
+            typeDesc = getConst(typeDesc);
+    }
+    return typeDesc;
+}
+
+
+const TypeDesc *
+TypeManager::getPointerTo(const TypeDesc *typeDesc, size_t pointerLevel) const
+{
+    assert(pointerLevel < 100);  // sanity check
+    for (size_t i = 0; i < pointerLevel; ++i)
         typeDesc = getPointerTo(typeDesc);
     return typeDesc;
+}
+
+
+// Returns a type that is equivalent to 'typeDesc' but whose isConst field is true.
+//
+const TypeDesc *
+TypeManager::getConst(const TypeDesc *typeDesc) const
+{
+    if (typeDesc == NULL)
+        return NULL;
+
+    if (typeDesc->isConst)
+        return typeDesc;
+
+    TypeDesc targetTypeDesc(*typeDesc);
+    targetTypeDesc.isConst = true;
+    for (vector<TypeDesc *>::const_iterator it = types.begin(); it != types.end(); ++it)
+    {
+        const TypeDesc *td = *it;
+        assert(td && td->isValid());
+        if (*td == targetTypeDesc)
+            return td;  // found existing const version of 'typeDesc'
+    }
+
+    types.push_back(new TypeDesc(targetTypeDesc));
+    return types.back();
 }
 
 
@@ -205,6 +254,20 @@ const TypeDesc *
 TypeManager::getPointerToIntegral(BasicType byteOrWordType, bool isSigned) const
 {
     return getPointerTo(getIntType(byteOrWordType, isSigned));
+}
+
+
+const TypeDesc *
+TypeManager::getArrayOfChar() const
+{
+    return getArrayOf(getIntType(BYTE_TYPE, true), 1);
+}
+
+
+const TypeDesc *
+TypeManager::getArrayOfConstChar() const
+{
+    return getArrayOf(getConst(getIntType(BYTE_TYPE, true)), 1);
 }
 
 
@@ -261,23 +324,27 @@ TypeManager::getSizedArrayOf(const TypeDesc *pointedTypeDesc, const std::vector<
         return NULL;
 
     if (dimIndex == 0)
-    {
-        for (vector<TypeDesc *>::const_iterator it = types.begin(); it != types.end(); ++it)
-        {
-            const TypeDesc *td = *it;
-            assert(td && td->isValid());
-            if (td->type == ARRAY_TYPE && td->pointedTypeDesc == pointedTypeDesc && td->numArrayElements == arrayDimensions[dimIndex])
-                return td;
-        }
-
-        types.push_back(new TypeDesc(ARRAY_TYPE, pointedTypeDesc, string(), false, false, arrayDimensions[dimIndex]));
-        return types.back();
-    }
+        return getSizedOneDimArrayOf(pointedTypeDesc, arrayDimensions[0]);
 
     const TypeDesc *subTypeDesc = getSizedArrayOf(pointedTypeDesc, arrayDimensions, dimIndex - 1);
-    return getSizedArrayOf(subTypeDesc, arrayDimensions, dimIndex);
+    return getSizedOneDimArrayOf(subTypeDesc, arrayDimensions[dimIndex]);
 }
 
+
+const TypeDesc *
+TypeManager::getSizedOneDimArrayOf(const TypeDesc *pointedTypeDesc, size_t numArrayElements) const
+{
+    for (vector<TypeDesc *>::const_iterator it = types.begin(); it != types.end(); ++it)
+    {
+        const TypeDesc *td = *it;
+        assert(td && td->isValid());
+        if (td->type == ARRAY_TYPE && td->pointedTypeDesc == pointedTypeDesc && td->numArrayElements == numArrayElements)
+            return td;
+    }
+
+    types.push_back(new TypeDesc(ARRAY_TYPE, pointedTypeDesc, string(), false, false, numArrayElements));
+    return types.back();
+}
 
 const TypeDesc *
 TypeManager::getClassType(const std::string &className, bool isUnion, bool createIfAbsent) const
@@ -304,13 +371,151 @@ TypeManager::getClassType(const std::string &className, bool isUnion, bool creat
 }
 
 
-const TypeDesc *TypeManager::getFunctionPointerType() const
+const TypeDesc *
+TypeManager::getFunctionPointerType(const FunctionDef &fd) const
 {
-    return getPointerToVoid();
+    assert(fd.getFormalParamList());
+    return getFunctionPointerType(fd.getTypeDesc(), *fd.getFormalParamList(), fd.isInterruptServiceRoutine(), fd.isFunctionReceivingFirstParamInReg());
+}
+
+
+// Looks up types[] to find an existing function pointer type with the given
+// return type and formal parameter types.
+//
+const TypeDesc *
+TypeManager::findFunctionPointerType(const TypeDesc *returnTypeDesc,
+                                     const FormalParamList &params,
+                                     bool isISR,
+                                     bool receivesFirstParamInReg) const
+{
+    for (vector<TypeDesc *>::const_iterator it = types.begin(); it != types.end(); ++it)
+    {
+        const TypeDesc *td = *it;
+        assert(td && td->isValid());
+        if (td->type != POINTER_TYPE)
+            continue;
+        const TypeDesc *funcTD = td->pointedTypeDesc;
+        if (funcTD->type != FUNCTION_TYPE)
+            continue;
+        if (funcTD->isISR != isISR || funcTD->receivesFirstParamInReg != receivesFirstParamInReg || funcTD->ellipsis != params.endsWithEllipsis())
+            continue;
+        if (*funcTD->returnTypeDesc != *returnTypeDesc)
+            continue;
+        size_t numParams = (params.hasSingleVoidParam() ? 0 : params.size());
+        if (funcTD->formalParamTypeDescList.size() != numParams)
+            continue;
+        bool allParamsMatch = true;
+        vector<Tree *>::const_iterator paramTreeIt = params.begin();
+        for (vector<const TypeDesc *>::const_iterator typeDescIt = funcTD->formalParamTypeDescList.begin();
+                                                     typeDescIt != funcTD->formalParamTypeDescList.end(); ++typeDescIt, ++paramTreeIt)
+            if (*(*paramTreeIt)->getTypeDesc() != **typeDescIt)
+            {
+                allParamsMatch = false;
+                break;
+            }
+        if (!allParamsMatch)
+            continue;
+
+        //cout << "# TypeManager::findFunctionPointerType: return " << td->toString() << "\n";
+        return td;
+    }
+    return NULL;
+}
+
+
+const TypeDesc *
+TypeManager::getFunctionPointerType(const TypeDesc *returnTypeDesc, const FormalParamList &params, bool isISR, bool receivesFirstParamInReg) const
+{
+    //cout << "# TypeManager::getFunctionPointerType({" << returnTypeDesc->toString() << "}, ell=" << params.endsWithEllipsis() << ")\n";
+
+    const TypeDesc *fixedReturnTypeDesc = getTypeWithoutCallingConventionFlags(returnTypeDesc);
+
+    const TypeDesc *preexistingTD = findFunctionPointerType(fixedReturnTypeDesc, params, isISR, receivesFirstParamInReg);
+    if (preexistingTD)
+        return preexistingTD;
+
+    TypeDesc *funcTD = new TypeDesc(fixedReturnTypeDesc, isISR, params.endsWithEllipsis(), receivesFirstParamInReg);
+    assert(funcTD->type == FUNCTION_TYPE);
+    types.push_back(funcTD);
+
+    // Add the argument types to funcTD, unless the list of args is just (void).
+    //
+    if (!params.hasSingleVoidParam())
+        for (vector<Tree *>::const_iterator it = params.begin(); it != params.end(); ++it)
+             funcTD->addFormalParamTypeDesc((*it)->getTypeDesc());
+
+    //cout << "# TypeManager::getFunctionPointerType:   funcTD={" << funcTD->toString() << "}\n";
+    return getPointerTo(funcTD);
+}
+
+
+const TypeDesc *
+TypeManager::getInterruptType(const TypeDesc *existingType) const
+{
+    if (existingType->isISR)
+        return existingType;
+
+    for (vector<TypeDesc *>::const_iterator it = types.begin(); it != types.end(); ++it)
+    {
+        const TypeDesc *td = *it;
+        if (((- TypeDesc::compare(*existingType, *td)) & 2) && td->isISR)
+            return td;
+    }
+
+    TypeDesc *newTD = new TypeDesc(*existingType);
+    newTD->isISR = true;
+    types.push_back(newTD);
+    return newTD;
+}
+
+
+const TypeDesc *
+TypeManager::getFPIRType(const TypeDesc *existingType) const
+{
+    if (existingType->receivesFirstParamInReg)
+        return existingType;
+
+    for (vector<TypeDesc *>::const_iterator it = types.begin(); it != types.end(); ++it)
+    {
+        const TypeDesc *td = *it;
+        if (((- TypeDesc::compare(*existingType, *td)) & 4) && td->receivesFirstParamInReg)
+            return td;
+    }
+
+    TypeDesc *newTD = new TypeDesc(*existingType);
+    newTD->receivesFirstParamInReg = true;
+    types.push_back(newTD);
+    return newTD;
+}
+
+
+const TypeDesc *
+TypeManager::getTypeWithoutCallingConventionFlags(const TypeDesc *existingType) const
+{
+    if (! existingType->isISR && ! existingType->receivesFirstParamInReg)
+        return existingType;
+
+    for (vector<TypeDesc *>::const_iterator it = types.begin(); it != types.end(); ++it)
+    {
+        const TypeDesc *td = *it;
+        // If td has no calling convention flags and differs from existingType only by such flags, then td is it.
+        if (!td->isISR && !td->receivesFirstParamInReg && ((- TypeDesc::compare(*existingType, *td)) & (2 | 4)))
+            return td;
+    }
+
+    TypeDesc *newTD = new TypeDesc(*existingType);
+    newTD->isISR = false;
+    newTD->receivesFirstParamInReg = false;
+    types.push_back(newTD);
+    return newTD;
 }
 
 
 // Ends by calling delete on 'declarator'.
+//
+// Note: In the cast of a function pointer, 'declSpecTypeDef' is only the return type.
+//       For example, with typedef int (*f)(), declSpecTypeDef will represent int,
+//       and declarator->isFunctionPointer() will be true.
 //
 bool
 TypeManager::addTypeDef(const TypeDesc *declSpecTypeDef, Declarator *declarator)
@@ -320,28 +525,44 @@ TypeManager::addTypeDef(const TypeDesc *declSpecTypeDef, Declarator *declarator)
 
     bool success = false;
 
-    string id = declarator->getId();
-    TypeDefMap::iterator it = typeDefs.find(id);
-    if (it != typeDefs.end())  // if type name already used:
-        errormsg("cannot redefine typedef %s", id.c_str());
+    TypeDefMap::iterator it;
+    const string &id = declarator->getId();
+    if (id.empty())
+        errormsg("empty typename");
+    else if ((it = typeDefs.find(id)) != typeDefs.end())  // if type name already used:
+        errormsg("cannot redefine typedef `%s'", id.c_str());
+    else if (declSpecTypeDef->isInterruptServiceRoutine() && ! declarator->isFunctionPointer())
+        errormsg("modifier `interrupt' cannot be used on typedef");
     else
     {
+        if (! declarator->isFunctionPointer() && ! declarator->isArrayOfFunctionPointers() && declarator->getFormalParamList() != NULL)
+        {
+            errormsg("invalid function typedef");
+            // Continue despite the error and register the new typedef name,
+            // which avoids a syntax error when the name likely gets used in
+            // the C code that follows.
+        }
+
+        // Now, check for asterisks, i.e., pointers.
         // Example: With "typedef int **PP;", declSpecTypeDef represents "int"
         // and declarator represents (2, "PP"), where 2 is the pointer level.
         // The next call assigns "int **" to specificTypeDesc.
         //
         const TypeDesc *specificTypeDesc = declarator->processPointerLevel(declSpecTypeDef);
         assert(specificTypeDesc);
-        //cerr << "#   After processPointerLevel: " << specificTypeDesc->toString() << endl;
 
+        if (declarator->isFunctionPointer() || declarator->isArrayOfFunctionPointers())
+            specificTypeDesc = getFunctionPointerType(specificTypeDesc,
+                                                      *declarator->getFormalParamList(),
+                                                      specificTypeDesc->isInterruptServiceRoutine(),
+                                                      specificTypeDesc->receivesFirstParamInReg);
+
+        // Now, check for array dimensions, e.g., a[5][7].
         vector<uint16_t> arrayDimensions;
-        if (declarator->computeArrayDimensions(arrayDimensions))  // arrayDimensions will be empty if non-array
+        if (declarator->computeArrayDimensions(arrayDimensions, false, NULL))  // arrayDimensions will be empty if non-array
         {
             if (arrayDimensions.size() > 0)
-            {
                 specificTypeDesc = getSizedArrayOf(specificTypeDesc, arrayDimensions, arrayDimensions.size() - 1);
-                //cerr << "#   After getSizedArrayOf    : " << specificTypeDesc->toString() << endl;
-            }
 
             typeDefs[id] = specificTypeDesc;
             success = true;
@@ -387,9 +608,9 @@ TypeManager::declareEnumerationList(const std::string &enumTypeName,
             //
             enumTypeNames[enumTypeName] = NamedEnum(getSourceLineNo());
             NamedEnum &namedEnum = enumTypeNames[enumTypeName];
-            for (std::vector<Enumerator *>::const_iterator it = enumerationList.begin();
-                                                          it != enumerationList.end(); ++it)
-                namedEnum.members.push_back((*it)->name);
+            for (std::vector<Enumerator *>::const_iterator jt = enumerationList.begin();
+                                                          jt != enumerationList.end(); ++jt)
+                namedEnum.members.push_back((*jt)->name);
         }
     }
 
@@ -413,6 +634,16 @@ TypeManager::declareEnumerationList(const std::string &enumTypeName,
 }
 
 
+Enumerator *
+TypeManager::findEnumerator(const string &enumeratorName) const
+{
+    for (size_t i = 0; i < enumerators.size(); ++i)
+        if (enumerators[i].first == enumeratorName)
+            return enumerators[i].second;
+    return NULL;
+}
+
+
 // enumerator: Upon success, this pointer is stored in the 'enumerators' map.
 // Returns true for success, false for failure (an error message is issued and
 // 'enumerator' is not destroyed).
@@ -420,35 +651,35 @@ TypeManager::declareEnumerationList(const std::string &enumTypeName,
 bool
 TypeManager::declareEnumerator(Enumerator *enumerator)
 {
+    //cout << "# TypeManager::declareEnumerator: enumerator " << enumerator << ": " << enumerator->name << endl;
     assert(enumerator);
 
-    EnumeratorMap::const_iterator existingEnumerator = enumerators.find(enumerator->name);
-    if (existingEnumerator != enumerators.end())
+    Enumerator *existingEnumerator = findEnumerator(enumerator->name);
+    if (existingEnumerator)
     {
         errormsg("enumerated name `%s' already defined at %s",
-                 enumerator->name.c_str(), existingEnumerator->second->sourceLineNo.c_str());
+                 enumerator->name.c_str(), existingEnumerator->sourceLineNo.c_str());
         return false;
     }
 
-    enumerators[enumerator->name] = enumerator;
+    enumerators.push_back(make_pair(enumerator->name, enumerator));
     return true;
 }
 
 bool
 TypeManager::isEnumeratorName(const string &id) const
 {
-    return enumerators.find(id) != enumerators.end();
+    return findEnumerator(id) != NULL;
 }
 
 
 const TypeDesc *
 TypeManager::getEnumeratorTypeDesc(const std::string &id) const
 {
-    EnumeratorMap::const_iterator it = enumerators.find(id);
-    if (it == enumerators.end())
+    const Enumerator *enumerator = findEnumerator(id);
+    if (!enumerator)
         return NULL;  // not an enumerated name
 
-    const Enumerator *enumerator = it->second;
     while (enumerator && enumerator->valueExpr == NULL)
         enumerator = enumerator->previousEnumerator;
     if (!enumerator)
@@ -461,11 +692,10 @@ TypeManager::getEnumeratorTypeDesc(const std::string &id) const
 bool
 TypeManager::getEnumeratorValue(const std::string &id, uint16_t &value) const
 {
-    EnumeratorMap::const_iterator it = enumerators.find(id);
-    if (it == enumerators.end())
+    const Enumerator *enumerator = findEnumerator(id);
+    if (!enumerator)
         return false;  // not an enumerated name
 
-    const Enumerator *enumerator = it->second;
     uint16_t increment = 0;
     while (enumerator && enumerator->valueExpr == NULL)
     {
@@ -504,31 +734,28 @@ TypeManager::isIdentiferMemberOfNamedEnum(const std::string &enumTypeName, const
 
 
 void
-TypeManager::setEnumeratorTypes() const
-{
-    /*for (EnumTypeNameMap::const_iterator it = enumTypeNames.begin(); it != enumTypeNames.end(); ++it)
-        cout << "# enum " << it->first << " defined at " << it->second.sourceLineNo << "\n";*/
-
-    ExpressionTypeSetter ets;
-    for (EnumeratorMap::const_iterator it = enumerators.begin(); it != enumerators.end(); ++it)
-    {
-        const Enumerator *enumerator = it->second;
-        assert(enumerator);
-        //cout << "# enumerator " << it->first << ": valueExpr=" << enumerator->valueExpr << "\n";
-        if (enumerator->valueExpr)
-        {
-            //cout << "#     type: " << *enumerator->valueExpr->getTypeDesc() << "\n";
-            enumerator->valueExpr->iterate(ets);
-        }
-    }
-}
-
-
-void
 TypeManager::dumpTypes(std::ostream &out) const
 {
     for (vector<TypeDesc *>::const_iterator it = types.begin(); it != types.end(); ++it)
         out << **it << "\n";
+}
+
+
+size_t
+TypeManager::getFloatingPointFormatSize(TargetPlatform platform, bool isDoublePrecision)
+{
+    switch (platform)
+    {
+    case COCO_BASIC:
+    case DRAGON:
+    case USIM:
+    case VOID_TARGET:
+        return 5;
+    case OS9:
+        return isDoublePrecision ? 8 : 4;
+    default:
+        return 0;
+    }
 }
 
 

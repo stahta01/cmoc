@@ -6,11 +6,10 @@
 #include <stdio.h>
 #include <signal.h>
 #include <errno.h>
+#include <string.h>
 #include "mc6809.h"
 
-#if defined(__unix) || (defined(__APPLE__) && defined(TARGET_OS_MAC)) || defined(__MINGW32__)
 #include <unistd.h>
-#endif
 
 #if defined(__CYGWIN__)
 #include <sys/select.h>
@@ -18,6 +17,8 @@
 
 #include <iostream>
 #include <iomanip>
+#include <chrono>
+#include <thread>
 
 using namespace std;
 
@@ -38,7 +39,8 @@ class sys : virtual public mc6809 {
 
 class Console : virtual public mc6809 {
 public:
-	Console() : delayTicks(0)  {}
+	Console() : delayTicks(0), binaryMode(false) {}
+	void setBinaryMode(bool m) { binaryMode = m; }
 
 protected:
 
@@ -48,6 +50,7 @@ protected:
 private:
 
 	Word	delayTicks;
+	bool    binaryMode;  // if true, CRs are not translated to LFs on output to $FF00
 
 };
 
@@ -322,14 +325,14 @@ void Console::write(Word addr, Byte x)
 	switch (addr)
 	{
 	case 0xFF00:
-		cout << (char) (x == 13 ? 10 : x) << flush;
+		cout << (char) (x == 13 && !binaryMode ? 10 : x) << flush;
 		break;
 	case 0xFF02:
 		delayTicks = (Word(x) << 8);
 		break;
 	case 0xFF03:
 		delayTicks |= x;
-		usleep(1000000 / 60 * delayTicks);
+		std::this_thread::sleep_for(std::chrono::microseconds(1000000 / 60 * delayTicks));
 		break;
 	default:
 	if (addr >= 0xFF04 && addr <= 0xFF0A)
@@ -361,8 +364,9 @@ void update(int)
 
 int main(int argc, char *argv[])
 {
-	if (argc < 2 || argc > 3) {
-		fprintf(stderr, "Usage: usim <hexfile> [<hex load offset>]\n");
+	if (argc < 2 || !strcmp(argv[1], "--help")) {
+		fprintf(stderr, "Usage: usim <hexfile|srecfile> [--binary] [<hex load offset>]\n");
+		fprintf(stderr, "--binary turns off carriage return to line feed translation on output to $FF00.\n");
 		return EXIT_FAILURE;
 	}
 
@@ -372,19 +376,40 @@ int main(int argc, char *argv[])
 	alarm(1);
 #endif
 
+	const char *progFilename = NULL;
 	Word loadOffset = 0;
-	if (argc >= 3 && argv[2]) {
-		char *end = NULL;
-		errno = 0;
-		long n = strtol(argv[2], &end, 16);
-		if (errno != 0 || n < 0 || n > 0xFFFF) {
-			fprintf(stderr, "usim: invalid load offset %s\n", argv[2]);
-			exit(EXIT_FAILURE);
+	bool gotLoadOffset = false;
+	for (int argi = 1; argi < argc; ++argi) {
+	if (!strcmp(argv[argi], "--binary")) {
+		sys.setBinaryMode(true);
+	} else if (argv[argi][0] == '-') {
+		fprintf(stderr, "usim: Invalid option %s\n", argv[argi]);
+		return EXIT_FAILURE;
+	} else {  // non-option argument:
+		if (!progFilename)
+			progFilename = argv[argi];
+		else if (!gotLoadOffset) {	// load offset:
+			char *end = NULL;
+			errno = 0;
+			long n = strtol(argv[argi], &end, 16);
+			if (errno != 0 || n < 0 || n > 0xFFFF) {
+				fprintf(stderr, "usim: invalid load offset %s\n", argv[argi]);
+				return EXIT_FAILURE;
+			}
+			loadOffset = Word(n);
+			gotLoadOffset = true;
 		}
-		loadOffset = Word(n);
+		else {
+			fprintf(stderr, "usim: Invalid argument %s\n", argv[argi]);
+			return EXIT_FAILURE;
+		}
+	}
 	}
 
-	sys.load_intelhex(argv[1], loadOffset);
+	if (strstr(progFilename, ".srec") == progFilename + strlen(progFilename) - 5)
+		sys.load_srec(progFilename, loadOffset);
+	else
+		sys.load_intelhex(progFilename, loadOffset);
 	sys.run();
 
 	return EXIT_SUCCESS;

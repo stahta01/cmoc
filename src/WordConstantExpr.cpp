@@ -1,4 +1,4 @@
-/*  $Id: WordConstantExpr.cpp,v 1.8 2016/05/06 03:42:56 sarrazip Exp $
+/*  $Id: WordConstantExpr.cpp,v 1.16 2022/06/03 01:47:19 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -31,6 +31,33 @@ WordConstantExpr::WordConstantExpr(double value, bool isWord, bool isSigned)
 }
 
 
+// tokenText: Assumed to be valid as per lexer.ll.
+//
+inline bool
+WordConstantExpr::hasUnsignedSuffix(const char *tokenText)
+{
+    return strchr(tokenText, 'U') || strchr(tokenText, 'u');
+}
+
+
+// tokenText: Assumed to be valid as per lexer.ll.
+//
+inline bool
+WordConstantExpr::hasLongSuffix(const char *tokenText)
+{
+    return strchr(tokenText, 'L') || strchr(tokenText, 'l');
+}
+
+
+WordConstantExpr::WordConstantExpr(double value, const char *tokenText)
+  : Tree(TranslationUnit::getTypeManager().getIntType(WORD_TYPE, !hasUnsignedSuffix(tokenText) && value <= 0x7FFF)),
+    wordValue(value)
+{
+    if (hasLongSuffix(tokenText))
+        warnmsg("long constant is not supported (`%s')", tokenText);
+}
+
+
 /*virtual*/
 WordConstantExpr::~WordConstantExpr()
 {
@@ -40,7 +67,12 @@ WordConstantExpr::~WordConstantExpr()
 uint16_t
 WordConstantExpr::getWordValue() const
 {
-    return uint16_t(wordValue);
+    assert(wordValue > -32769.0 && wordValue < 65536.0);
+    if (wordValue >= 0.0)
+        return uint16_t(wordValue);
+    // Convert double to non-negative value, so that conversion to uint16_t is portable.
+    // Then do a 2's complement to obtain a 16-bit unsigned representation of the actual negative value.
+    return ~ uint16_t(- wordValue) + uint16_t(1);
 }
 
 
@@ -55,23 +87,33 @@ WordConstantExpr::checkSemantics(Functor &)
 }
 
 
-/*virtual*/
 CodeStatus
 WordConstantExpr::emitCode(ASMText &out, bool lValue) const
 {
     if (lValue)
+    {
+        errormsg("cannot emit l-value for word constant expression");
         return false;
+    }
+
+    bool emitByte = (getType() == BYTE_TYPE);
 
     uint16_t uValue = getWordValue();
     if (uValue == 0)
     {
-        out.ins("CLRA");
+        if (!emitByte)
+            out.ins("CLRA");
         out.ins("CLRB");
     }
     else
-        out.ins("LDD", "#" + wordToString(uValue, true),
+    {
+        uValue &= (emitByte ? 0x00FF : 0xFFFF);
+        out.ins(emitByte ? "LDB" : "LDD",
+                "#" + wordToString(uValue, true),
                "decimal " + (isSigned()
                                ? intToString(int16_t(uValue), false) + " signed"
                                : wordToString(uValue, false) + " unsigned"));
+    }
     return true;
 }
+

@@ -1,4 +1,4 @@
-/*  $Id: Pragma.h,v 1.8 2016/09/15 03:34:57 sarrazip Exp $
+/*  $Id: Pragma.h,v 1.11 2022/08/22 03:02:53 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -44,16 +44,10 @@ public:
     //
     bool isDataOrg(uint16_t &address) const;
 
-    // Returns true if this pragma is "const_data" followed by
-    // either "start" or "end".
-    // If the method returns true, isStart indicates if the argument
-    // was "start" or not.
+    // If #pragma stack_space N.
+    // numBytes receives N, but only when this method returns true.
     //
-    bool isConstData(bool &isStart) const;
-
-    // If #pragma exec_once.
-    //
-    bool isExecOnce() const;
+    bool isStackSpace(uint16_t &numBytes) const;
 
     std::string getDirective() const;
 
@@ -83,6 +77,7 @@ public:
 
 private:
 
+    void getNextWord(size_t &startIndex, size_t &endIndex) const;
     bool parseOrg(uint16_t &newOriginAddress) const;
 
 private:

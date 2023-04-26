@@ -1,7 +1,7 @@
-/*  $Id: ASMText.cpp,v 1.62 2016/10/05 22:18:24 sarrazip Exp $
+/*  $Id: ASMText.cpp,v 1.170 2022/08/10 02:43:12 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
     Copyright (C) 2016 Jamie Cho <https://github.com/jamieleecho>
 
     This program is free software: you can redistribute it and/or modify
@@ -24,33 +24,120 @@
 #include "TranslationUnit.h"
 #include "FunctionDef.h"
 
-#include <algorithm>
 #include <iomanip>
-#include <utility>
-#include <stack>
 #include <climits>
-#include <iostream>
 
 using namespace std;
 
 
-static int mystoi(const string &s, char **ptr, int base) {
-  return strtol(s.c_str(), ptr, base);
+const ASMText::OptimizingMethod ASMText::level1OptimFuncs[] =
+{
+    &ASMText::branchToNextLocation,
+    &ASMText::instrFollowingUncondBranch,
+    &ASMText::lddToLDB,
+    &ASMText::pushLoadDiscardAdd,
+    &ASMText::pushBLoadAdd,
+    &ASMText::pushDLoadAdd,
+    &ASMText::pushLoadDLoadX,
+    &ASMText::replaceLDDZero,
+    &ASMText::pushDLoadXLoadD,
+    &ASMText::stripConsecutiveLoadsToSameReg,
+    &ASMText::storeLoad,
+    &ASMText::condBranchOverUncondBranch,
+    &ASMText::shortenBranch,
+    &ASMText::loadCmpZeroBeqOrBne,
+    &ASMText::pushWordForByteComparison,
+    &ASMText::stripConsecOppositeTFRs,
+    &ASMText::stripOpToDeadReg,
+    &ASMText::stripUselessPushPull,
+    &ASMText::stripUselessBitwiseOp,
+};
+
+
+const ASMText::OptimizingMethod ASMText::level2OptimFuncs[] =
+{
+    &ASMText::fasterPointerIndexing,
+    &ASMText::fasterPointerPushing,
+    &ASMText::stripExtraClrA_B,
+    &ASMText::stripExtraPulsX,
+    &ASMText::stripExtraPushPullB,
+    &ASMText::andA_B0,
+    &ASMText::transformPshsDPshsD,
+    &ASMText::changeLoadDToLoadB,
+    &ASMText::changeAddDToAddB,
+    &ASMText::stripPushLeas1,
+    &ASMText::orAndA_B,
+    &ASMText::loadDToClrALoadB,
+    &ASMText::optimizeStackOperations1,
+    &ASMText::optimizeStackOperations2,
+    &ASMText::optimizeStackOperations3,
+    &ASMText::optimizeStackOperations4,
+    &ASMText::optimizeStackOperations5,
+    &ASMText::mergePushes,
+    &ASMText::removeClr,
+    &ASMText::removeAndOrMulAddSub,
+    &ASMText::replaceCMPWithTST,
+    &ASMText::optimizeLoadDX,
+    &ASMText::optimizeTfrPush,
+    &ASMText::removePushB,
+    &ASMText::optimizeLdbTfrClrb,
+    &ASMText::optimizeLoadTest,
+    &ASMText::remove16BitStackOperation,
+    &ASMText::optimizePostIncrement,
+    &ASMText::removeUselessOps,
+    &ASMText::optimize16BitStackOps1,
+    &ASMText::optimize16BitStackOps2,
+    &ASMText::optimize8BitStackOps,
+    &ASMText::removeTfrDX,
+    &ASMText::removeUselessLeax,
+    &ASMText::removeUselessLdx,
+    &ASMText::removeUnusedLoad,
+    &ASMText::optimizeAndbTstb,
+    &ASMText::optimizeIndexedX,
+    &ASMText::optimizeIndexedX2,
+    &ASMText::transformPshsXPshsX,
+    &ASMText::optimizePshsOps,
+    &ASMText::optimize16BitCompares,
+    &ASMText::combineConsecutiveOps,
+    &ASMText::removeConsecutivePshsPul,
+    &ASMText::coalesceConsecutiveLeax,
+    &ASMText::optimizeLeaxLdx,
+    &ASMText::optimizeLeaxLdd,
+    &ASMText::optimizeLdx,
+    &ASMText::optimizeLeax,
+    &ASMText::removeUselessTfr1,
+    &ASMText::removeUselessTfr2,
+    &ASMText::removeUselessClrb,
+    &ASMText::optimizeDXAliases,
+    &ASMText::removeLoadInComparisonWithTwoValues,
+    &ASMText::removePCRIfRelocatabilityNotSupported,
+    &ASMText::removeCMPZeroAfterLDIfBHI,
+    &ASMText::replaceBranchToUncondBranch,
+    &ASMText::ldbBranchLdbCompare,
+    &ASMText::removePushBFromLdbPushLdbCmp,
+};
+
+
+static bool extractConstantLiteral(const string &s, int &val);
+
+
+// For debugging.
+//
+ostream &operator << (ostream &out, const ASMText::Element &el)
+{
+    return out << el.fields[0] << '\t' << el.fields[1] << '\t' << el.fields[2];
 }
 
 
-static string my_to_string(int val, bool hex=false) {
-  stringstream strstream;
-  if (hex)
-    strstream << std::hex << val;
-  else
-    strstream << val;
-  return strstream.str();
+ostream &operator << (ostream &out, const ASMText::InsEffects &ie)
+{
+    return out << "[read=0x" << hex << (unsigned) ie.read << ", written=0x" << (unsigned) ie.written << dec << "]";
 }
 
 
 ASMText::ASMText()
 :   elements(),
+    currentSection(),
     labelTable(),
     basicBlocks()
 {
@@ -102,9 +189,9 @@ ASMText::writeIns(ostream &out, const Element &e)
 
     out << "\t" << instr;
     if (!arg.empty() || !comment.empty())
-        out << "\t" << arg << (arg.length() < 8 ? "\t" : "");
+        out << "\t" << arg;
     if (!comment.empty())
-        out << "\t" << comment;
+        out << (arg.length() < 8 ? "\t\t" : "\t") << comment;
     out << "\n";
 }
 
@@ -117,9 +204,9 @@ ASMText::emitFunctionStart(const string &functionId, const string &lineNo)
 
 
 void
-ASMText::emitFunctionEnd()
+ASMText::emitFunctionEnd(const string &functionId, const string &lineNo)
 {
-    addElement(FUNCTION_END);
+    addElement(FUNCTION_END, functionId, lineNo);
 }
 
 
@@ -142,6 +229,7 @@ ASMText::writeInlineAssembly(ostream &out, const Element &e)
 void
 ASMText::emitLabel(const string &label, const string &comment)
 {
+    assert(!label.empty());
     addElement(LABEL, label, comment);
 }
 
@@ -154,6 +242,7 @@ ASMText::writeLabel(ostream &out, const Element &e)
     // Always EQU *, in case a comment follows, so the 1st word of the comment
     // is not taken for an opcode.
     //
+    assert(!label.empty());
     out << label << "\tEQU\t*";
     if (!comment.empty())
         out << "\t\t" << comment;
@@ -199,10 +288,56 @@ ASMText::emitInclude(const string &filename)
 }
 
 
+
+
 void
 ASMText::writeInclude(ostream &out, const Element &e)
 {
-    out << "#include \"" << e.fields[0] << "\"\n";
+      out << "\t" "INCLUDE " << e.fields[0] << "\n";
+}
+
+
+void
+ASMText::startSection(const char *sectionName)
+{
+    assert(sectionName && sectionName[0]);
+    if (!currentSection.empty())
+        errormsg("starting section %s, but section %s already started", sectionName, currentSection.c_str());
+    addElement(SECTION_START, sectionName);
+    currentSection = sectionName;
+}
+
+
+void
+ASMText::endSection()
+{
+    if (currentSection.empty())
+        errormsg("ending section, but no section started");
+    addElement(SECTION_END);
+    currentSection.clear();
+}
+
+
+void
+ASMText::emitExport(const char *label)
+{
+    assert(label && label[0]);
+    addElement(EXPORT, label);
+}
+
+
+void
+ASMText::emitImport(const char *label)
+{
+    assert(label && label[0]);
+    addElement(IMPORT, label);
+}
+
+
+void
+ASMText::emitEnd()
+{
+    addElement(END);
 }
 
 
@@ -248,7 +383,7 @@ ASMText::optimizeWholeFunctions()
             break;
         case LABEL:
             labelTable[e.fields[0]] = i;  // remember elements[] index where label is
-            // NO BREAK.
+            /* FALLTHROUGH */
         default:
             if (blockStartIndex != size_t(-1))  // if inside function
             {
@@ -308,14 +443,14 @@ ASMText::isBasicBlockEndingInstruction(const Element &e) const
 void
 ASMText::createBasicBlock(size_t startIndex, size_t endIndex)
 {
-    cout << "# createBasicBlock(" << startIndex << ", " << endIndex << ")\n";
+    //cout << "# createBasicBlock(" << startIndex << ", " << endIndex << ")\n";
 
     if (startIndex >= elements.size())
         return;  // ignore: we are not inside a function
     assert(endIndex >= 1 && endIndex <= elements.size());
 
     // Decrement endIndex as long as the last block element is a comment.
-    while (elements[endIndex - 1].type == COMMENT)
+    while (elements[endIndex - 1].isCommentLike())
         --endIndex;
 
     if (startIndex >= endIndex)
@@ -332,35 +467,35 @@ ASMText::createBasicBlock(size_t startIndex, size_t endIndex)
 
         if (lastIns == "RTS" || lastIns == "RTI" || (lastIns == "PULS" && lastArg == "U,PC"))
         {
-            cout << "#   no successor block\n";
+            //cout << "#   no successor block\n";
         }
         else if (lastIns == "BRA" || lastIns == "LBRA" || lastIns == "JMP")
         {
-            cout << "#   single successor at label '" << lastArg << "'\n";
+            //cout << "#   single successor at label '" << lastArg << "'\n";
             assert(!lastArg.empty());
             newBlock.firstSuccessorLabel = lastArg;
         }
         else if ((lastIns[0] == 'B' && lastIns != "BSR")
                  || (lastIns[0] == 'L' && lastIns[1] == 'B' && lastIns != "LBSR"))  // short or long branch
         {
-            cout << "#   2 successors: next block and block at label '" << lastArg << "'\n";
+            //cout << "#   2 successors: next block and block at label '" << lastArg << "'\n";
             assert(!lastArg.empty());
             newBlock.firstSuccessorLabel = lastArg;
             newBlock.secondSuccessorIndex = endIndex;
         }
         else
         {
-            cout << "#   fall through at index " << endIndex << "\n";
+            //cout << "#   fall through at index " << endIndex << "\n";
             newBlock.firstSuccessorIndex = endIndex;  // firstSuccessorLabel left empty, b/c firstSuccessorIndex already set
         }
-        cout << "# BasicBlock at " << basicBlocks.size() - 1
+        /*cout << "# BasicBlock at " << basicBlocks.size() - 1
                 << ": newBlock.firstSuccessorLabel='" << newBlock.firstSuccessorLabel << "'"
                 << ", newBlock.firstSuccessorIndex=" << newBlock.firstSuccessorIndex
-                << endl;
+                << endl;*/
     }
     else if (lastElem.type == INLINE_ASM)
     {
-        cout << "#   inline asm falls through at index " << endIndex << "\n";
+        //cout << "#   inline asm falls through at index " << endIndex << "\n";
         newBlock.firstSuccessorIndex = endIndex;  // firstSuccessorLabel left empty, b/c firstSuccessorIndex already set
     }
     else
@@ -390,188 +525,102 @@ ASMText::findBlockIndex(size_t elementIndex) const
 void
 ASMText::peepholeOptimize(bool useStage2Optims)
 {
-    for (;;)
-    {
-        removeUselessLabels();
+    const size_t maxIters = 300;  // limit iterations in case of a bug in an optim method
 
+    size_t numIters;
+    for (numIters = 0; numIters < maxIters; ++numIters)
+    {
         bool modified = false;
+
+        if (removeUselessLabels())
+            modified = true;
+
         for (size_t i = 0; i < elements.size(); ++i)
         {
-            if (branchToNextLocation(i))
-                modified = true;
-            else if (instrFollowingUncondBranch(i))
-                modified = true;
-            else if (lddToLDB(i))
-                modified = true;
-            else if (pushLoadDiscardAdd(i))
-            {
-                replaceWithInstr(i, "ADDB", "#" + wordToString(extractImmedArg(i + 1) & 0xFF, true), "optim: pushLoadDiscardAdd");
-                commentOut(i + 1);
-                commentOut(i + 2);
-                commentOut(i + 3);
-                i += 3;
-                modified = true;
-            }
-            else if (pushBLoadAdd(i))
-            {
-                replaceWithInstr(i, "ADDB", elements[i + 1].fields[1], "optim: pushBLoadAdd");
-                commentOut(i + 1);
-                commentOut(i + 2);
-                i += 2;
-                modified = true;
-            }
-            else if (pushDLoadAdd(i))
-            {
-                replaceWithInstr(i, "ADDD", elements[i + 1].fields[1], "optim: pushDLoadAdd");
-                commentOut(i + 1);
-                commentOut(i + 2);
-                i += 2;
-                modified = true;
-            }
-            else if (pushLoadDLoadX(i))
-            {
-                replaceWithInstr(i, "TFR", "D,X", "optim: pushLoadDLoadX");
-                commentOut(i + 2);
-                modified = true;
-            }
-            else if (isInstr(i, "LDD", "#$00"))
-            {
-                insertInstr(i, "CLRB");
-                ++i;  // point to the LDD element, which the insertion has moved forward
-                replaceWithInstr(i, "CLRA");
-                modified = true;
-            }
-            else if (pushDLoadXLoadD(i))
-            {
-                commentOut(i, "optim: pushDLoadXLoadD");
-                commentOut(i + 2);
-                i += 2;
-                modified = true;
-            }
-            else if (stripConsecutiveLoadsToSameReg(i))  // advances 'i' if optimization applies
-                modified = true;
-            else if (storeLoad(i))  // advances 'i' if optimization applies
-                modified = true;
-            else if (condBranchOverUncondBranch(i))
-                modified = true;
-            else if (shortenBranch(i))
-                modified = true;
-            else if (loadCmpZeroBeqOrBne(i))
-                modified = true;
-            else if (pushWordForByteComparison(i))
-                modified = true;
-            else if (useStage2Optims)
-            {
-                if (fasterPointerIndexing(i))
-                    modified = true;
-                else if (fasterPointerPushing(i))
-                    modified = true;
-                else if (stripExtraClrA_B(i))
-                    modified = true;
-                else if (stripExtraPulsX(i))
-                    modified = true;
-                else if (stripExtraPushPullB(i))
-                    modified = true;
-                else if (andA_B0(i))
-                    modified = true;
-                else if (transformPshsDPshsD(i))
-                    modified = true;
-                else if (changeLoadDToLoadB(i))
-                    modified = true;
-                else if (changeAddDToAddB(i))
-                    modified = true;
-                else if (stripPushLeas1(i))
-                    modified = true;
-                else if (orAndA_B(i))
-                    modified = true;
-                else if (loadDToClrALoadB(i))
-                    modified = true;
-                else if (optimizeStackOperations1(i))
-                    modified = true;
-                else if (optimizeStackOperations2(i))
-                    modified = true;
-                else if (optimizeStackOperations3(i))
-                    modified = true;
-                else if (removeClr(i))
-                    modified = true;
-                else if (removeAndOrMulAddSub(i))
-                    modified = true;
-                else if (isInstr(i, "CMPB", "#$00") ||
-                         isInstr(i, "CMPA", "#$00") ||
-                         isInstr(i, "CMPB", "#0") ||
-                         isInstr(i, "CMPA", "#0"))
+            // Advance to the next instuction.
+            size_t instrIndex = findNextInstrBeforeLabel(i);
+            if (instrIndex != size_t(-1))
+                i = instrIndex;
+
+            for (auto method : level1OptimFuncs)
+                if ((this->*method)(i))
                 {
-                    if ((elements[i + 1].fields[0].find("BEQ") != string::npos) ||
-                        (elements[i + 1].fields[0].find("BNE") != string::npos))
-                    {
-                        const string tstInstr = string("TST") + elements[i].fields[0].substr(3);
-                        replaceWithInstr(i, tstInstr.c_str());
-                        modified = true;
-                    }
+                    modified = true;
+                    break;
                 }
-                else if (optimizeLoadDX(i))
-                    modified = true;
-                else if (optimizeTfrPush(i))
-                    modified = true;
-                else if (optimizeTfrOp(i))
-                    modified = true;
-                else if (removePushB(i))
-                    modified = true;
-                else if (optimizeLdbTfrClrb(i))
-                    modified = true;
-                else if (remove16BitStackOperation(i))
-                    modified = true;
-                else if (optimizePostIncrement(i))
-                    modified = true;
-                else if (removeUselessOps(i))
-                    modified = true;
-                else if (optimize16BitStackOps1(i))
-                    modified = true;
-                else if (optimize16BitStackOps2(i))
-                    modified = true;
-                else if (optimize8BitStackOps(i))
-                    modified = true;
-                else if (removeTfrDX(i))
-                    modified = true;
-                else if (removeUselessLeax(i))
-                    modified = true;
-                else if (removeUselessLdx(i))
-                    modified = true;
-                else if (removeUnusedLoad(i))
-                    modified = true;
-                else if (optimizeAndbTstb(i))
-                    modified = true;
-                else if (optimizeIndexedX(i))
-                    modified = true;
-                else if (optimizeIndexedX2(i))
-                    modified = true;
-                else if (removeUselessLdb(i))
-                    modified = true;
-                else if (removeUselessLdd(i))
-                    modified = true;
-                else if (transformPshsXPshsX(i))
-                    modified = true;
-                else if (optimizePshsOps(i))
-                    modified = true;
-                else if (optimize16BitCompares(i))
-                    modified = true;
-            }
+
+            if (useStage2Optims)
+                for (auto method : level2OptimFuncs)
+                    if ((this->*method)(i))
+                    {
+                        modified = true;
+                        break;
+                    }
         }
 
         if (!modified)
             break;
     }
+
+    if (numIters >= maxIters)  // if too many iterations
+    {
+        cerr << "cmoc: ERROR: Too many iterations (" << numIters << ") in the peephole optimizer\n";
+        exit(1);
+    }
 }
 
 
-inline bool
-isGeneratedLabel(const string &label)
+static bool
+isGeneratedLabel(const char *s)
 {
-    return label.length() == 6 && label[0] == 'L' && isdigit(label[1]);
+    if (s[0] != 'L')
+        return false;
+    for (size_t i = 1; i < 6; ++i)
+        if (!isdigit(s[i]))
+            return false;
+    return true;
 }
 
 
-void
+// Adds to 'dest', keeping it sorted.
+//
+// Expected cases:
+// - L#####
+// - L#####,PCR
+// - L#####-L#####
+// where # is a digit.
+//
+static void
+extractGeneratedLabels(vector<string> &dest, const string &str)
+{
+    const char *s = str.c_str();
+    if (!isGeneratedLabel(s))
+        return;
+
+    if (str.length() == 6)
+    {
+        addUnique(dest, str);
+        return;
+    }
+
+    addUnique(dest, string(str, 0, 6));
+
+    if (!strcmp(s + 6, ",PCR"))
+        return;
+
+    if (s[6] != '-')
+        return;
+
+    if (!isGeneratedLabel(s + 7))
+        return;
+
+    addUnique(dest, string(str, 7, 6));
+}
+
+
+// Returns true if at least one label was removed.
+//
+bool
 ASMText::removeUselessLabels()
 {
     // Fill 'usedLabels' with every generated label that is used in the argument
@@ -583,22 +632,25 @@ ASMText::removeUselessLabels()
     for (size_t i = 0; i < elements.size(); ++i)
     {
         const Element &e = elements[i];
-        if (e.type == INSTR && isGeneratedLabel(e.fields[1]))
-            addUnique(usedLabels, e.fields[1]);
+        if (e.type == INSTR)
+            extractGeneratedLabels(usedLabels, e.fields[1]);
     }
+    bool modified = false;
     for (size_t i = 0; i < elements.size(); ++i)
     {
         Element &e = elements[i];
         if (e.type != LABEL)
             continue;
         string &label = e.fields[0];
-        if (!isGeneratedLabel(label))
+        if (!isGeneratedLabel(label.c_str()))
             continue;
         if (isPresent(usedLabels, label))
             continue;
         e.type = COMMENT;
-        label = "Useless label removed";
+        label = "Useless label " + label + " removed";
+        modified = true;
     }
+    return modified;
 }
 
 
@@ -619,15 +671,18 @@ ASMText::branchToNextLocation(size_t index)
 bool
 ASMText::instrFollowingUncondBranch(size_t index)
 {
-    if (index + 1 >= elements.size())  // pattern has 2 instructions
-        return false;
     if (!isInstrAnyArg(index, "LBRA") && !isInstrAnyArg(index, "BRA"))  // require uncond. branch
         return false;
-    size_t nextInstrIndex = findNextInstrBeforeLabel(index + 1);  // find next instr. unless label/non-instr. is seen first
-    if (nextInstrIndex == size_t(-1))
-        return false;
-    commentOut(nextInstrIndex, "optim: instrFollowingUncondBranch");
-    return true;
+    bool modified = false;
+    for (;;)
+    {
+        index = findNextInstrBeforeLabel(index + 1);  // find next instr. unless label/non-instr. is seen first
+        if (index == size_t(-1))
+            break;
+        commentOut(index, "optim: instrFollowingUncondBranch");
+        modified = true;
+    }
+    return modified;
 }
 
 
@@ -665,14 +720,22 @@ ASMText::lddToLDB(size_t index)
 // This can be replaced with ADDB #$__.
 //
 bool
-ASMText::pushLoadDiscardAdd(size_t index) const
+ASMText::pushLoadDiscardAdd(size_t index)
 {
     if (index + 3 >= elements.size())  // pattern has 4 instructions
         return false;
-    return    isInstr(index, "PSHS", "B,A")
-           && isInstrWithImmedArg(index + 1, "LDD")
-           && isInstr(index + 2, "LEAS", "1,S")
-           && isInstr(index + 3, "ADDB", ",S+");
+    if (   isInstr(index, "PSHS", "B,A")
+        && isInstrWithImmedArg(index + 1, "LDD")
+        && isInstr(index + 2, "LEAS", "1,S")
+        && isInstr(index + 3, "ADDB", ",S+"))
+    {
+        replaceWithInstr(index, "ADDB", "#" + wordToString(extractImmedArg(index + 1) & 0xFF, true), "optim: pushLoadDiscardAdd");
+        commentOut(index + 1);
+        commentOut(index + 2);
+        commentOut(index + 3);
+        return true;
+    }
+    return false;
 }
 
 
@@ -682,13 +745,20 @@ ASMText::pushLoadDiscardAdd(size_t index) const
 //    ADDB    ,S+
 //
 bool
-ASMText::pushBLoadAdd(size_t index) const
+ASMText::pushBLoadAdd(size_t index)
 {
     if (index + 2 >= elements.size())  // pattern has 3 instructions
         return false;
-    return     isInstr(index, "PSHS", "B")
-            && isInstrWithVarArg(index + 1, "LDB")
-            && isInstr(index + 2, "ADDB", ",S+");
+    if (   isInstr(index, "PSHS", "B")
+        && isInstrWithVarArg(index + 1, "LDB")
+        && isInstr(index + 2, "ADDB", ",S+"))
+    {
+        replaceWithInstr(index, "ADDB", elements[index + 1].fields[1], "optim: pushBLoadAdd");
+        commentOut(index + 1);
+        commentOut(index + 2);
+        return true;
+    }
+    return false;
 }
 
 
@@ -698,29 +768,42 @@ ASMText::pushBLoadAdd(size_t index) const
 //    ADDD    ,S++
 //
 bool
-ASMText::pushDLoadAdd(size_t index) const
+ASMText::pushDLoadAdd(size_t index)
 {
     if (index + 2 >= elements.size())  // pattern has 3 instructions
         return false;
-    return     isInstr(index, "PSHS", "B,A")
-            && isInstrAnyArg(index + 1, "LDD")
-            && isInstr(index + 2, "ADDD", ",S++");
+    if (   isInstr(index, "PSHS", "B,A")
+        && isInstrAnyArg(index + 1, "LDD")
+        && isInstr(index + 2, "ADDD", ",S++"))
+    {
+        replaceWithInstr(index, "ADDD", elements[index + 1].fields[1], "optim: pushDLoadAdd");
+        commentOut(index + 1);
+        commentOut(index + 2);
+        return true;
+    }
+    return false;
 }
 
 
 // Check for this pattern:
 //    PSHS    B,A
-//    LDD     immediate/,U/,PCR
+//    LDD     immediate/,U/,PCR  ; arg does not depend on X
 //    LDX     ,S++
 //
 bool
-ASMText::pushLoadDLoadX(size_t index) const
+ASMText::pushLoadDLoadX(size_t index)
 {
     if (index + 2 >= elements.size())  // pattern has 3 instructions
         return false;
-    return     isInstr(index, "PSHS", "B,A")
-            && (isInstrWithVarArg(index + 1, "LDD") || isInstrWithImmedArg(index + 1, "LDD"))
-            && isInstr(index + 2, "LDX", ",S++");
+    if (   isInstr(index, "PSHS", "B,A")
+        && (isInstrWithVarArg(index + 1, "LDD") || isInstrWithImmedArg(index + 1, "LDD"))
+        && isInstr(index + 2, "LDX", ",S++"))
+    {
+        replaceWithInstr(index, "TFR", "D,X", "optim: pushLoadDLoadX");
+        commentOut(index + 2);
+        return true;
+    }
+    return false;
 }
 
 
@@ -730,15 +813,36 @@ ASMText::pushLoadDLoadX(size_t index) const
 //    LDD     ,S++
 //
 bool
-ASMText::pushDLoadXLoadD(size_t index) const
+ASMText::pushDLoadXLoadD(size_t index)
 {
     if (index + 2 >= elements.size())  // pattern has 3 instructions
         return false;
-    return     isInstr(index, "PSHS", "B,A")
-            && (isInstrWithVarArg(index + 1, "LDX") || isInstrWithImmedArg(index + 1, "LDX"))
-            && isInstr(index + 2, "LDD", ",S++");
+    if (   isInstr(index, "PSHS", "B,A")
+        && (isInstrWithVarArg(index + 1, "LDX") || isInstrWithImmedArg(index + 1, "LDX"))
+        && isInstr(index + 2, "LDD", ",S++"))
+    {
+        commentOut(index, "optim: pushDLoadXLoadD");
+        commentOut(index + 2);
+        return true;
+    }    
+    return false;
 }
 
+
+bool
+ASMText::replaceLDDZero(size_t index)
+{
+    if (!isInstrAnyArg(index, "LDD"))
+        return false;
+    const string &arg = elements[index].fields[1];
+    if (arg != "#$00" && arg != "#0")
+        return false;
+
+    insertInstr(index, "CLRB");
+    // Replace the LDD, which the insertion has moved forward:
+    replaceWithInstr(index + 1, "CLRA");
+    return true;
+}
 
 // Optimize two consecutive LDr instructions, where r is A, B or D,
 // with no label in between. Remove the 1st load.
@@ -746,7 +850,7 @@ ASMText::pushDLoadXLoadD(size_t index) const
 // the 1st load is used by the 2nd.
 //
 bool
-ASMText::stripConsecutiveLoadsToSameReg(size_t &index)
+ASMText::stripConsecutiveLoadsToSameReg(size_t index)
 {
     if (index + 1 >= elements.size())  // pattern uses 2 or 3 elements
         return false;
@@ -773,22 +877,19 @@ ASMText::stripConsecutiveLoadsToSameReg(size_t &index)
     // Optimize.
     commentOut(index, "optim: stripConsecutiveLoadsToSameReg");
 
-    // Advance the caller's index.
-    index = nextInstrIndex;
-
     // Indicate that the optimization was applied.
     return true;
 }
 
 
 // Check for this pattern:
-//    STB -1,U        variable danger
-//    LDB -1,U        variable danger, declared at support/color8.c:1546
+//    STB <arg>
+//    LDB <arg>
 // Removes the load.
-// Accept comments between the two instructions.
+// Accepts comments between the two instructions.
 //
 bool
-ASMText::storeLoad(size_t &index)
+ASMText::storeLoad(size_t index)
 {
     const Element &e = elements[index];
     if (! (e.type == INSTR && e.fields[0].find("ST") == 0 && strchr("ABD", e.fields[0][2]) != NULL))  // require ST{A,B,D}
@@ -801,8 +902,9 @@ ASMText::storeLoad(size_t &index)
         return false;
     if (nextInstr.fields[1] != e.fields[1])  // if not same argument
         return false;
+    if (isAbsoluteAddress(e.fields[1]))
+        return false;  // assume content at address is volatile (e.g., I/O port at $FFxx)
     commentOut(nextInstrIndex, "optim: storeLoad");
-    index = nextInstrIndex;
     return true;
 }
 
@@ -814,30 +916,27 @@ ASMText::storeLoad(size_t &index)
 // Replace LBxx with 'LB!xx bar' and remove LBRA.
 //
 bool
-ASMText::condBranchOverUncondBranch(size_t &index)
+ASMText::condBranchOverUncondBranch(size_t index)
 {
-    // Require label after 2 instructions.
-    if (index + 2 >= elements.size())
-        return false;
-    const Element &labelElement = elements[index + 2];
-    if (labelElement.type != LABEL)
+    size_t condBranchIndex = index;
+    char inverseBranchInstr[INSTR_NAME_BUFSIZ];
+    if (! isConditionalBranch(condBranchIndex, inverseBranchInstr, true))  // require cond. branch as 1st instr.
         return false;
 
-    if (!isInstrAnyArg(index + 1, "LBRA") && !isInstrAnyArg(index + 1, "BRA"))  // require uncond. branch before label
+    size_t uncondBranchIndex = findNextInstrBeforeLabel(condBranchIndex + 1);
+    if (!isInstrAnyArg(uncondBranchIndex, "LBRA") && !isInstrAnyArg(uncondBranchIndex, "BRA"))  // require uncond. branch before label
         return false;
 
-    string inverseBranchInstr;
-    if (! isConditionalBranch(index, inverseBranchInstr))  // require cond. branch as 1st instr.
+    Element &condBranch = elements[condBranchIndex];
+    size_t labelIndex = uncondBranchIndex + 1;
+    if (!isLabel(labelIndex, condBranch.fields[1]))  // require a label next, and that the cond. branch jump to this label
         return false;
 
-    Element &condBranch = elements[index];
-    if (condBranch.fields[1] != labelElement.fields[0])  // require that cond. branch jump to label
-        return false;
-
-    Element &uncondBranch = elements[index + 1];
+    // Apply the optimization.
     condBranch.fields[0] = inverseBranchInstr;
-    condBranch.fields[1] = uncondBranch.fields[1];
-    commentOut(index + 1, "optim: condBranchOverUncondBranch");
+    condBranch.fields[1] = elements[uncondBranchIndex].fields[1];
+    condBranch.fields[2] += " (optim: condBranchOverUncondBranch)";
+    commentOut(uncondBranchIndex, "optim: condBranchOverUncondBranch");
     return true;
 }
 
@@ -853,6 +952,7 @@ ASMText::condBranchOverUncondBranch(size_t &index)
 bool
 ASMText::shortenBranch(size_t index)
 {
+    assert(index < elements.size());
     Element &e = elements[index];
     if (! (e.type == INSTR && e.fields[0].find("LB") == 0))  // require long branch
         return false;
@@ -872,8 +972,8 @@ ASMText::shortenBranch(size_t index)
         if (t.type == INSTR)
             ++numInstr;
     }
-    if (numInstr > 28)
-        return false;  // to far: short branch may not be able to reach
+    if (numInstr > 36)  // was 28 before CMOC 0.1.78
+        return false;  // too far: short branch may not be able to reach
 
     e.fields[0].erase(0, 1);  // remove 'L'
     return true;
@@ -940,42 +1040,35 @@ ASMText::fasterPointerPushing(size_t index)
     if (index + 3 >= elements.size())  // pattern uses 43 elements
         return false;
 
-    Element &e1 = elements[index];
+    const Element &e1 = elements[index];
     if (! (e1.type == INSTR && e1.fields[0] == "LEAX" && // require LEAX XXXX,U
            e1.fields[1].find(",U") != string::npos))
         return false;
 
-    Element &e2 = elements[index + 1];
+    const Element &e2 = elements[index + 1];
     if (! (e2.type == INSTR && e2.fields[0] == "TFR" &&  // require TFR D,X
            e2.fields[1] == "X,D"))
         return false;
 
-    Element &e3 = elements[index + 2];
+    const Element &e3 = elements[index + 2];
     if (! (e3.type == INSTR && e3.fields[0] == "ADDD" && // require ADDD #YYYY
            e3.fields[1].find("#") == 0))
         return false;
 
-    Element &e4 = elements[index + 3];
+    const Element &e4 = elements[index + 3];
     if (! (e4.type == INSTR && e4.fields[0] == "PSHS" && // require PSHS B,A
            e4.fields[1] == "B,A"))
         return false;
 
     // Add the offset from the LEAX to the addened in the ADDD
-    const string strOffset = e1.fields[1].substr(0, e1.fields[1].find(",U"));
-    int offset = 0;
-    if (strOffset.length() > 0) {
-      if (strOffset[0] == '$') {
-        offset = mystoi(strOffset.substr(1), NULL, 16);
-      } else {
-        offset = mystoi(strOffset, NULL, 10);
-      }
-    }
+    const char *strOffset = e1.fields[1].c_str();
+    long offset = (strOffset[0] == '$' ? strtol(strOffset + 1, NULL, 16) : strtol(strOffset, NULL, 10));
     if (e3.fields[1][1] == '$')
-      offset += mystoi(e3.fields[1].substr(2), NULL, 16);
+      offset += strtol(e3.fields[1].c_str() + 2, NULL, 16);
     else
-      offset += mystoi(e3.fields[1].substr(1), NULL, 10);
+      offset += strtol(e3.fields[1].c_str() + 1, NULL, 10);
 
-    replaceWithInstr(index, "LEAX", my_to_string(offset) + ",U", "optim: fasterPointerPushing");
+    replaceWithInstr(index, "LEAX", intToString(int16_t(offset)) + ",U", "optim: fasterPointerPushing");
     replaceWithInstr(index + 1, "PSHS", "X", "optim: fasterPointerPushing");
     commentOut(index + 2, "optim: fasterPointerPushing");
     commentOut(index + 3, "optim: fasterPointerPushing");
@@ -995,7 +1088,7 @@ ASMText::stripExtraClrA_B(size_t index)
         return false;
 
     const string &ins = e1.fields[0];
-    const uint8_t mask = (ins == "CLRA") ? A : B;
+    const uint8_t mask = uint8_t((ins == "CLRA") ? A : B);
     const string andInstr = (ins == "CLRA") ? "ANDA" : "ANDB";
 
     bool madeChanges = false;
@@ -1120,8 +1213,8 @@ ASMText::andA_B0(size_t index)
           (e1.fields[1] == "#$00")))
         return false;
 
-    const string instr = string("CLR") + e1.fields[0].substr(3);
-    replaceWithInstr(index, instr.c_str(), "", "optim: andA_B0");
+    const char instr[] = { 'C', 'L', 'R', e1.fields[0][3], '\0' };
+    replaceWithInstr(index, instr, "", "optim: andA_B0");
     return true;
 }
 
@@ -1137,21 +1230,20 @@ ASMText::changeLoadDToLoadB(size_t index)
         return false;
 
     bool madeChanges = false;
-    for(index++; index<elements.size(); index++) {
-      Element &e = elements[index];
-      if ((e.type != INSTR) && (e.type != COMMENT)) {
-        break;
-      } else if (e.type == INSTR && e.fields[0] == "LDD" &&
-                 e.fields[1].substr(0, 2) == "#$" &&
-                 e.fields[1].length() <= 4) {
-        replaceWithInstr(index, "LDB", e.fields[1], "optim: changeLoadDToLoadB");
-        madeChanges = true;
-      } else if (e.type == INSTR) {
-        const InsEffects insEffects(e);
-        if (isBasicBlockEndingInstruction(e) || (insEffects.written & A)) {
-          break;
+    for (index++; index < elements.size(); index++)
+    {
+        Element &e = elements[index];
+        if (e.type != INSTR)
+            break;
+        if (e.fields[1].length() <= 4
+            && e.fields[0] == "LDD"
+            && startsWith(e.fields[1], "#$"))
+        {
+            replaceWithInstr(index, "LDB", e.fields[1], "optim: changeLoadDToLoadB");
+            madeChanges = true;
         }
-      }
+        else if (isBasicBlockEndingInstruction(e) || (InsEffects(e).written & A))
+            break;
     }
 
     return madeChanges;
@@ -1170,16 +1262,18 @@ ASMText::changeAddDToAddB(size_t index)
     Element &e1 = elements[index];
     if (! (e1.type == INSTR && e1.fields[0] == "ADDD" &&
            e1.fields[1].length() > 2 &&
-           e1.fields[1].substr(0, 2) == "#$"))
+           startsWith(e1.fields[1], "#$")))
         return false;
 
     // Next instruction must be CLRA
-    Element &e2 = elements[index + 1];
+    const Element &e2 = elements[index + 1];
     if (! (e2.type == INSTR && e2.fields[0] == "CLRA"))
         return false;
 
-    const string operand = string("#$") + e1.fields[1].substr(e1.fields[1].length() - 2, 2);
-    replaceWithInstr(index, "ADDB", operand.c_str(), "optim: changeAddDToAddB");
+    // New operand is last 2 digits of ADDD operand.
+    const char *digits = e1.fields[1].c_str() + (e1.fields[1].length() - 2);
+    const char operand[] = { '#', '$', digits[0], digits[1], '\0' };
+    replaceWithInstr(index, "ADDB", operand, "optim: changeAddDToAddB");
 
     return true;
 }
@@ -1236,9 +1330,10 @@ ASMText::orAndA_B(size_t index)
     Element &e1 = elements[index];
     if (! (e1.type == INSTR && (e1.fields[0] == "CLRA" || e1.fields[0] == "CLRB")))
         return false;
-    aKnown = (e1.fields[0] == "CLRA") ? true : false;
+    aKnown = (e1.fields[0] == "CLRA");
     bKnown = !aKnown;
-    stack<pair<bool, size_t> > stack;
+    vector< pair<bool, size_t> > stack;  // value: index in elements[]
+    stack.reserve(32);
 
     for(index++; index<elements.size(); index++ && (aKnown || bKnown)) {
       Element &e = elements[index];
@@ -1249,46 +1344,45 @@ ASMText::orAndA_B(size_t index)
         if (e.fields[0] == "LEAS" && e.fields[1] == "1,S") {
           if (stack.size() == 0)
             return false;
-          stack.pop();
+          stack.pop_back();
         }
 
         // Deal with [AND/OR]A ,S+
         else if ((e.fields[0] == "ANDA" || e.fields[0] == "ORA") && (e.fields[1] == ",S+") &&
-            aKnown && (stack.size() > 0) && stack.top().first) {
-          Element pshsElement = elements[stack.top().second];
+            aKnown && (stack.size() > 0) && stack.back().first) {
+          Element pshsElement = elements[stack.back().second];
           if (pshsElement.fields[1] == "B,A") {
             pshsElement.fields[1] = "B";
             replaceWithInstr(index, "LEAS", "1,S", "optim: orAndA_B");
             return false;
           } else {
-            commentOut(stack.top().second, "optim: orAndA_B");
+            commentOut(stack.back().second, "optim: orAndA_B");
             commentOut(index, "optim: orAndA_B");
           }
           return true;
         // Deal with [AND/OR]A ,S+
         } else if ((e.fields[0] == "ANDB" || e.fields[0] == "ORB") && (e.fields[1] == ",S+") &&
-            bKnown && (stack.size() > 0) && stack.top().first) {
-          Element pshsElement = elements[stack.top().second];
+            bKnown && (stack.size() > 0) && stack.back().first) {
+          Element pshsElement = elements[stack.back().second];
           if (pshsElement.fields[1] == "B,A") {
             pshsElement.fields[1] = "B";
             replaceWithInstr(index, "LEAS", "1,S", "optim: orAndA_B");
             return false;
-          } else {
-            commentOut(stack.top().second, "optim: orAndA_B");
-            commentOut(index, "optim: orAndA_B");
           }
+          commentOut(stack.back().second, "optim: orAndA_B");
+          commentOut(index, "optim: orAndA_B");
           return true;
         }
 
         // If it is a push instruction, push current known state of A,B
         else if (e.fields[0] == "PSHS")  {
           if (e.fields[1] == "B,A") {
-            stack.push(pair<bool, size_t>(bKnown, index));
-            stack.push(pair<bool, size_t>(aKnown, index));
+            stack.push_back(pair<bool, size_t>(bKnown, index));
+            stack.push_back(pair<bool, size_t>(aKnown, index));
           } else if (e.fields[1] == "B") {
-            stack.push(pair<bool, size_t>(bKnown, index));
+            stack.push_back(pair<bool, size_t>(bKnown, index));
           } else if (e.fields[1] == "A") {
-            stack.push(pair<bool, size_t>(aKnown, index));
+            stack.push_back(pair<bool, size_t>(aKnown, index));
           } else {
             // Don't deal with other registers
             return false;
@@ -1327,17 +1421,18 @@ bool
 ASMText::loadDToClrALoadB(size_t index)
 {
     Element &e1 = elements[index];
+    const string &field1 = e1.fields[1];
     if (e1.type == INSTR && e1.fields[0] == "LDD" &&
-        e1.fields[1].size() > 2 &&
-        e1.fields[1].substr(0, 2) == "#$" &&
-        e1.fields[1].find("-") == string::npos &&
-        e1.fields[1].size() == 4) {
+        field1.size() == 4 &&
+        startsWith(field1, "#$") &&
+        field1.find("-") == string::npos)
+    {
       elements[index].fields[0] = "LDB";
-      Element clrA;
+      vector<Element>::iterator it = elements.insert(elements.begin() + index, Element());
+      Element &clrA = *it;
       clrA.type = INSTR;
       clrA.fields[0] = "CLRA";
       clrA.liveRegs = 0;
-      elements.insert(elements.begin() + index, clrA);
       return true;
     }
 
@@ -1394,11 +1489,13 @@ ASMText::optimizeStackOperations1(size_t index)
     for(size_t ii=startIndex; ii<index; ii++) {
       // We can only deal with lines with at least 2 references
       const size_t numRefs = simulator.indexToReferences[ii].size();
-      if (numRefs < 2) continue;
+      if (numRefs < 2)
+        continue;
 
       // We can only deal with lines that produce 1 constant
       const vector<PossiblyKnownVal<int> > &constantVals = simulator.indexToConstantVals[ii];
-      if (constantVals.size() != 1) continue;
+      if (constantVals.size() != 1)
+        continue;
 
       // Get the index of the pshs instruction
       const vector<int> &refs = simulator.indexToReferences[ii];
@@ -1410,7 +1507,8 @@ ASMText::optimizeStackOperations1(size_t index)
           foundPushIndex = refs[pushIndex];
         }
       }
-      if (numPushes != 1) continue;
+      if (numPushes != 1)
+        continue;
       Element &e1 = elements[foundPushIndex];
 
       // Must be 1 or 2 byte push
@@ -1420,6 +1518,7 @@ ASMText::optimizeStackOperations1(size_t index)
 
       // Get all the ,S+/,S++ elements
       vector<int> stackRefs;
+      stackRefs.reserve(32);
       int numStackBytesRef = 0;
       int lowestRef = INT_MAX;
       for(size_t jj=0; jj<numRefs; jj++) {
@@ -1442,7 +1541,7 @@ ASMText::optimizeStackOperations1(size_t index)
       }
 
       // The stack references must be the last items referenced
-      if (numRefs - stackRefs.size() != (size_t)lowestRef)
+      if (numRefs - stackRefs.size() != (size_t) lowestRef)
         continue;
 
       // Must have 1 or 2 refs
@@ -1472,13 +1571,15 @@ ASMText::optimizeStackOperations1(size_t index)
         transformPushBAToB = eAfter.fields[1] == ",S+";
  
         // Not sure what todo when they both are stack ops or neither
-        if (transformPushBAToA && transformPushBAToB) continue;
-        if (!transformPushBAToA && !transformPushBAToB) continue;
+        if (transformPushBAToA && transformPushBAToB)
+          continue;
+        if (!transformPushBAToA && !transformPushBAToB)
+          continue;
       }
 
       // Make sure the bytes we pushed are the bytes we pull
-      stack<PossiblyKnownVal<uint8_t> > pushStackState = simulator.indexToState[foundPushIndex+1].second;
-      const stack<PossiblyKnownVal<uint8_t> > &pullStackState0 = simulator.indexToState[stackRefs[0]].second;
+      PossiblyKnownValStack pushStackState = simulator.indexToState[foundPushIndex + 1].second;
+      const PossiblyKnownValStack &pullStackState0 = simulator.indexToState[stackRefs[0]].second;
       if (pushStackState.empty() || pullStackState0.empty() ||
           pushStackState.top() != pullStackState0.top() || !pushStackState.top().known)
         continue;
@@ -1489,10 +1590,8 @@ ASMText::optimizeStackOperations1(size_t index)
         if ((pushStackState.size() < 2) ||
             (pullStackState0.size() < 2))
           continue;
-        stack<PossiblyKnownVal<uint8_t> > pushStackStateCopy
-          = pushStackState;
-        stack<PossiblyKnownVal<uint8_t> > pullStackState0Copy 
-          = pullStackState0;
+        PossiblyKnownValStack pushStackStateCopy = pushStackState;
+        PossiblyKnownValStack pullStackState0Copy = pullStackState0;
         pushStackStateCopy.pop();
         pullStackState0Copy.pop();
         if (pushStackStateCopy.top() != pullStackState0Copy.top() ||
@@ -1501,8 +1600,7 @@ ASMText::optimizeStackOperations1(size_t index)
       }
 
       if (stackRefs.size() > 1) {
-        const stack<PossiblyKnownVal<uint8_t> > &pullStackState1 =
-          simulator.indexToState[stackRefs[1]].second;
+        const PossiblyKnownValStack &pullStackState1 = simulator.indexToState[stackRefs[1]].second;
         pushStackState.pop();
         if (pushStackState.empty() || pullStackState1.empty() ||
             pushStackState.top() != pullStackState1.top() ||
@@ -1516,9 +1614,9 @@ ASMText::optimizeStackOperations1(size_t index)
       // will perform a useless load. We'll clean this up later.
       if (numRefs == (1 + stackRefs.size())) {
         Element &loadElement = elements[ii];
-        const std::string targetReg =
-          loadElement.fields[0].substr(loadElement.fields[0].size()-1);
-        if (targetReg == "D" || numStackBytesRef != 2)
+        const string &field0 = loadElement.fields[0];
+        const Register targetReg = getRegisterFromName(field0.c_str() + field0.size() - 1);
+        if (targetReg == D || numStackBytesRef != 2)
           commentOut(ii,
                      loadElement.fields[0] + " " + loadElement.fields[1] +
                        " optim: optimizeStackOperations1");
@@ -1536,17 +1634,17 @@ ASMText::optimizeStackOperations1(size_t index)
       }
 
       // Remove the stack references
-      pushStackState = simulator.indexToState[foundPushIndex+1].second;
+      pushStackState = simulator.indexToState[foundPushIndex + 1].second;
       int stackVal = pushStackState.top().val;
       if ((numStackBytesRef == 2) && (stackRefs.size() == 1)) {
         pushStackState.pop();
         stackVal = (stackVal << 8) | pushStackState.top().val;
       }
-      elements[stackRefs[0]].fields[1] = string("#") + my_to_string(stackVal);
+      elements[stackRefs[0]].fields[1] = "#" + wordToString(int16_t(stackVal));
       elements[stackRefs[0]].fields[2] = "optim: optimizeStackOperations1";
       if (stackRefs.size() > 1) {
         pushStackState.pop();
-        elements[stackRefs[1]].fields[1] = string("#") + my_to_string(pushStackState.top().val);
+        elements[stackRefs[1]].fields[1] = "#" + wordToString(int16_t(pushStackState.top().val));
         elements[stackRefs[1]].fields[2] = "optim: optimizeStackOperations1";
       }
 
@@ -1563,9 +1661,10 @@ ASMText::optimizeStackOperations1(size_t index)
 // operation can be optimized away and the operation can be applied directly to
 // the constant.
 //
-// This optimization starts by looking for a PSHS B instructioni followed by a
+// This optimization starts by looking for a PSHS B instruction followed by a
 // LOAD constant followed by an ADDB, ANDB or ORB with the stack value.
-  bool
+//
+bool
 ASMText::optimizeStackOperations2(size_t index)
 {
     if (index + 3 >= elements.size()) {
@@ -1587,7 +1686,7 @@ ASMText::optimizeStackOperations2(size_t index)
 
     // Ignore comments, look for ADDB/ORB/ANDB ,S+
     for(Element e = elements[index]; index < elements.size(); e = elements[++index]) {
-      if (e.type == COMMENT) {
+      if (e.isCommentLike()) {
         continue;
       }
       if (e.type != INSTR) {
@@ -1622,7 +1721,7 @@ ASMText::optimizeStackOperations2(size_t index)
 // operation can be optimized away and the operation can be applied directly to
 // the constant.
 //
-// This optimization starts by looking for a PSHS B,A instructioni followed by a
+// This optimization starts by looking for a PSHS B,A instruction followed by a
 // LOAD constant followed by an ADDD.
 //
 // Note that this is symmteric to optimizeStackOperations2, but 16-bit. However
@@ -1649,7 +1748,7 @@ ASMText::optimizeStackOperations3(size_t index)
 
     // Ignore comments, look for ADDD ,S+
     for(Element e = elements[index]; index < elements.size(); e = elements[++index]) {
-      if (e.type == COMMENT) {
+      if (e.isCommentLike()) {
         continue;
       }
       if (e.type != INSTR) {
@@ -1677,6 +1776,222 @@ ASMText::optimizeStackOperations3(size_t index)
 }
 
 
+// Sometimes a value of the form #XXXX, (,R), (XXXX,R), ([,R]), ([XXXX,R]) is
+// loaded to the D register and pushed to the stack when R is either U
+// or PCR and XXXX is some offset. If there are no stack operations, references
+// to the D register between the load and the subsequent PSHS
+// and subsequent ,S++ that consumes the value, then the PSHS and LDD operations
+// can be removed and the ,S++ can be replaced by the operand in the original
+// load.
+//
+// This optimization starts by looking for a LDD instruction followed by a PSHS
+// followed by an ,S++ instruction.
+//
+bool
+ASMText::optimizeStackOperations4(size_t index)
+{
+    // First instruction must be a LDD with no pre or post decrement
+    const size_t startIndex = index;
+    Element &ldd = elements[index];
+    if (!(ldd.type == INSTR && ldd.fields[0] == "LDD")
+        || ldd.fields[1].find("D,") != string::npos
+        || startsWith(ldd.fields[1], ",-")
+        || startsWith(ldd.fields[1], "[,-")
+        || startsWith(ldd.fields[1], ",X+")
+        || startsWith(ldd.fields[1], ",Y+")
+        || startsWith(ldd.fields[1], ",S")
+        || startsWith(ldd.fields[1], ",U+")
+        || startsWith(ldd.fields[1], "[,X+")
+        || startsWith(ldd.fields[1], "[,Y+")
+        || startsWith(ldd.fields[1], "[,S")
+        || startsWith(ldd.fields[1], "[,U+")) {
+      return false;
+    }
+    InsEffects lddEffects(ldd);
+
+    // Next instruction must be a PSHS B,A
+    if (++index >= elements.size()) {
+      return false;
+    }
+    const Element &el = elements[index];
+    if ((el.type != INSTR) || (el.fields[0] != "PSHS") || (el.fields[1] != "B,A")) {
+      return false;
+    }
+
+    // Now we must find a ,S++ instruction
+    size_t popIndex = startIndex;
+    uint8_t currentKnown = A | B;
+    while (++index < elements.size()) {
+      const Element &e = elements[index];
+
+      if (e.isCommentLike())
+        continue;
+      if (e.type != INSTR)
+        return false;
+      if (isBasicBlockEndingInstruction(e))
+        return false;
+      if (e.fields[0].find("BSR") != string::npos ||
+          e.fields[0].find("JSR") != string::npos ||
+          e.fields[0].find("PSHS") != string::npos ||
+          e.fields[0].find("PULS") != string::npos ||
+          e.fields[1].find(",-S") != string::npos ||
+          e.fields[1] == ",S+" ||
+          e.fields[1] == ",S" ||
+          e.fields[1].find("[,S") != string::npos)
+        return false;
+
+      // We can't do this if we changed any register we read during the ldd
+      InsEffects effects(e);
+      if (effects.written & lddEffects.read) {
+        return false;
+      }
+
+      // We can't do this if we read the D register before it is written
+      if (effects.read & currentKnown) {
+        return false;
+      }
+      currentKnown = currentKnown & ~effects.written;
+
+      // S++ instruction?
+      if (e.fields[1] == ",S++") {
+        popIndex = index;
+        break;
+      }
+    }
+    if (popIndex == startIndex) {
+      return false;
+    }
+
+    // We can do the optimization
+    Element &pop = elements[popIndex];
+    pop.fields[1] = ldd.fields[1];
+    pop.fields[2] = "optim: optimizeStackOperations4";
+    commentOut(startIndex, "optim: optimizeStackOperations4");
+    commentOut(startIndex + 1, "optim: optimizeStackOperations4");
+
+    return true;
+}
+
+
+// Sometimes a constant value is loaded in the D register via a combination
+// or CLRA, LDA, CLRB and LDB and the pushed to the stack.
+// If there are no stack operations, references to the D register or changes
+// U between the load and the subsequent PSHS and subsequent ,S++ that consumes
+// the value, then the PSHS and LDD operations
+// can be removed and the ,S++ can be replaced by the operand in the original
+// load.
+//
+// This optimization starts by looking for a LDD instruction followed by a PSHS
+// followed by an ,S++ instruction.
+  bool
+ASMText::optimizeStackOperations5(size_t index)
+{
+    size_t startIndex = index;
+    if (index + 3 >= elements.size()) {
+      return false;
+    }
+
+    Pseudo6809 simulator;
+    for (size_t ii=index; ii<index + 2; ii++) {
+      Element &e = elements[ii];
+      if (e.isCommentLike())
+        continue;
+      if (e.type != INSTR)
+        return false;
+      if (isBasicBlockEndingInstruction(e))
+        return false;
+      if (e.fields[0].find("BSR") != string::npos ||
+          e.fields[0].find("JSR") != string::npos)
+        return false;
+      if (!(e.fields[0] == "CLRA" || e.fields[0] == "LDA" ||
+            e.fields[0] == "CLRB" || e.fields[0] == "LDB"))
+        return false;
+      if (!simulator.process(e.fields[0], e.fields[1], (int)ii))
+        return false;
+    }
+    if (!simulator.regs.accum.dknown()) {
+      return false;
+    }
+
+    // Next instruction must be a PSHS B,A
+    index = index + 2;
+    const Element &el = elements[index];
+    if ((el.type != INSTR) || (el.fields[0] != "PSHS") || (el.fields[1] != "B,A")) {
+      return false;
+    }
+
+    // Now we must find a ,S++ instruction
+    size_t popIndex = startIndex;
+    uint8_t currentKnown = A | B;
+    while (++index < elements.size()) {
+      const Element &e = elements[index];
+
+      if (e.isCommentLike())
+        continue;
+      if (e.type != INSTR)
+        return false;
+      if (isBasicBlockEndingInstruction(e))
+        return false;
+      if (e.fields[0].find("BSR") != string::npos ||
+          e.fields[0].find("JSR") != string::npos ||
+          e.fields[0].find("PSHS") != string::npos ||
+          e.fields[0].find("PULS") != string::npos ||
+          e.fields[1].find(",-S") != string::npos ||
+          e.fields[1] == ",S+" ||
+          e.fields[1] == ",S" ||
+          e.fields[1].find("[,S") != string::npos)
+        return false;
+
+      // We can't do this if we read the D register before it is written
+      InsEffects effects(e);
+      if (effects.read & currentKnown) {
+        return false;
+      }
+      currentKnown = currentKnown & ~effects.written;
+
+      // S++ instruction?
+      if (e.fields[1] == ",S++") {
+        popIndex = index;
+        break;
+      }
+    }
+    if (popIndex == startIndex) {
+      return false;
+    }
+
+    // We can do the optimization
+    Element &pop = elements[popIndex];
+    pop.fields[1] = "#" + wordToString(simulator.regs.accum.dval(), true);
+    pop.fields[2] = "optim: optimizeStackOperations5";
+    commentOut(startIndex, "optim: optimizeStackOperations5");
+    commentOut(startIndex + 1, "optim: optimizeStackOperations5");
+    commentOut(startIndex + 2, "optim: optimizeStackOperations5");
+
+    return true;
+}
+
+
+// Merge PSHS X + PSHS B,A (or vice versa) into PSHS X,B,A.
+// This works because the latter will push X first, then push D.
+//
+bool
+ASMText::mergePushes(size_t index)
+{
+    if (!isInstr(index, "PSHS", "X"))
+        return false;
+    size_t secondPushIndex = findNextInstrBeforeLabel(index + 1);
+    if (!isInstr(secondPushIndex, "PSHS", "B,A"))
+        return false;
+    
+    // Apply the optimization.
+    string firstPushComment = elements[index].fields[2];
+    commentOut(index, "optim: mergePushes");
+    elements[secondPushIndex].fields[1] = "X,B,A";
+    elements[secondPushIndex].fields[2] = "(optim: mergePushes: " + firstPushComment + ") " + elements[secondPushIndex].fields[2];
+    return true;
+}
+
+
 // Remove CLR[A/B] operations if A or B are already known to be zero.
 bool
 ASMText::removeClr(size_t index)
@@ -1691,7 +2006,7 @@ ASMText::removeClr(size_t index)
       firstInstr = false;
 
       // Only process non basic block ending instructions
-      if (e.type == COMMENT)
+      if (e.isCommentLike())
         continue;
       if (e.type != INSTR)
         break;
@@ -1731,7 +2046,7 @@ ASMText::removeAndOrMulAddSub(size_t index)
       firstInstr = false;
 
       // Only process non basic block ending instructions
-      if (e.type == COMMENT)
+      if (e.isCommentLike())
         continue;
       if (e.type != INSTR)
         break;
@@ -1754,8 +2069,8 @@ ASMText::removeAndOrMulAddSub(size_t index)
           }
         } else if (extractConstantLiteral(e.fields[1], val)) {
           if (val == 0) {
-            const string newInstr = string("CLR") + instr.substr(3);
-            replaceWithInstr(index, newInstr.c_str(), "", "optim: removeAndOrMulAddSub");
+            const char newInstr[] = { 'C', 'L', 'R', instr[3], '\0' };
+            replaceWithInstr(index, newInstr, "", "optim: removeAndOrMulAddSub");
             madeChanges = true;
           } else if (val == 0xff) {
             commentOut(index, "optim: removeAndOrMulAddSub");
@@ -1772,8 +2087,9 @@ ASMText::removeAndOrMulAddSub(size_t index)
           }
         } else if (extractConstantLiteral(e.fields[1], val)) {
           if (val == 0xff) {
-            const string newInstr = string("LD") + instr.substr(2);
-            replaceWithInstr(index, newInstr.c_str(), "#$ff", "optim: removeAndOrMulAddSub");
+            char newInstr[8];
+            snprintf(newInstr, sizeof(newInstr), "LD%s", instr.c_str() + 2);
+            replaceWithInstr(index, newInstr, "#$ff", "optim: removeAndOrMulAddSub");
             madeChanges = true;
           } else if (val == 0) {
             commentOut(index, "optim: removeAndOrMulAddSub");
@@ -1787,29 +2103,37 @@ ASMText::removeAndOrMulAddSub(size_t index)
           madeChanges = true;
         }
       } else if ((instr == "ADDA") || (instr == "ADDB") || (instr == "ADDD")) {
-        if (!changesIndex &&
-            ((instr[3] == 'A' && simulator.regs.accum.a.known && simulator.regs.accum.a.val == 0) || 
-             (instr[3] == 'B' && simulator.regs.accum.b.known && simulator.regs.accum.b.val == 0) ||
-             (instr[3] == 'D' && simulator.regs.accum.dknown() && simulator.regs.accum.dval() == 0))) {
+        if ((instr[3] == 'A' && simulator.regs.accum.a.known && simulator.regs.accum.a.val == 0) &&
+            (instr[3] == 'B' && simulator.regs.accum.b.known && simulator.regs.accum.b.val == 0) &&
+            (instr[3] == 'D' && simulator.regs.accum.dknown() && simulator.regs.accum.dval() == 0)) {
+          // We know that A, B or D are zero, so change to a LD
           const Element &e1 = elements[index + 1];
           if (e1.type != INSTR || !isBasicBlockEndingInstruction(e1)) {
-            commentOut(index, "optim: removeAndOrMulAddSub");
+            char newInstr[8];
+            snprintf(newInstr, sizeof(newInstr), "LD%s", instr.c_str() + 3);
+            replaceWithInstr(index, newInstr, oper, "optim: removeAndOrMulAddSub");
             madeChanges = true;
           }
         } else if (extractConstantLiteral(e.fields[1], val)) {
+          // We know that the operand is a constant 0 and the side effects are not valued,
+          // so we can comment it out
           const Element &e1 = elements[index + 1];
-          if (val == 0 && (e1.type != INSTR || !isBasicBlockEndingInstruction(e1))) {
+          if (val == 0 && (e1.type == INSTR && !isBasicBlockEndingInstruction(e1))) {
             InsEffects effects(e1);
             if (!(effects.read & CC)) {
-            commentOut(index, "optim: removeAndOrMulAddSub");
-            madeChanges = true;
+              commentOut(index, "optim: removeAndOrMulAddSub");
+              madeChanges = true;
             }
           } else if (val == 0 && e1.type == INSTR && isBasicBlockEndingInstruction(e1) &&
-                     simulator.regs.accum.a.known && simulator.regs.accum.a.val == 0) {
+                     (((instr[3] == 'D') && (simulator.regs.accum.a.known && simulator.regs.accum.a.val == 0)) ||
+                      (instr[3] == 'B'))) {
+            // ADDD #0 and A is definitely zero or ADDB #0 so replace with TSTB
             replaceWithInstr(index, "TSTB", "", "optim: removeAndOrMulAddSub");
             madeChanges = true;
           } else if (val == 0 && e1.type == INSTR && isBasicBlockEndingInstruction(e1) &&
-                     simulator.regs.accum.b.known && simulator.regs.accum.b.val == 0) {
+                     (((instr[3] == 'D') && (simulator.regs.accum.b.known && simulator.regs.accum.b.val == 0)) ||
+                      (instr[3] == 'A'))) {
+            // ADDD #0 and B is definitely zero or ADDA #0 so replace with TSTA
             replaceWithInstr(index, "TSTA", "", "optim: removeAndOrMulAddSub");
             madeChanges = true;
           } 
@@ -1825,10 +2149,11 @@ ASMText::removeAndOrMulAddSub(size_t index)
           madeChanges = true;
         }
       } else if ((instr == "LEAX") && endsWith(oper, ",X") && simulator.regs.x.known)  {
-          const string offsetStr = oper.substr(0, oper.size() - 2);
-          if (!(offsetStr == "A" || offsetStr == "B" || offsetStr == "D")) {
+          if (!(oper[0] == 'A' || oper[0] == 'B' || oper[0] == 'D')) {
             e.fields[0] = "LDX";
-            e.fields[1] = "#$" + my_to_string(mystoi(offsetStr, NULL, 10) + simulator.regs.x.val, true);
+            char temp[32];
+            snprintf(temp, sizeof(temp), "#%d", int16_t(strtol(oper.c_str(), NULL, 10)) + simulator.regs.x.val);
+            e.fields[1] = temp;
             e.fields[2] = "optim: removeAndOrMulAddSub";
             madeChanges = true;
           }
@@ -1838,17 +2163,18 @@ ASMText::removeAndOrMulAddSub(size_t index)
             e.fields[2] = "optim: removeAndOrMulAddSub";
             madeChanges = true;
           }
-      } else if (instr == "SEX" && simulator.regs.accum.b.known && simulator.regs.accum.b.val < 0x80) {
+      } else if (instr == "SEX" && simulator.regs.accum.b.known && simulator.regs.accum.b.val < 0x80
+                 && simulator.regs.accum.a.known && simulator.regs.accum.b.val == 0x00) {
           commentOut(index, "optim: removeAndOrMulAddSub");
           madeChanges = true;
       } else if ((instr == "STB" || instr == "STD") && oper == ",X" && simulator.regs.x.known) {
-          e.fields[1] = string("$") + my_to_string(simulator.regs.x.val, true);
+          e.fields[1] = wordToString(simulator.regs.x.val, true);
           e.fields[2] = "optim: removeAndOrMulAddSub";
           madeChanges = true;
       } else if ((instr == "LDB" || instr == "LDD") && oper == ",X" && simulator.regs.x.known) {
           // Found a weird mess bug toggling HW registers, so avoid that
           if (simulator.regs.x.val < 0xff00) {
-            e.fields[1] = string("$") + my_to_string(simulator.regs.x.val, true);
+            e.fields[1] = wordToString(simulator.regs.x.val, true);
             e.fields[2] = "optim: removeAndOrMulAddSub";
             madeChanges = true;
           }
@@ -1856,10 +2182,36 @@ ASMText::removeAndOrMulAddSub(size_t index)
 
       // Simulate
       canGoOn = simulator.process(e.fields[0], e.fields[1], (int)index);
-    } while(canGoOn && ++index<elements.size() && (simulator.regs.knownRegisters() != 0));
+    } while (canGoOn && ++index < elements.size() && simulator.regs.knownRegisters() != 0);
 
     return madeChanges;
-  }
+}
+
+
+bool
+ASMText::replaceCMPWithTST(size_t index)
+{
+    if (isInstr(index, "CMPB", "#$00") ||
+        isInstr(index, "CMPA", "#$00") ||
+        isInstr(index, "CMPB", "#0") ||
+        isInstr(index, "CMPA", "#0"))
+    {
+        // If the next instruction is BEQ or BNE, then only Z is needed,
+        // so use TSTA/TSTB instead, which is one fewer byte.
+        size_t branchIndex = findNextInstrBeforeLabel(index + 1);
+        if (branchIndex != size_t(-1))
+        {
+            const string &field0 = elements[branchIndex].fields[0];
+            if (field0.find("BEQ") != string::npos || field0.find("BNE") != string::npos)
+            {
+                char tstInstr[] = { 'T', 'S', 'T', elements[index].fields[0][3], '\0' };
+                replaceWithInstr(index, tstInstr);
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
 
 bool
@@ -1876,7 +2228,8 @@ ASMText::optimizeLoadDX(size_t index) {
     // Make sure there are no references to ,X
     for(size_t ii=index+2; ii<elements.size(); ii++) {
         const Element &e = elements[ii];
-        if (e.type == COMMENT) continue;
+        if (e.isCommentLike())
+            continue;
         if (e.type != INSTR || isBasicBlockEndingInstruction(e))
             break;
         InsEffects effects(e);
@@ -1891,33 +2244,36 @@ ASMText::optimizeLoadDX(size_t index) {
 }
 
 
-// Pattern: LDreg; CMPreg #0; BEQ or BNE.
+// Pattern: LDreg or STreg; CMPreg #0 or TSTreg; BEQ or BNE.
 // Remove CMP because LD sets Z.
 //
 bool
 ASMText::loadCmpZeroBeqOrBne(size_t index)
 {
-    if (index + 2 >= elements.size())  // pattern has 3 instructions
+    const char *ins0 = getInstr(index);
+    if (strcmp(ins0, "LDB") && strcmp(ins0, "LDD") && strcmp(ins0, "STB") && strcmp(ins0, "STD"))
         return false;
 
-    string ins0 = getInstr(index);
-    if (ins0 != "LDB" && ins0 != "LDD")
+    size_t cmpIndex = findNextInstrBeforeLabel(index + 1);
+    if (cmpIndex == size_t(-1))
+        return false;
+    const char *ins1 = getInstr(cmpIndex);
+    if (strcmp(ins1, "CMPB") && strcmp(ins1, "CMPD") && strcmp(ins1, "ADDD") && strcmp(ins1, "TSTB"))
+        return false;
+    if (ins0[2] != ins1[3])  // if not same register
+        return false;
+    const char *arg1 = getInstrArg(cmpIndex);
+    if (strcmp(ins1, "TSTB") && strcmp(arg1, "#0") && strcmp(arg1, "#$00"))
         return false;
 
-    string ins1 = getInstr(index + 1);
-    if (ins1 != "CMPB" && ins1 != "CMPD" && ins1 != "ADDD" && ins1 != "TSTB")
+    size_t branchIndex = findNextInstrBeforeLabel(cmpIndex + 1);
+    if (branchIndex == size_t(-1))
         return false;
-    if (ins0[ins0.length() - 1] != ins1[ins1.length() - 1])  // if not same register
-        return false;
-    string arg1 = getInstrArg(index + 1);
-    if (ins1 != "TSTB" && arg1 != "#0")
+    const string &branchInstr = elements[branchIndex].fields[0];
+    if (branchInstr.find("BEQ") == string::npos && branchInstr.find("BNE") == string::npos)
         return false;
 
-    string ins2 = getInstr(index + 2);
-    if (ins2 != "LBEQ" && ins2 != "BEQ" && ins2 != "LBNE" && ins2 != "BNE")
-        return false;
-
-    commentOut(index + 1, "optim: loadCmpZeroBeqOrBne");
+    commentOut(cmpIndex, "optim: loadCmpZeroBeqOrBne");
     return true;
 }
 
@@ -1951,6 +2307,127 @@ ASMText::pushWordForByteComparison(size_t index)
 }
 
 
+// If TFR foo,bar followed by TFR bar,foo, remove 2nd TFR.
+//
+bool
+ASMText::stripConsecOppositeTFRs(size_t index)
+{
+    if (!isInstrAnyArg(index, "TFR"))
+        return false;
+    size_t nextInstrIndex = findNextInstrBeforeLabel(index + 1);
+    if (nextInstrIndex == size_t(-1))
+        return false;
+    if (!isInstrAnyArg(nextInstrIndex, "TFR"))
+        return false;
+
+    const string &arg0 = elements[index].fields[1];
+    const string &arg1 = elements[nextInstrIndex].fields[1];
+
+    uint8_t arg0FirstReg, arg0SecondReg, arg1FirstReg, arg1SecondReg;
+    getRegPairNames(arg0, arg0FirstReg, arg0SecondReg);
+    getRegPairNames(arg1, arg1FirstReg, arg1SecondReg);
+
+    if (arg0FirstReg == arg1SecondReg && arg0SecondReg == arg1FirstReg)
+    {
+        commentOut(nextInstrIndex, "optim: stripConsecOppositeTFRs");
+        return true;
+    }
+
+    return false;
+}
+
+
+// Example: If TFR foo,bar and next instruction is PULS bar, remove the TFR.
+//
+bool
+ASMText::stripOpToDeadReg(size_t index)
+{
+    if (elements[index].type != INSTR)
+        return false;
+    if (isInstrAnyArg(index, "PSHS") || isInstrAnyArg(index, "PULS"))  // "PULS X; PULS X" would be useful to unstack 4 bytes
+        return false;
+    size_t nextInstrIndex = findNextInstrBeforeLabel(index + 1);
+    if (nextInstrIndex == size_t(-1))
+        return false;
+
+    InsEffects ins0Effects(elements[index]);
+    InsEffects ins1Effects(elements[nextInstrIndex]);
+
+    // Do nothing if the 2nd instruction reads the flags (e.g., TFR CC,B).
+    if (ins1Effects.read & CC)
+        return false;
+
+    // Do nothing if the 2nd instruction reads register(s) affected by the 1st instruction.
+    if ((ins0Effects.written & ins1Effects.read) != 0)
+        return false;
+
+    // Do nothing if the two instructions do not write to the same register(s).
+    //
+    if ((ins0Effects.written & ins1Effects.written) == 0)
+        return false;
+
+    // Do nothing if the 1st instruction writes to a register that the 2nd instruction does not write to.
+    if ((ins0Effects.written & ~ ins1Effects.written) != 0)
+        return false;
+
+    commentOut(index, "optim: stripOpToDeadReg");
+    return true;
+}
+
+
+// If PSHS B,A; <ins>; PULS A,B and <ins> does not read D or access S,
+// then remove the PSHS and PULS.
+//
+bool
+ASMText::stripUselessPushPull(size_t index)
+{
+    if (elements[index].type != INSTR)
+        return false;
+
+    if (!isInstr(index, "PSHS", "B,A"))
+        return false;
+
+    size_t nextInstrIndex = findNextInstrBeforeLabel(index + 1);
+    if (nextInstrIndex == size_t(-1))
+        return false;
+    if (isInstrAnyArg(nextInstrIndex, "PSHS") || isInstrAnyArg(nextInstrIndex, "PULS"))
+        return false;
+    if (elements[nextInstrIndex].fields[1].find(",S") != string::npos)  // if may access stacked D
+        return false;
+    size_t followingInstrIndex = findNextInstrBeforeLabel(nextInstrIndex + 1);
+    if (followingInstrIndex == size_t(-1))
+        return false;
+
+    if (!isInstr(followingInstrIndex, "PULS", "A,B"))
+        return false;
+
+    InsEffects middleInsEffects(elements[nextInstrIndex]);
+    if (middleInsEffects.read & D)
+        return false;
+
+    commentOut(index, "optim: stripUselessPushPull");
+    commentOut(followingInstrIndex, "optim: stripUselessPushPull");
+    return true;
+}
+
+
+bool
+ASMText::stripUselessBitwiseOp(size_t index)
+{
+    const Element &e = elements[index];
+    if (e.type != INSTR)
+        return false;
+    bool out = false;
+    if (e.fields[0] == "ORA" || e.fields[0] == "EORA" || e.fields[0] == "ORB" || e.fields[0] == "EORB")
+        out = (e.fields[1] == "#0");
+    else if (e.fields[0] == "ANDA" || e.fields[0] == "ANDB")
+        out = (e.fields[1] == "#$FF" || e.fields[1] == "#255");
+    if (out)
+      commentOut(index, "optim: stripUselessBitwiseOp");
+    return out;
+}
+
+
 // Change TFR X,D PSHS B,A to PSHS X
 //
 bool
@@ -1964,7 +2441,8 @@ ASMText::optimizeTfrPush(size_t index)
     // Make sure there are no references to D
     for(size_t ii=index+3; ii<elements.size(); ii++) {
         const Element &e = elements[ii];
-        if (e.type == COMMENT) continue;
+        if (e.isCommentLike())
+            continue;
         if (e.type != INSTR || isBasicBlockEndingInstruction(e))
             break;
         InsEffects effects(e);
@@ -1980,13 +2458,23 @@ ASMText::optimizeTfrPush(size_t index)
 
 
 // Change TFR X,D OPD to OPX
+// Retired optimization as of CMOC 0.1.77: It assumes that D is dead
+// after the sequence, which is not always the case.
+// For example:
+//   int a, b;
+//   void f(void) { g(a = b); }
+// This optimization would change { LEAX _b,PCR; TFR D,X; STD _a,PCR; PSHS B,A }
+// to { LEAX _b,PCR; STX _a,PCR; PSHS B,A } and the pushed D would be undefined.
 //
 bool
 ASMText::optimizeTfrOp(size_t index)
 {
     if (index + 2 >= elements.size())  // pattern has 2 instructions
         return false;
-    if (! (isInstr(index, "TFR", "X,D")))
+    if (!(isInstr(index, "TFR", "X,D")))
+        return false;
+
+    if (elements[index + 1].type != INSTR)
         return false;
 
     InsEffects effects(elements[index + 1]);
@@ -2017,7 +2505,7 @@ ASMText::removePushB(size_t index)
 
     for(index++; index<elements.size(); index++) {
       Element &e = elements[index];
-      if (e.type == COMMENT && e.type == LABEL)
+      if (e.isCommentLike() && e.type == LABEL)
         continue;
       if (e.type != INSTR || isBasicBlockEndingInstruction(e))
         return false;
@@ -2050,7 +2538,7 @@ ASMText::optimizeLdbTfrClrb(size_t index)
     vector<size_t> instrs;
     for(index++; index<elements.size() && instrs.size()<2; index++) {
       Element &e = elements[index];
-      if (e.type == COMMENT || e.type == LABEL)
+      if (e.isCommentLike() || e.type == LABEL)
         continue;
       if (e.type != INSTR || isBasicBlockEndingInstruction(e))
         return false;
@@ -2064,7 +2552,25 @@ ASMText::optimizeLdbTfrClrb(size_t index)
     e1.fields[2] = "optim: optimizeLdbTfrClrb";
     commentOut(instrs[0], "optim: optimizeLdbTfrClrb");
 
-    return false;
+    return true;
+}
+
+
+// Check for LDB followed by TSTB.
+// Remove TSTB because LDB affects CC the same way.
+//
+bool
+ASMText::optimizeLoadTest(size_t index)
+{
+    if (!isInstrAnyArg(index, "LDB"))
+        return false;
+    size_t testIndex = findNextInstrBeforeLabel(index + 1);
+    if (!isInstr(testIndex, "TSTB", ""))
+        return false;
+    
+    // Apply the optimization.
+    commentOut(testIndex, "optim: optimizeLoadTest");
+    return true;
 }
 
 
@@ -2082,7 +2588,7 @@ ASMText::remove16BitStackOperation(size_t index)
     // modifies D or does a PSHS B,A
     for(index++; index<elements.size(); index++) {
       Element &e = elements[index];
-      if (e.type == COMMENT || e.type == LABEL)
+      if (e.isCommentLike() || e.type == LABEL)
         continue;
       if (e.type != INSTR || isBasicBlockEndingInstruction(e))
         return false;
@@ -2101,7 +2607,7 @@ ASMText::remove16BitStackOperation(size_t index)
     // modifies D or does a LDD ,S++
     for(index++; index<elements.size(); index++) {
       Element &e = elements[index];
-      if (e.type == COMMENT || e.type == LABEL)
+      if (e.isCommentLike() || e.type == LABEL)
         continue;
       if (e.type != INSTR || isBasicBlockEndingInstruction(e))
         return false;
@@ -2121,7 +2627,7 @@ ASMText::remove16BitStackOperation(size_t index)
     commentOut(pushIndex, "optim: remove16BitStackOperation");
     commentOut(popIndex, "optim: remove16BitStackOperation");
 
-    return false;
+    return true;
 }
 
 
@@ -2160,8 +2666,8 @@ ASMText::optimizePostIncrement(size_t index)
     // Look for instructions until we find a ,X
     const size_t startIndex = index;
     for(index += 4; index<elements.size(); index++) {
-      Element &e = elements[index];
-      if (e.type == COMMENT || e.type == LABEL)
+      const Element &e = elements[index];
+      if (e.isCommentLike() || e.type == LABEL)
         continue;
       if (e.type != INSTR || isBasicBlockEndingInstruction(e))
         return false;
@@ -2183,6 +2689,8 @@ ASMText::optimizePostIncrement(size_t index)
     if (index >= elements.size())
       return false;
     Element &e5 = elements[index];
+    if (e5.type != INSTR)
+        return false;
 
     // The indexed instruction will reference another register. We must find
     // any instruction that modifies this register between startIndex and
@@ -2192,6 +2700,8 @@ ASMText::optimizePostIncrement(size_t index)
     vector<size_t> loadIndices;
     for(size_t ii=startIndex + 4; ii<index; ii++) {
       const Element &ee = elements[ii];
+      if (ee.type != INSTR)
+        continue;
       const InsEffects eeEffects(ee);
       if ((eeEffects.written & readRegs) != 0) {
         loadIndices.push_back(ii);
@@ -2205,28 +2715,28 @@ ASMText::optimizePostIncrement(size_t index)
     // Replace decrement with OP, X++ instr
     e4.fields[0] = e5.fields[0];
     e4.fields[1] = string(",X") + ((e2.fields[1] == "1,X") ? "+" : "++");
-    e4.fields[2] = "optimiz: optimizePostIncrement";
+    e4.fields[2] = "optim: optimizePostIncrement";
 
     // Replace old OP, X instr with STX
     e5.fields[0] = "STX";
     e5.fields[1] = e1.fields[1];
-    e5.fields[2] = "optimiz: optimizePostIncrement";
+    e5.fields[2] = "optim: optimizePostIncrement";
 
     // Either comment out or put the load instr at e2
     if (loadIndices.size() == 0)
-      commentOut(startIndex + 1, "optimiz: optimizePostIncrement");
+      commentOut(startIndex + 1, "optim: optimizePostIncrement");
     else {
       const Element &ee = elements[loadIndices[0]];
       e2.fields[0] = ee.fields[0];
       e2.fields[1] = ee.fields[1];
-      e2.fields[2] = "optimiz: optimizePostIncrement";
-      commentOut(loadIndices[0], "optimiz: optimizePostIncrement");
+      e2.fields[2] = "optim: optimizePostIncrement";
+      commentOut(loadIndices[0], "optim: optimizePostIncrement");
     }
 
     // Comment out e3
-    commentOut(startIndex + 2, "optimiz: optimizePostIncrement");
+    commentOut(startIndex + 2, "optim: optimizePostIncrement");
 
-    return false;
+    return true;
 }
 
 
@@ -2264,7 +2774,7 @@ ASMText::removeUselessOps(size_t index) {
       }
 
       // Only process non basic block ending instructions
-      if (e.type == LABEL || e.type == COMMENT)
+      if (e.type == LABEL || e.isCommentLike())
         continue;
       if (e.type == INSTR && isBasicBlockEndingInstruction(e))
         break;
@@ -2326,7 +2836,7 @@ ASMText::optimize16BitStackOps1(size_t index) {
       // Only process non basic block ending instructions
       if (e.type == LABEL)
         return false;
-      if (e.type == COMMENT)
+      if (e.isCommentLike())
         continue;
       if (e.type != INSTR)
         break;
@@ -2361,11 +2871,11 @@ ASMText::optimize16BitStackOps1(size_t index) {
     }
 
     // The first reference must be a PSHS [X|B,A]
-    const string &targetReg = elements[startIndex].fields[0].substr(2);
-    Element &pshs = elements[simulator.indexToReferences[startIndex][0]];
+    const char *targetReg = elements[startIndex].fields[0].c_str() + 2;
+    const Element &pshs = elements[simulator.indexToReferences[startIndex][0]];
     if (pshs.fields[0] != "PSHS" ||
-        !((pshs.fields[1] == "X" && targetReg == "X") ||
-          (pshs.fields[1] == "B,A" && targetReg == "D"))) {
+        !((pshs.fields[1] == "X" && !strcmp(targetReg, "X")) ||
+          (pshs.fields[1] == "B,A" && !strcmp(targetReg, "D")))) {
       return false;
     }
 
@@ -2377,10 +2887,12 @@ ASMText::optimize16BitStackOps1(size_t index) {
 
     // Make sure that no instructions between startIndex and PSHS write
     // A or B
-    if (targetReg == "D") {
+    if (!strcmp(targetReg, "D")) {
       for (int ii = startIndex + 1;
            ii<simulator.indexToReferences[startIndex][0];
            ii++) {
+        if (elements[ii].type != INSTR)
+          continue;
         InsEffects effects(elements[ii]);
         if (effects.written & (A | B))
           return false;
@@ -2433,7 +2945,7 @@ ASMText::optimize16BitStackOps2(size_t index) {
     size_t ii = index + 2;
     for(; ii<elements.size(); ii++) {
         Element &e = elements[ii];
-        if (e.type == COMMENT || e.type == LABEL) {
+        if (e.isCommentLike() || e.type == LABEL) {
           continue;
         }
         if (e.type != INSTR) {
@@ -2506,7 +3018,7 @@ ASMText::optimize8BitStackOps(size_t index) {
       // Only process non basic block ending instructions
       if (e.type == LABEL)
         return false;
-      if (e.type == COMMENT)
+      if (e.isCommentLike())
         continue;
       if (e.type == INSTR && isBasicBlockEndingInstruction(e))
         break;
@@ -2546,6 +3058,7 @@ ASMText::optimize8BitStackOps(size_t index) {
         !(pshs.fields[1] == "A" || pshs.fields[1] == "B" || pshs.fields[1] == "B,A")) {
       return false;
     }
+    const bool doubleBytePush = pshs.fields[1] == "B,A";
 
     // The second reference must be OP ,S+
     Element &op = elements[simulator.indexToReferences[startIndex][1]];
@@ -2553,32 +3066,45 @@ ASMText::optimize8BitStackOps(size_t index) {
       return false;
     }
 
+    // If we pushed B,A there must be an LEAS 1,S just before op
+    Element &leas = elements[simulator.indexToReferences[startIndex][1] - 1];
+    if (doubleBytePush) {
+      if (leas.fields[0] != "LEAS" || leas.fields[1] != "1,S") {
+        return false;
+      }
+    }
+
     // OP can directly reference the LD value. The tricky thing is that if
     // the original load is the D register but the PSHS is on the B register
     // we have to bump the index by one.
-    const string &targetReg = elements[startIndex].fields[0].substr(2);
-    if (targetReg == "D" && pshs.fields[1] == "B") {
-      size_t commaIndex = elements[startIndex].fields[1].find(",");
+    const string &field1 = elements[startIndex].fields[1];
+    const char *targetReg = elements[startIndex].fields[0].c_str() + 2;
+    if (!strcmp(targetReg, "D") && (doubleBytePush || pshs.fields[1] == "B")) {
+      size_t commaIndex = field1.find(",");
       if (commaIndex == string::npos) {
         return false;
       }
-      int offset = mystoi(elements[startIndex].fields[1].substr(0, commaIndex),
-                          NULL, 10);
+      long offset = strtol(field1.c_str(), NULL, 10);  // extract integer up to commaIndex
       if (offset >= 0) {
         return false;
       }
-      offset++;
-      op.fields[1] = my_to_string(offset, false)
-                   + elements[startIndex].fields[1].substr(commaIndex);
+      char temp[512];
+      snprintf(temp, sizeof(temp), "%d%s", int16_t(offset + 1), field1.c_str() + commaIndex);
+      op.fields[1] = temp;
     } else {
-    op.fields[1] = elements[startIndex].fields[1];
+      op.fields[1] = field1;
     }
     op.fields[2] = "optim: optimize8BitStackOps";
 
     // We can comment out the load value and possibly the pshs
     commentOut(startIndex, "optim: optimize8BitStackOps");
-    if (pshs.fields[1] == "B,A") {
-      pshs.fields[1] = (targetReg == "A") ? "B" : "A";
+    if (doubleBytePush) {
+      commentOut(simulator.indexToReferences[startIndex][0],
+                 "optim: optimize8BitStackOps");
+      commentOut(simulator.indexToReferences[startIndex][1] - 1,
+                 "optim: optimize8BitStackOps");
+    } else if (pshs.fields[1] == "B,A") {
+      pshs.fields[1] = !strcmp(targetReg, "A") ? "B" : "A";
       pshs.fields[2] = "optim: optimize8BitStackOps";
     } else {
       commentOut(simulator.indexToReferences[startIndex][0],
@@ -2601,27 +3127,24 @@ ASMText::removeTfrDX(size_t index) {
     if (index + 2 >= elements.size())
       return false;
 
-    Pseudo6809 simulator;
     const size_t startIndex = index;
-
-    Element &e1 = elements[index];
+    Element &e1 = elements[index++];
     if (e1.type != INSTR || e1.fields[0] != "LDD")
       return false;
-    Element &e2 = elements[index + 1];
+    Element &e2 = elements[index++];
     if (e2.type != INSTR || e2.fields[0] != "TFR" || e2.fields[1] != "D,X")
       return false;
 
-    size_t numInstrs = 0;
-    bool canGoOn = true;
+    short written = 0;
     do {
       const Element &e = elements[index];
 
       // Only process non basic block ending instructions
-      if (e.type == LABEL || e.type == COMMENT)
+      if (e.isCommentLike())
         continue;
-      if (e.type == INSTR && isBasicBlockEndingInstruction(e))
-        break;
       if (e.type != INSTR)
+        return false;
+      if (isBasicBlockEndingInstruction(e))
         break;
 
       // Don't try to optimize when there are bsrs
@@ -2629,19 +3152,18 @@ ASMText::removeTfrDX(size_t index) {
         return false;
       }
 
+      // If we read A or B before writing, then we can't do this
+      InsEffects effects(e1);
+      if ((effects.read & (A | B)) & ~written) {
+        return false;
+      }
+      written |= effects.written;
+
       // Run the instruction
-      numInstrs++;
-      canGoOn = simulator.process(e.fields[0], e.fields[1], (int)index);
-    } while(canGoOn && ++index<elements.size() &&
-            (simulator.indexToReferences[startIndex].size() < 2));
+    } while(++index<elements.size() && ((written & (A | B)) != (A | B)));
 
-    // Simulator hit a problem
-    if (!canGoOn) {
-      return false;
-    }
-
-    // We can only handle one reference to D
-    if (simulator.indexToReferences[startIndex].size() != 1) {
+    // We can't do this if we have not written A and B
+    if ((written & (A | B)) != (A | B)) {
       return false;
     }
 
@@ -2666,12 +3188,14 @@ ASMText::removeUselessLeax(size_t index) {
     size_t numChanges = 0;
     for(index++; index<elements.size(); index++) {
         Element &e1 = elements[index];
-        if (e1.type == COMMENT)
+        if (e1.isCommentLike())
             continue;
         if (e1.type != INSTR || isBasicBlockEndingInstruction(e1))
             break;
 
         InsEffects effects(e1);
+        if (effects.read & X)  // if any following instruction reads X, the LEAX is useful
+            break;
         if (e1.fields[0] == e.fields[0] && e1.fields[1] == e.fields[1]) {
             commentOut(index, "optim: removeUselessLeax");
             numChanges++;
@@ -2699,16 +3223,33 @@ ASMText::removeUselessLdx(size_t index) {
     size_t numChanges = 0;
     for(index++; index<elements.size(); index++) {
         Element &e1 = elements[index];
-        if (e1.type == COMMENT)
+        if (e1.isCommentLike())
             continue;
         if (e1.type != INSTR || isBasicBlockEndingInstruction(e1))
             break;
 
-        // The value could change as a result of the STORE
-        if (e1.fields[0].find("ST") == 0)
-          break;
+        // The value could change as a result of the STORE - reject if
+        // we are storing to the same location, not relative to U or indirect
+        if (e1.fields[0].find("ST") == 0) {
+          if (e.fields[1].find(",U") == string::npos || 
+              startsWith(e.fields[1], "[") || e1.fields[1] == e.fields[0]) {
+            break;
+          }
+
+          // Reject if both the LD and ST offsets are within 1 byte of each other
+          int offset, offset1;
+          if (!parseRelativeOffset(e.fields[1], offset) ||
+              !parseRelativeOffset(e1.fields[1], offset1)) {
+            break;
+          }
+          if (abs(offset - offset1) < 2) {
+            break;
+          }
+        }
 
         InsEffects effects(e1);
+        if (effects.read & X)  // if any following instruction reads X, the LDX is useful
+            break;
         if (e1.fields[0] == "LDX" && e1.fields[1] == e.fields[1]) {
             commentOut(index, "optim: removeUselessLdx");
             numChanges++;
@@ -2746,7 +3287,7 @@ ASMText::removeUnusedLoad(size_t index) {
       const Element &e = elements[index];
 
       // Only process non basic block ending instructions
-      if (e.type == LABEL || e.type == COMMENT)
+      if (e.type == LABEL || e.isCommentLike())
         continue;
 
       if (e.type == INSTR && isBasicBlockEndingInstruction(e)) {
@@ -2846,7 +3387,7 @@ ASMText::optimizeIndexedX(size_t index) {
       const Element &e = elements[index];
 
       // Only process non basic block ending instructions
-      if (e.type == LABEL || e.type == COMMENT)
+      if (e.type == LABEL || e.isCommentLike())
         continue;
       if (e.type != INSTR)
         break;
@@ -2918,7 +3459,7 @@ ASMText::optimizeIndexedX2(size_t index) {
       const Element &e = elements[index];
 
       // Only process non basic block ending instructions
-      if (e.type == LABEL || e.type == COMMENT)
+      if (e.type == LABEL || e.isCommentLike())
         continue;
       if (e.type == INSTR && isBasicBlockEndingInstruction(e))
         break;
@@ -2957,88 +3498,6 @@ ASMText::optimizeIndexedX2(size_t index) {
     commentOut(startIndex, "optim: optimizeIndexedX2");
 
     return true;
-}
-
-
-//  When possible, remove repeated
-//   LDB ?,U
-//
-bool
-ASMText::removeUselessLdb(size_t index) {
-    Element &e = elements[index];
-    if (!((e.fields[0] == "LDB" || e.fields[0] == "STB") &&
-          e.fields[1].find(",U") != string::npos))
-      return false;
-
-    size_t numChanges = 0;
-    for(index++; index<elements.size(); index++) {
-        Element &e1 = elements[index];
-        if (e1.type == COMMENT)
-            continue;
-        if (e1.type != INSTR || isBasicBlockEndingInstruction(e1))
-            break;
-
-        // The value could change as a result of the STORE
-        if (e1.fields[0].find("ST") == 0)
-          break;
-
-        // If e1 loads same thing as e:
-        InsEffects effects(e1);
-        if (e1.fields[0] == "LDB" && e1.fields[1] == e.fields[1]) {
-            string inverse;
-            if (!isConditionalBranch(index + 1, inverse)) {
-              commentOut(index, "optim: removeUselessLdb");
-              numChanges++;
-              continue;
-            }
-        }
-
-        if (effects.written & B)
-            break;
-    }
-
-    return numChanges > 0;
-}
-
-
-//  When possible, remove repeated
-//   LDD ?,U
-//
-bool
-ASMText::removeUselessLdd(size_t index) {
-    Element &e = elements[index];
-    if (!((e.fields[0] == "LDD" || e.fields[0] == "STD") &&
-          e.fields[1].find(",U") != string::npos))
-      return false;
-
-    size_t numChanges = 0;
-    for(index++; index<elements.size(); index++) {
-        Element &e1 = elements[index];
-        if (e1.type == COMMENT)
-            continue;
-        if (e1.type != INSTR || isBasicBlockEndingInstruction(e1))
-            break;
-
-        // The value could change as a result of the STORE
-        if (e1.fields[0].find("ST") == 0)
-          break;
-
-        // If e1 loads same thing as e:
-        InsEffects effects(e1);
-        if (e1.fields[0] == "LDD" && e1.fields[1] == e.fields[1]) {
-            string inverse;
-            if (!isConditionalBranch(index + 1, inverse)) {
-              commentOut(index, "optim: removeUselessLdd");
-              numChanges++;
-              continue;
-            }
-        }
-
-        if (effects.written & (A | B))
-            break;
-    }
-
-    return numChanges > 0;
 }
 
 
@@ -3093,11 +3552,11 @@ ASMText::transformPshsDPshsD(size_t index) {
         return false;
       }
       InsEffects effects(e);
-      if (effects.written & X) {
-        break;
-      }
       if (effects.read & X) {
         return false;
+      }
+      if (effects.written & X) {
+        break;
       }
     }
 
@@ -3128,13 +3587,13 @@ ASMText::transformPshsDPshsD(size_t index) {
 //
 bool
 ASMText::transformPshsXPshsX(size_t index) {
-    // Does not work with OS-9 because the Y register points to the global data.
-    if (TranslationUnit::instance().getTargetPlatform() == OS9) {
+    // This optimization is not done for OS-9 because the Y register points to the global data.
+    if (TranslationUnit::instance().targetPlatformUsesY()) {
       return false;
     }
 
-    // Needs 4 elements
-    if (index + 4 >= elements.size()) {
+    // Needs 6 elements
+    if (index + 6 >= elements.size()) {
       return false;
     }
 
@@ -3157,12 +3616,20 @@ ASMText::transformPshsXPshsX(size_t index) {
       return false;
     }
 
+    // Don't do this when we have 3 consecutive PSHS X instructions
+    const Element &e6 = elements[index + 5];
+    if (e6.type == INSTR && e6.fields[0] == "PSHS" && e6.fields[1] == "X") {
+      return false;
+    }
+
     // Transform the first instruction to use Y. These take more space usually
     // but will allow us to remove a PSHS later on
     e1.fields[0][e1.fields[0].size() - 1] = 'Y';
     e1.fields[2] = "optim: transformPshsXPshsX";
     e2.fields[1][e2.fields[1].size() - 1] = 'Y';
     e2.fields[2] = "optim: transformPshsXPshsX";
+
+    optimizePshsOps(index);
 
     return true;
 }
@@ -3185,35 +3652,35 @@ ASMText::transformPshsXPshsX(size_t index) {
 //
 bool
 ASMText::optimizePshsOps(size_t index) {
-    vector<int> pshsIndices;
+    StaticArray<size_t, 3> pshsIndices;  // the following code must push at most 3 elements in this array
 
     // First element has to be an instruction
-    Element e = elements[index++];
-    if (e.type != INSTR)
+    const Element *e = &elements[index++];
+    if (e->type != INSTR)
       return false;
 
     // Look for LDY/LEAY followed by PSHS Y
     bool pshsY = false;
-    if (e.fields[0] == "LDY" || e.fields[0] == "LEAY") {
-      e = elements[index++];
+    if (e->fields[0] == "LDY" || e->fields[0] == "LEAY") {
+      e = &elements[index++];
 
-      if (e.type == INSTR && e.fields[0] == "PSHS" && e.fields[1] == "Y") {
+      if (e->type == INSTR && e->fields[0] == "PSHS" && e->fields[1] == "Y") {
         pshsIndices.push_back(index - 1);
         pshsY = true;
-        e = elements[index++];
+        e = &elements[index++];
       }
     }
 
     // Look for LDX/LEAX followed by PSHS X
     bool pshsX = false;
-    if (e.type == INSTR && (e.fields[0] == "LDX" || e.fields[0] == "LEAX") &&
-        e.fields[1].find(",S") == string::npos) {
-      e = elements[index++];
+    if (e->type == INSTR && (e->fields[0] == "LDX" || e->fields[0] == "LEAX") &&
+        e->fields[1].find(",S") == string::npos) {
+      e = &elements[index++];
 
-      if (e.type == INSTR && e.fields[0] == "PSHS" && e.fields[1] == "X") {
+      if (e->type == INSTR && e->fields[0] == "PSHS" && e->fields[1] == "X") {
         pshsIndices.push_back(index - 1);
         pshsX = true;
-        e = elements[index++];
+        e = &elements[index++];
       }
     }
 
@@ -3224,27 +3691,27 @@ ASMText::optimizePshsOps(size_t index) {
 
     // Look for CLRA/CLRB/LDA/LDB/LDD followed by PSHS B,A 
     bool pshsD = false;
-    if (e.type == INSTR &&
-        (e.fields[0] == "CLRA" || e.fields[0] == "CLRB" ||
-         e.fields[0] == "LDA" || e.fields[0] == "LDB" || e.fields[0] == "LDD") &&
-        e.fields[1].find(",S") == string::npos) {
-      e = elements[index++];
+    if (e->type == INSTR &&
+        (e->fields[0] == "CLRA" || e->fields[0] == "CLRB" ||
+         e->fields[0] == "LDA" || e->fields[0] == "LDB" || e->fields[0] == "LDD") &&
+        e->fields[1].find(",S") == string::npos) {
+      e = &elements[index++];
 
       // Next instruction may be another CLRA/CLRB/LDA/LDB/LDDD
-      if (e.type == INSTR && e.fields[0] != "PSHS") {
-        if ((e.fields[0] == "CLRA" || e.fields[0] == "CLRB" ||
-             e.fields[0] == "LDA" || e.fields[0] == "LDB" || e.fields[0] == "LDD") &&
-            e.fields[1].find(",S") == string::npos) {
-          e = elements[index++];
+      if (e->type == INSTR && e->fields[0] != "PSHS") {
+        if ((e->fields[0] == "CLRA" || e->fields[0] == "CLRB" ||
+             e->fields[0] == "LDA" || e->fields[0] == "LDB" || e->fields[0] == "LDD") &&
+            e->fields[1].find(",S") == string::npos) {
+          e = &elements[index++];
         } else {
           return false;
         }
       }
 
-      if (e.type == INSTR && e.fields[0] == "PSHS" && e.fields[1] == "B,A") {
+      if (e->type == INSTR && e->fields[0] == "PSHS" && e->fields[1] == "B,A") {
         pshsIndices.push_back(index - 1);
         pshsD = true;
-        e = elements[index++];
+        e = &elements[index++];
       }
     }
 
@@ -3254,12 +3721,12 @@ ASMText::optimizePshsOps(size_t index) {
     }
 
     // Generate the new PSHS instruction
-    string regsToPush = (pshsY) ? ",Y" : "";
-    regsToPush += (pshsX) ? ",X" : "";
-    regsToPush += (pshsD) ? ",B,A" : "";
-    regsToPush = regsToPush.substr(1);
+    char regsToPush[16] = "";
+    if (pshsY) strcat(regsToPush, ",Y");
+    if (pshsX) strcat(regsToPush, ",X");
+    if (pshsD) strcat(regsToPush, ",B,A");
     Element &pshs = elements[pshsIndices[pshsIndices.size() - 1]];
-    pshs.fields[1] = regsToPush;
+    pshs.fields[1] = regsToPush + 1;  // + 1 to ignore initial comma
     pshs.fields[2] = "optim: optimizePshsOps";
 
     // Comment out the old pshs instructions
@@ -3306,7 +3773,7 @@ ASMText::optimize16BitCompares(size_t index) {
       return false;
     }
 
-    string invertedOperandsBranchInstr;
+    char invertedOperandsBranchInstr[INSTR_NAME_BUFSIZ];
     if (!isRelativeSizeConditionalBranch(index + 3, invertedOperandsBranchInstr)) {
       return false;
     }
@@ -3323,17 +3790,865 @@ ASMText::optimize16BitCompares(size_t index) {
 }
 
 
+//  Optimize consecutive ADDD and SUBD into a single op:
+//   ADDD #2
+//   SUBD #5
+//
+//  To
+//   ADDD #$FFFA
+//
 bool
-ASMText::isInstr(size_t index, const char *ins, const char *arg) const
-{
-    const Element &e = elements[index];
-    return e.type == INSTR && e.fields[0] == ins && e.fields[1] == arg;
+ASMText::combineConsecutiveOps(size_t index) {
+    if (index + 2 > elements.size()) {
+      return false;
+    }
+
+    Element &opd1 = elements[index];
+    int n1;
+    if (opd1.type != INSTR ||
+        !(opd1.fields[0] == "ADDD" || opd1.fields[0] == "SUBD") ||
+        !extractConstantLiteral(opd1.fields[1], n1)) {
+      return false;
+    }
+    if (opd1.fields[0] == "SUBD") {
+      n1 = -n1;
+    }
+
+    Element &opd2 = elements[index + 1];
+    int n2;
+    if (opd2.type != INSTR ||
+        !(opd2.fields[0] == "ADDD" || opd2.fields[0] == "SUBD") ||
+        !extractConstantLiteral(opd2.fields[1], n2)) {
+      return false;
+    }
+    if (opd2.fields[0] == "SUBD") {
+      n2 = -n2;
+    }
+
+    // Make sure that there is at least one instr before the
+    // basic block ends
+    for(size_t ii=index+2; ii < elements.size(); ii++) {
+      const Element &e = elements[ii];
+      if (e.type == COMMENT) {
+        continue;
+      }
+      if (e.type != INSTR) {
+        return false; // could be a label
+      }
+      if (isBasicBlockEndingInstruction(e)) {
+        return false;
+      }
+      break;
+    }
+
+    // comment out opd1
+    commentOut(index, "optim: combineConsecutiveOps");
+
+    // patch up opd2
+    const uint16_t n = (uint16_t)((n1 + n2) & 0xffff);
+    opd2.fields[0] = "ADDD";
+    opd2.fields[1] = "#" + wordToString(n, true);
+    opd2.fields[2] = "optim: combineConsecutiveOps";
+
+    return true;
 }
 
 
+//  Remove consecutive PSHS B,A and LDD	,S++
+//
+bool
+ASMText::removeConsecutivePshsPul(size_t index) {
+    if (index + 2 > elements.size()) {
+      return false;
+    }
+
+    // First instruction must be PSHS B,A
+    Element &opd1 = elements[index];
+    if (opd1.type != INSTR || opd1.fields[0] != "PSHS" || opd1.fields[1] != "B,A") {
+      return false;
+    }
+
+    // Next instr must be LDD ,S++
+    size_t ii;
+    for(ii = index+1; ii < elements.size(); ii++) {
+      Element &e = elements[ii];
+      if (e.type == COMMENT) {
+        continue;
+      }
+      if (e.type != INSTR) {
+        return false; // could be a label
+      }
+      if (e.fields[0] != "LDD" || e.fields[1] != ",S++") {
+        return false;
+      }
+      break;
+    }
+    if (ii >= elements.size()) {
+      return false;
+    }
+    const size_t opd2Index = ii;
+
+    // Make sure that there is at least one instr before the
+    // basic block ends
+    for(; ii < elements.size(); ii++) {
+      Element &e = elements[ii++];
+      if (e.type == COMMENT) {
+        continue;
+      }
+      if (e.type != INSTR) {
+        return false; // could be a label
+      }
+      if (isBasicBlockEndingInstruction(e)) {
+        return false;
+      }
+      break;
+    }
+
+    // comment out opd1 and opd2
+    commentOut(index, "optim: removeConsecutivePshsPul");
+    commentOut(opd2Index, "optim: removeConsecutivePshsPul");
+
+    return true;
+}
+
+
+// Coalesce LEAX N,X_or_PCR LEAX M,X to LEAX N+M,X, where N and M are constants.
+//
+bool
+ASMText::coalesceConsecutiveLeax(size_t index) {
+    if (index + 2 > elements.size()) {
+      return false;
+    }
+
+    // First 2 instructions must be LEAX ????,????
+    Element &e1 = elements[index];
+    string &e1Field1 = e1.fields[1];
+    if (e1.type != INSTR || e1.fields[0] != "LEAX" || startsWith(e1Field1, "A,")
+        || startsWith(e1Field1, "B,") || startsWith(e1Field1, "D,")) {
+      return false;
+    }
+    Element &e2 = elements[index + 1];
+    const string &e2Field1 = e2.fields[1];
+    if (e2.type != INSTR || e2.fields[0] != "LEAX" || !endsWith(e2Field1, ",X")  || startsWith(e2Field1, "A,")
+        || startsWith(e2Field1, "B,") || startsWith(e2Field1, "D,")) {
+      return false;
+    }
+    int offset1 = 0, offset2 = 0;
+    bool isNumeric = true;
+    if (isdigit(e1Field1[0]) || e1Field1[0] == '+' || e1Field1[0] == '-' || e1Field1[0] == ',')
+      parseRelativeOffset(e1Field1, offset1);
+    else
+      isNumeric = false;
+    if (isNumeric &&
+        (isdigit(e2Field1[0]) || e2Field1[0] == '+' || e2Field1[0] == '-' || e2Field1[0] == ','))
+      parseRelativeOffset(e2Field1, offset2);
+    else
+      isNumeric = false;
+
+    size_t comma1Index = e1Field1.find(",");
+    char temp[512];
+    if (isNumeric) {
+      snprintf(temp, sizeof(temp), "%u%s", uint16_t((offset1 + offset2) & 0xffff), e1Field1.c_str() + comma1Index);
+    } else {
+      size_t comma2Index = e2Field1.find(",");
+      snprintf(temp, sizeof(temp), "%.*s%s%.*s%s",
+                      int(comma1Index), e1Field1.c_str(),
+                      comma2Index == 0 ? "" : "+",
+                      int(comma2Index), e2Field1.c_str(),
+                      e1Field1.c_str() + comma1Index);
+    }
+    e1Field1 = temp;
+    commentOut(index + 1, "optim: coalesceConsecutiveLeax");
+    return true;
+}
+
+
+//  Optimize LEAX AA,X
+//           LDX CC,X
+//  To       LDX AA+CC,X
+//
+bool
+ASMText::optimizeLeaxLdx(size_t index) {
+    if (index + 2 > elements.size()) {
+      return false;
+    }
+
+    // First instruction must be LEAX AA,X
+    Element &e1 = elements[index];
+    if (e1.type != INSTR || e1.fields[0] != "LEAX" || !endsWith(e1.fields[1], ",X") 
+        || startsWith(e1.fields[1], "A,") || startsWith(e1.fields[1], "B,") 
+        || startsWith(e1.fields[1], "D,")) {
+      return false;
+    }
+
+    // Next instruction must be LDX CC,X
+    Element &e2 = elements[index + 1];
+    if (e2.type != INSTR || e2.fields[0] != "LDX"
+        || e2.fields[1].find("+") != string::npos
+        || e2.fields[1].find("-") != string::npos
+        || e2.fields[1].find("D") != string::npos
+        || !endsWith(e2.fields[1], ",X")) {
+      return false;
+    }
+
+    int offset1 = 0, offset2 = 0;
+    parseRelativeOffset(e1.fields[1], offset1);
+    parseRelativeOffset(e2.fields[1], offset2);
+    e2.fields[1] = wordToString((offset1 + offset2) & 0xffff, false) + ",X";
+    e2.fields[2] = "optim: optimizeLeaxLdx";
+    commentOut(index, "optim: optimizeLeaxLdx");
+    return true;
+}
+
+
+//  Optimize LEAX AA,X
+//           LDD CC,X
+//  To       LDD AA+CC,X
+//
+bool
+ASMText::optimizeLeaxLdd(size_t index) {
+    if (index + 2 > elements.size()) {
+      return false;
+    }
+
+    // First instruction must be LEAX AA,X
+    Element &e1 = elements[index];
+    if (e1.type != INSTR || e1.fields[0] != "LEAX" || !endsWith(e1.fields[1], ",X") 
+        || startsWith(e1.fields[1], "A,") || startsWith(e1.fields[1], "B,")
+        || startsWith(e1.fields[1], "D,")) {
+      return false;
+    }
+
+    // Next instruction must be LDD CC,X
+    Element &e2 = elements[index + 1];
+    if (e2.type != INSTR || e2.fields[0] != "LDD"
+        || e2.fields[1].find("+") != string::npos
+        || e2.fields[1].find("-") != string::npos
+        || e2.fields[1].find("D") != string::npos
+        || !endsWith(e2.fields[1], ",X")) {
+      return false;
+    }
+
+    // Verify that the X value is not used anywhere
+    for (size_t ii=index+2; ii<elements.size(); ii++) {
+      Element &e = elements[ii];
+      if (e.isCommentLike())
+        continue;
+      if (e.type != INSTR)
+        return false;
+      if (isBasicBlockEndingInstruction(e))
+        break;
+      if ((e.fields[0].find("BSR") != string::npos &&
+           !startsWith(e.fields[1], "_")) ||
+          e.fields[0].find("JSR") != string::npos)
+        return false;
+      const InsEffects insEffects(e);
+      if (insEffects.read & X)
+        return false;
+      if (insEffects.written & X)
+        break;
+    }
+
+    int offset1 = 0, offset2 = 0;
+    parseRelativeOffset(e1.fields[1], offset1);
+    parseRelativeOffset(e2.fields[1], offset2);
+    e2.fields[1] = wordToString((offset1 + offset2) & 0xffff, false) + ",X";
+    e2.fields[2] = "optim: optimizeLeaxLdd";
+    commentOut(index, "optim: optimizeLeaxLdd");
+    return true;
+}
+
+
+//  Optimize LDX AA,BB
+//           ???
+//           ??? ,X
+//  To       ???
+//           ??? [AA,BB]
+bool
+ASMText::optimizeLdx(size_t index) {
+    if (index + 3 > elements.size()) {
+      return false;
+    }
+
+    // First instruction must be LDX AA,BB
+    Element &e1 = elements[index];
+    if (e1.type != INSTR || e1.fields[0] != "LDX" || endsWith(e1.fields[1], "]") 
+        || startsWith(e1.fields[1], "A,") || startsWith(e1.fields[1], "B,")
+        || startsWith(e1.fields[1], "D,")
+        || e1.fields[1].find(",-") != string::npos
+        || endsWith(e1.fields[1], "+") || e1.fields[1].find(",") == string::npos) {
+      return false;
+    }
+
+    // Find the first usage of X
+    size_t usageIndex = index;
+    bool xUpdated = false;
+    for (size_t ii=index+1; ii<elements.size(); ii++) {
+      Element &e = elements[ii];
+      if (e.isCommentLike())
+        continue;
+      if (e.type != INSTR)
+        return false;
+      if (isBasicBlockEndingInstruction(e))
+        break;
+      if ((e.fields[0].find("BSR") != string::npos &&
+           !startsWith(e.fields[1], "_")) ||
+          e.fields[0].find("JSR") != string::npos)
+        return false;
+      const InsEffects insEffects(e);
+      if (insEffects.read & X) {
+        usageIndex = ii;
+        xUpdated = (insEffects.written & X) ? true : false;
+        break;
+      }
+      if (insEffects.written & (X | U))
+        return false;
+    }
+    if (usageIndex == index) {
+      return false;
+    }
+
+    // Verify that the X value is not used anywhere else
+    for (size_t ii=usageIndex + 1; !xUpdated && ii<elements.size(); ii++) {
+      Element &e = elements[ii];
+      if (e.isCommentLike() || e.type == LABEL)
+        continue;
+      if (e.type != INSTR)
+        return false;
+      if (isBasicBlockEndingInstruction(e))
+        break;
+      if ((e.fields[0].find("BSR") != string::npos &&
+           !startsWith(e.fields[1], "_")) ||
+          e.fields[0].find("JSR") != string::npos)
+        return false;
+      const InsEffects insEffects(e);
+      if (insEffects.read & X)
+        return false;
+      if (insEffects.written & X)
+        break;
+    }
+
+    // usage instruction must be ??? ,X
+    Element &e2 = elements[usageIndex];
+    if (e2.type != INSTR || startsWith(e2.fields[0], "LEA") ||
+        e2.fields[1] != ",X") {
+      return false;
+    }
+
+    e2.fields[1] = "[" + e1.fields[1] + "]";
+    e2.fields[2] = "optim: optimizeLdx";
+    commentOut(index, "optim: optimizeLdx");
+    return true;
+}
+
+
+//  Optimize LEAX AA,BB
+//           ???
+//           ??? ,X
+//  To       ???
+//           ??? AA,BB
+bool
+ASMText::optimizeLeax(size_t index) {
+    if (index + 3 > elements.size()) {
+      return false;
+    }
+
+    // First instruction must be LEAX AA,BB
+    Element &e1 = elements[index];
+    if (e1.type != INSTR || e1.fields[0] != "LEAX" || endsWith(e1.fields[1], "]") 
+        || startsWith(e1.fields[1], "A,") || startsWith(e1.fields[1], "B,")
+        || startsWith(e1.fields[1], "D,")) {
+      return false;
+    }
+
+    // Find the first usage of X
+    size_t usageIndex = index;
+    bool xUpdated = false;
+    for (size_t ii=index+1; ii<elements.size(); ii++) {
+      Element &e = elements[ii];
+      if (e.isCommentLike())
+        continue;
+      if (e.type != INSTR)
+        return false;
+      if (isBasicBlockEndingInstruction(e))
+        break;
+      if ((e.fields[0].find("BSR") != string::npos &&
+           !startsWith(e.fields[1], "_")) ||
+          e.fields[0].find("JSR") != string::npos)
+        return false;
+      const InsEffects insEffects(e);
+      if (insEffects.read & X) {
+        usageIndex = ii;
+        xUpdated = (insEffects.written & X) ? true : false;
+        break;
+      }
+      if (insEffects.written & (X | U))
+        return false;
+    }
+    if (usageIndex == index) {
+      return false;
+    }
+
+    // Verify that the X value is not used anywhere else
+    for (size_t ii=usageIndex + 1; !xUpdated && ii<elements.size(); ii++) {
+      Element &e = elements[ii];
+      if (e.isCommentLike() || e.type == LABEL)
+        continue;
+      if (e.type != INSTR)
+        return false;
+      if (isBasicBlockEndingInstruction(e))
+        break;
+      if ((e.fields[0].find("BSR") != string::npos &&
+           !startsWith(e.fields[1], "_")) ||
+          e.fields[0].find("JSR") != string::npos)
+        return false;
+      const InsEffects insEffects(e);
+      if (insEffects.read & X)
+        return false;
+      if (insEffects.written & X)
+        break;
+    }
+
+    // usage instruction must be ??? ,X
+    Element &e2 = elements[usageIndex];
+    if (e2.type != INSTR || e2.fields[1] != ",X") {
+      return false;
+    }
+
+    e2.fields[1] = e1.fields[1];
+    e2.fields[2] = "optim: optimizeLeax";
+    commentOut(index, "optim: optimizeLeax");
+    return true;
+}
+
+ 
+//  Remove TFR ?,X when the X values is not used.
+//
+bool
+ASMText::removeUselessTfr1(size_t index) {
+    const size_t startIndex = index;
+    Element &e = elements[index];
+    if (e.fields[0] != "TFR" || e.fields[1].find(",X") == string::npos)
+      return false;
+
+    for(index++; index<elements.size(); index++) {
+        Element &e1 = elements[index];
+        if (e1.isCommentLike())
+            continue;
+        if (e1.type != INSTR)
+            return false;
+        if (isBasicBlockEndingInstruction(e1))
+            break;
+        if (e1.fields[0].find("BSR") != string::npos ||
+            e1.fields[0].find("JSR") != string::npos)
+            return false;
+
+        const InsEffects effects(e1);
+        if (effects.read & X)
+            return false;
+        if (effects.written & X)
+            break;
+    }
+
+    commentOut(startIndex, "optim: removeUselessTfr1");
+    return true;
+}
+
+
+//  optimize LDX ???
+//           TFR X,D
+//  to       LDD ???
+//
+bool
+ASMText::removeUselessTfr2(size_t index) {
+    const size_t startIndex = index;
+    Element &e1 = elements[index++];
+    if (e1.fields[0] != "LDX")
+      return false;
+    Element &e2 = elements[index++];
+    if (e2.fields[0] != "TFR" || e2.fields[1] != "X,D")
+      return false;
+
+    for(index++; index<elements.size(); index++) {
+        Element &e = elements[index];
+        if (e.isCommentLike())
+            continue;
+        if (e.type != INSTR)
+            return false;
+        if (isBasicBlockEndingInstruction(e1))
+            break;
+        if (e.fields[0].find("BSR") != string::npos ||
+            e.fields[0].find("JSR") != string::npos)
+            return false;
+
+        const InsEffects effects(e);
+        if (effects.read & X)
+            return false;
+        if (effects.written & X)
+            break;
+    }
+
+    e1.fields[0] = "LDD";
+    commentOut(startIndex + 1, "optim: removeUselessTfr2");
+    return true;
+}
+
+
+//  Remove CLRB when the B values is not used.
+//
+bool
+ASMText::removeUselessClrb(size_t index) {
+    const size_t startIndex = index;
+    Element &e = elements[index];
+    if (e.fields[0] != "CLRB")
+      return false;
+
+    for(index++; index<elements.size(); index++) {
+        Element &e1 = elements[index];
+        if (e1.isCommentLike())
+            continue;
+        if (e1.type != INSTR)
+            return false;
+        if (isBasicBlockEndingInstruction(e1))
+            return false;
+        if (e1.fields[0].find("BSR") != string::npos ||
+            e1.fields[0].find("JSR") != string::npos)
+            return false;
+
+        const InsEffects effects(e1);
+        if (effects.read & B)
+            return false;
+        if (effects.written & B)
+            break;
+    }
+
+    commentOut(startIndex, "optim: removeUselessClrb");
+    return true;
+}
+
+
+// Optimize repeated sequences of
+//      TFR           X,D
+//      (ADD/SUB)D    #XXXX
+//
+// This can be done when D is changed in a predictable way such that X,D
+// remain a predictable different from each other.
+bool
+ASMText::optimizeDXAliases(size_t index) {
+    if (index + 4 > elements.size()) {
+      return false;
+    }
+
+    // Find the first group
+    const Element &e1 = elements[index++];
+    int accumOffset = 0;
+    if (e1.fields[0] != "TFR" || e1.fields[1] != "X,D")
+      return false;
+    const Element &e2 = elements[index++];
+    if (!(e2.fields[0] == "ADDD" || e2.fields[0] == "SUBD") ||
+        !parseConstantLiteral(e2.fields[1], accumOffset))
+      return false;
+    accumOffset = (e2.fields[0] == "SUBD") ? -accumOffset : accumOffset;
+
+    // Find subsequent groups
+    bool madeChanges = false;
+    do {
+      // Find the next TFR
+      for(index++; index<elements.size(); index++) {
+          const Element &e3 = elements[index];
+          if (e3.isCommentLike())
+              continue;
+          if (e3.type != INSTR)
+              return madeChanges;
+          if (isBasicBlockEndingInstruction(e3))
+              return madeChanges;
+          if (e3.fields[0].find("BSR") != string::npos ||
+              e3.fields[0].find("JSR") != string::npos)
+              return madeChanges;
+
+          if (e3.fields[0] == "TFR" && e3.fields[1] == "X,D")
+              break;
+
+          const InsEffects effects(e3);
+          if ((effects.written & (X | D)) != 0) {
+              return madeChanges;
+          }
+          if (effects.read & D)
+              return madeChanges;
+      }
+      if (index >= elements.size())
+          return madeChanges;
+
+      // Get the next ADDD or SUBD
+      Element &e4 = elements[++index];
+      int currentOffset = 0;
+      if (!(e4.fields[0] == "ADDD" || e4.fields[0] == "SUBD") ||
+          !parseConstantLiteral(e4.fields[1], currentOffset))
+        return madeChanges;
+      currentOffset = (e4.fields[0] == "SUBD") ? -currentOffset : currentOffset;
+ 
+      // Next instr cannot be a conditional branch
+      char buffer[INSTR_NAME_BUFSIZ];
+      if (isConditionalBranch(index, buffer))
+        return madeChanges;
+
+      // By changing e4 we can comment out e3.
+      e4.fields[0] = "ADDD";
+      e4.fields[1] = "#" + wordToString((currentOffset - accumOffset) & 0xffff, true);
+      e4.fields[2] = "optim: optimizeDXAliases";
+      commentOut(index - 1, "optim: optimizeDXAliases");
+      accumOffset = currentOffset;
+      index++;
+    } while(true);
+
+    return madeChanges;
+}
+
+
+/*  An expression like 'c < ' ' || c > 127' can give this code:
+        LDB	    5,U		  variable c
+        CMPB	  #$20	
+        BLO	    foo
+        LDB	    5,U		  variable c
+        CMPB    #$7F
+    This function eliminates the 2nd LDB.
+*/
+bool
+ASMText::removeLoadInComparisonWithTwoValues(size_t index)
+{
+    // Check for starting LDB.
+    size_t firstLDBIndex = index;
+    if (firstLDBIndex == size_t(-1))
+        return false;
+    const Element &firstLDB = elements[firstLDBIndex];
+    if (firstLDB.fields[0] != "LDB")
+        return false;
+
+    // Require a CMPB after LDB.
+    size_t firstCMPBIndex = findNextInstrBeforeLabel(firstLDBIndex + 1);
+    if (firstCMPBIndex == size_t(-1))
+        return false;
+    const Element &firstCMPB = elements[firstCMPBIndex];
+    if (firstCMPB.fields[0] != "CMPB")
+        return false;
+
+    // Require a condition branch instruction after CMPB.
+    size_t branchIndex = findNextInstrBeforeLabel(firstCMPBIndex + 1);
+    if (branchIndex == size_t(-1))
+        return false;
+    const Element &branch = elements[branchIndex];
+    if (! isConditionalBranch(branch.fields[0].c_str()))
+        return false;
+
+    // Require an LDB after the branch.
+    size_t secondLDBIndex = findNextInstrBeforeLabel(branchIndex + 1);
+    if (secondLDBIndex == size_t(-1))
+        return false;
+    const Element &secondLDB = elements[secondLDBIndex];
+    if (secondLDB.fields[0] != "LDB")
+        return false;
+
+    // Require the 2nd LDB to have the same argument as the 1st one.
+    if (secondLDB.fields[1] != firstLDB.fields[1])
+        return false;
+
+    // Require a 2nd CMPB after the 2nd LDB.
+    size_t secondCMPBIndex = findNextInstrBeforeLabel(secondLDBIndex + 1);
+    if (secondCMPBIndex == size_t(-1))
+        return false;
+    const Element &secondCMPB = elements[secondCMPBIndex];
+    if (secondCMPB.fields[0] != "CMPB")
+        return false;
+
+    // Remove the 2nd LDB.
+    commentOut(secondLDBIndex, "optim: removeLoadInComparisonWithTwoValues");
+    return true;  // modified the code
+}
+
+
+// Replace "LEA_ foo,PCR" with "LD_ #foo" if the compilation is not asked
+// to produce position-independent code.
+//
+bool
+ASMText::removePCRIfRelocatabilityNotSupported(size_t index)
+{
+    if (TranslationUnit::instance().isRelocatabilitySupported())
+        return false;
+
+    if (index == size_t(-1))
+        return false;
+
+    Element &el = elements[index];
+    string &ins = el.fields[0];
+    if (!startsWith(ins, "LEA"))
+        return false;
+    string &arg = el.fields[1];
+    if (!endsWith(arg, ",PCR"))
+        return false;
+
+    char reg = ins[3];
+    ins.resize(3);
+    ins[1] = 'D', ins[2] = reg;
+    arg = "#" + string(arg, 0, arg.length() - 4);
+    el.fields[2] += " (optim: absolute ref b/c PIC not supported)";
+    return true;
+}
+
+
+// If LDB ___; CMPB #$00; [L]BHI ___;
+// then remove CMPB and replace branch with [L]BNE.
+// Similarly if LDD ___; ADDD #0; [L]BHI ___.
+// BHI is an unsigned comparison. It requires C and Z.
+// Unsigned_value > 0 is equivalent to Unsigned_value != 0.
+// BNE only requires Z, which is set by LD.
+//
+bool
+ASMText::removeCMPZeroAfterLDIfBHI(size_t index)
+{
+    size_t loadIndex = index;
+    bool isLDB = isInstrAnyArg(loadIndex, "LDB");
+    if (!isLDB && !isInstrAnyArg(loadIndex, "LDD"))  // if index is size_t(-1), call gives false
+        return false;
+    size_t cmpIndex = findNextInstrBeforeLabel(loadIndex + 1);
+    if (isLDB && !isInstr(cmpIndex, "CMPB", "#$00"))
+        return false;
+    if (!isLDB && !isInstr(cmpIndex, "ADDD", "#0"))
+        return false;
+    size_t branchIndex = findNextInstrBeforeLabel(cmpIndex + 1);
+    if (!isInstrAnyArg(branchIndex, "LBHI") && !isInstrAnyArg(branchIndex, "BHI"))
+        return false;
+
+    // Apply the optimization.
+    commentOut(cmpIndex, "optim: removeCMPZeroAfterLDIfBHI (BHI->BNE)");
+    string &ins = elements[branchIndex].fields[0];
+    if (ins[0] == 'L')
+        ins = "LBNE";
+    else
+        ins = "BNE";
+    return true;
+}
+
+
+// Check for Bxx foo; ...; foo EQU *; BRA bar.
+// Replace with LBxx bar.
+//
+bool
+ASMText::replaceBranchToUncondBranch(size_t index)
+{
+    size_t firstBranchIndex = index;
+    if (!isBranchAtIndex(firstBranchIndex))
+        return false;
+
+    string &firstBranchDest = elements[firstBranchIndex].fields[1];  // we have Bxx firstBranchDest at 'index'
+
+    size_t firstBranchDestIndex = findLabelAroundIndex(firstBranchDest, index, 100);
+    if (firstBranchDestIndex == size_t(-1))
+        return false;
+
+    // Label firstBranchDest is at firstBranchDestIndex.
+    // Check if next instruction is [L]BRA.
+    size_t braIndex = findNextInstrBeforeLabel(firstBranchDestIndex + 1);
+    if (!isInstrAnyArg(braIndex, "BRA") && !isInstrAnyArg(braIndex, "LBRA"))
+        return false;
+
+    // Nothing to do if the BRA label is the same. (Possible with "for (;;);")
+    if (firstBranchDest == elements[braIndex].fields[1])
+        return false;
+
+    // Apply the optimization.
+    // Make Bxx branch to the label at which the BRA branches.
+    firstBranchDest = elements[braIndex].fields[1];
+
+    // Make Bxx long in case that new label is far.
+    // shortenBranch() is expected to shorten that branch if possible.
+    string &firstBranchInstr = elements[firstBranchIndex].fields[0];
+    if (firstBranchInstr[0] != 'L')
+        firstBranchInstr = "L" + firstBranchInstr;
+
+    return true;
+}
+
+
+// Looks for LDB foo; Bxx label; LDB foo; CMPB ___
+// and removes the 2nd LDB.
+// This optimization could be extended to a series of more than two LDBs.
+// It could also be extended to LDD+CMPD.
+//
+bool
+ASMText::ldbBranchLdbCompare(size_t index)
+{
+    if (!isInstrAnyArg(index, "LDB"))
+        return false;
+    size_t branchIndex = findNextInstrBeforeLabel(index + 1);
+    if (!isConditionalBranchAtIndex(branchIndex))
+        return false;
+    size_t secondLoadIndex = findNextInstrBeforeLabel(branchIndex + 1);
+    if (!isInstrAnyArg(secondLoadIndex, "LDB"))
+        return false;
+    if (elements[index].fields[1] != elements[secondLoadIndex].fields[1])  // both loads must have same arg
+        return false;
+    size_t cmpIndex = findNextInstrBeforeLabel(secondLoadIndex + 1);
+    if (!isInstrAnyArg(cmpIndex, "CMPB"))
+        return false;
+    
+    // Apply the optimization.
+    commentOut(secondLoadIndex, "optim: ldbBranchLdbCompare");
+    return true;
+}
+
+
+// Look for: LDB foo; PSHS B; LDB bar; CMPB ,S+.
+// Change to: LDB bar; CMPB foo.
+// LDB args must not involve S.
+//
+bool
+ASMText::removePushBFromLdbPushLdbCmp(size_t index)
+{
+    if (!isInstrAnyArg(index, "LDB"))
+        return false;
+    if (elements[index].fields[1].find(",S") != string::npos)
+        return false;
+
+    size_t pushIndex = findNextInstrBeforeLabel(index + 1);
+    if (!isInstr(pushIndex, "PSHS", "B"))
+        return false;
+
+    size_t secondLoadIndex = findNextInstrBeforeLabel(pushIndex + 1);
+    if (!isInstrAnyArg(secondLoadIndex, "LDB"))
+        return false;
+    if (elements[secondLoadIndex].fields[1].find(",S") != string::npos)
+        return false;
+    
+    size_t cmpIndex = findNextInstrBeforeLabel(secondLoadIndex + 1);
+    if (!isInstr(cmpIndex, "CMPB", ",S+"))
+        return false;
+
+    // Apply the optimization.
+
+    elements[cmpIndex].fields[1] = elements[index].fields[1];  // copy arg of 1st LDB
+    commentOut(index, "optim: removePushBFromLdbPushLdbCmp");
+    commentOut(pushIndex, "optim: removePushBFromLdbPushLdbCmp");
+    return true;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+bool
+ASMText::isInstr(size_t index, const char *ins, const char *arg) const
+{
+    return isInstrAnyArg(index, ins) && elements[index].fields[1] == arg;
+}
+
+
+// index: Allowed to be size_t(-1): method returns false.
+//
 bool
 ASMText::isInstrAnyArg(size_t index, const char *ins) const
 {
+    if (index >= elements.size())
+        return false;
     const Element &e = elements[index];
     return e.type == INSTR && e.fields[0] == ins;
 }
@@ -3342,46 +4657,54 @@ ASMText::isInstrAnyArg(size_t index, const char *ins) const
 bool
 ASMText::isInstrWithImmedArg(size_t index, const char *ins) const
 {
-    const Element &e = elements[index];
-    return e.type == INSTR && e.fields[0] == ins && e.fields[1][0] == '#';
+    return isInstrAnyArg(index, ins) && elements[index].fields[1][0] == '#';
 }
 
 
 bool
 ASMText::isInstrWithVarArg(size_t index, const char *ins) const
 {
-    const Element &e = elements[index];
-    return e.type == INSTR
-        && e.fields[0] == ins
-        && (endsWith(e.fields[1], ",U") || endsWith(e.fields[1], ",PCR"));
+    if (!isInstrAnyArg(index, ins))
+        return false;
+    const char *comma = strchr(elements[index].fields[1].c_str(), ',');
+    if (!comma)
+        return false;
+    return strchr("UPY", comma[1]) != NULL;  // accept ",U", ",PCR" and ",Y"
 }
 
 
-string
+const char *
 ASMText::getInstr(size_t index) const
 {
+    if (index >= elements.size())
+        return "";
     const Element &e = elements[index];
     if (e.type != INSTR)
-        return string();
-    return e.fields[0];
+        return "";
+    return e.fields[0].c_str();
 }
 
 
-string
+const char *
 ASMText::getInstrArg(size_t index) const
 {
+    if (index >= elements.size())
+        return "";
     const Element &e = elements[index];
     if (e.type != INSTR)
-        return string();
-    return e.fields[1];
+        return "";
+    return e.fields[1].c_str();
 }
 
 
+// None of the instruction names must exceed 6 characters in length.
+// See isConditionalBranch().
+//
 const static struct
 {
     const char *branchInstr;
     const char *inverseInstr;
-} branchInstrTable[] =
+} condBranchInstrTable[] =
 {
     { "BCC", "BCS" },
     { "BEQ", "BNE" },
@@ -3394,6 +4717,9 @@ const static struct
 };
 
 
+// None of the instruction names must exceed 6 characters in length.
+// See isRelativeSizeConditionalBranch().
+//
 const static struct
 {
     const char *branchInstr;
@@ -3414,35 +4740,50 @@ const static struct
 // Determines if elements[index] is a conditional branch (short or long).
 // If it is, true is returned and 'inverseBranchInstr' receives the branch
 // instruction that uses the opposite condition (e.g., BEQ becomes BNE).
-// Uses branchInstrTable.
+// Uses condBranchInstrTable.
 //
 bool
-ASMText::isConditionalBranch(size_t index, string &inverseBranchInstr) const
+ASMText::isConditionalBranch(size_t index, char inverseBranchInstr[INSTR_NAME_BUFSIZ], bool forceLongBranch) const
 {
+    if (index >= elements.size())
+        return false;
     const Element &e = elements[index];
     if (e.type != INSTR)
         return false;
     const char *ins = e.fields[0].c_str();
-    inverseBranchInstr.clear();
+    bool isLongBranchInstr = false;
     if (ins[0] == 'L')
     {
-        inverseBranchInstr = "L";
-        ++ins;
+        if (ins[1] != 'B')
+            return false;
+        isLongBranchInstr = true;
     }
-    if (ins[0] != 'B')
-        return false;
+    else if (ins[0] != 'B')
+        return false;  // not a branch instruction
 
-    size_t n = sizeof(branchInstrTable) / sizeof(branchInstrTable[0]);
+    char *writer = inverseBranchInstr;
+    size_t room = INSTR_NAME_BUFSIZ;
+    if (isLongBranchInstr || forceLongBranch)
+    {
+        *writer++ = 'L';
+        --room;
+        if (isLongBranchInstr)
+            ++ins;
+    }
+
+    size_t n = sizeof(condBranchInstrTable) / sizeof(condBranchInstrTable[0]);
     for (size_t i = 0; i < n; ++i)
     {
-        if (!strcmp(ins, branchInstrTable[i].branchInstr))
+        if (!strcmp(ins, condBranchInstrTable[i].branchInstr))
         {
-            inverseBranchInstr += branchInstrTable[i].inverseInstr;
+            strncpy(writer, condBranchInstrTable[i].inverseInstr, room);
+            inverseBranchInstr[INSTR_NAME_BUFSIZ - 1] = '\0';
             return true;
         }
-        if (!strcmp(ins, branchInstrTable[i].inverseInstr))
+        if (!strcmp(ins, condBranchInstrTable[i].inverseInstr))
         {
-            inverseBranchInstr += branchInstrTable[i].branchInstr;
+            strncpy(writer, condBranchInstrTable[i].branchInstr, room);
+            inverseBranchInstr[INSTR_NAME_BUFSIZ - 1] = '\0';
             return true;
         }
     }
@@ -3462,16 +4803,32 @@ ASMText::isConditionalBranch(const char *ins)
     if (toupper(ins[0]) != 'B')
         return false;
 
-    size_t n = sizeof(branchInstrTable) / sizeof(branchInstrTable[0]);
+    size_t n = sizeof(condBranchInstrTable) / sizeof(condBranchInstrTable[0]);
     for (size_t i = 0; i < n; ++i)
     {
-        if (!strcasecmp(ins, branchInstrTable[i].branchInstr))
+        if (!strcasecmp(ins, condBranchInstrTable[i].branchInstr))
             return true;
-        if (!strcasecmp(ins, branchInstrTable[i].inverseInstr))
+        if (!strcasecmp(ins, condBranchInstrTable[i].inverseInstr))
             return true;
     }
 
     return false;
+}
+
+
+bool
+ASMText::isConditionalBranchAtIndex(size_t index) const
+{
+    if (index >= elements.size())
+        return false;
+    return isConditionalBranch(elements[index].fields[0].c_str());
+}
+
+
+bool
+ASMText::isBranchAtIndex(size_t index) const
+{
+    return isInstrAnyArg(index, "BRA") || isInstrAnyArg(index, "LBRA") || isConditionalBranchAtIndex(index);
 }
 
 
@@ -3480,35 +4837,47 @@ ASMText::isConditionalBranch(const char *ins)
 // the branch instruction that is equivalent when the comparison operands
 // are reversed.
 // For example, if k <= n is to be replaced with n >= k, then
-// { LDD k; CMPD n; BLS z } must be replaced with { LDD n; CMPD k; BHS z }.
+// { LDD k; CMPD n; BLS z } must be replaced with { LDD n; CMPD k; BHS z }.
 //
 bool
-ASMText::isRelativeSizeConditionalBranch(size_t index, string &invertedOperandsBranchInstr) const
+ASMText::isRelativeSizeConditionalBranch(size_t index, char invertedOperandsBranchInstr[INSTR_NAME_BUFSIZ]) const
 {
     const Element &e = elements[index];
     if (e.type != INSTR)
         return false;
     const char *ins = e.fields[0].c_str();
-    invertedOperandsBranchInstr.clear();
+    bool isLongBranchInstr = false;
     if (ins[0] == 'L')
     {
-        invertedOperandsBranchInstr = "L";
+        if (ins[1] != 'B')
+            return false;
+        isLongBranchInstr = true;
+    }
+    else if (ins[0] != 'B')
+        return false;  // not a branch instruction
+
+    char *writer = invertedOperandsBranchInstr;
+    size_t room = INSTR_NAME_BUFSIZ;
+    if (isLongBranchInstr)
+    {
+        *writer++ = 'L';
+        --room;
         ++ins;
     }
-    if (ins[0] != 'B')
-        return false;
 
     size_t n = sizeof(relativeSizeBranchInstrTable) / sizeof(relativeSizeBranchInstrTable[0]);
     for (size_t i = 0; i < n; ++i)
     {
         if (!strcmp(ins, relativeSizeBranchInstrTable[i].branchInstr))
         {
-            invertedOperandsBranchInstr += relativeSizeBranchInstrTable[i].invertedOperandsInstr;
+            strncpy(writer, relativeSizeBranchInstrTable[i].invertedOperandsInstr, room);
+            invertedOperandsBranchInstr[INSTR_NAME_BUFSIZ - 1] = '\0';
             return true;
         }
         if (!strcmp(ins, relativeSizeBranchInstrTable[i].invertedOperandsInstr))
         {
-            invertedOperandsBranchInstr += relativeSizeBranchInstrTable[i].branchInstr;
+            strncpy(writer, relativeSizeBranchInstrTable[i].branchInstr, room);
+            invertedOperandsBranchInstr[INSTR_NAME_BUFSIZ - 1] = '\0';
             return true;
         }
     }
@@ -3533,13 +4902,27 @@ ASMText::extractImmedArg(size_t index) const
 
 
 void
-ASMText::replaceWithInstr(size_t index, const char *ins, const string &arg, const string &comment)
+ASMText::replaceWithInstr(size_t index, const char *ins, const char *arg, const char *comment)
 {
     Element &e = elements[index];
     e.type = INSTR;
     e.fields[0] = ins;
     e.fields[1] = arg;
     e.fields[2] = comment;
+}
+
+
+void
+ASMText::replaceWithInstr(size_t index, const char *ins, const string &arg, const char *comment)
+{
+    replaceWithInstr(index, ins, arg.c_str(), comment);
+}
+
+
+void
+ASMText::replaceWithInstr(size_t index, const char *ins, const string &arg, const string &comment)
+{
+    replaceWithInstr(index, ins, arg.c_str(), comment.c_str());
 }
 
 
@@ -3563,7 +4946,16 @@ ASMText::commentOut(size_t index, const string &comment)
 }
 
 
-// Returns size_t(-1) if no instruction found before a non-instruction is found.
+bool
+ASMText::isDataDirective(const std::string &instruction)
+{
+    const char *ins = instruction.c_str();
+    return !strncmp(ins, "FD", 2) || !strcmp(ins, "FCC") || !strcmp(ins, "RMB") || !strcmp(ins, "ZMB");
+}
+
+
+// Returns size_t(-1) if no instruction is found before a non-instruction is found.
+// The search starts at elements[index], inclusively.
 // Tolerates comments.
 //
 size_t
@@ -3573,7 +4965,11 @@ ASMText::findNextInstrBeforeLabel(size_t index) const
     {
         const Element &e = elements[index];
         if (e.type == INSTR)
+        {
+            if (isDataDirective(e.fields[0]))
+                return size_t(-1);  // failure
             return index;
+        }
         if (e.type != COMMENT)
             return size_t(-1);  // failure because found LABEL, etc. before INSTR
     }
@@ -3601,49 +4997,63 @@ ASMText::findNextInstr(size_t index) const
 
 
 // Searches elements[] for a LABEL element with the given 'label'.
+// The search starts at elements[startIndex] and ends before elements[startIndex + numElementsToSearch].
+// The search extends to the end if numElementsToSearch is zero.
+// The two parameters get clamped as needed.
 // Returns the index in elements[] if found, or size_t(-1) if not.
 //
 size_t
-ASMText::findLabelIndex(const string &label) const
+ASMText::findLabelIndex(const string &label, size_t startIndex, size_t numElementsToSearch) const
 {
-    for (vector<Element>::const_iterator it = elements.begin(); it != elements.end(); ++it)
+    if (startIndex >= elements.size())
+        return size_t(-1);
+    if (numElementsToSearch == 0 || numElementsToSearch > elements.size())
+        numElementsToSearch = elements.size();
+    if (startIndex + numElementsToSearch > elements.size())
+        numElementsToSearch = elements.size() - startIndex;
+
+    for (vector<Element>::const_iterator it = elements.begin() + startIndex,
+                                        end = it + numElementsToSearch; it != end; ++it)
         if (it->type == LABEL && it->fields[0] == label)
             return size_t(it - elements.begin());
     return size_t(-1);
 }
 
 
+size_t
+ASMText::findLabelAroundIndex(const string &label, size_t index, size_t span) const
+{
+    return findLabelIndex(label, index < span ? 0 : index - span, 2 * span + 1);
+}
+
+
+bool
+ASMText::isLabel(size_t index) const
+{
+    if (index >= elements.size())
+        return false;
+    return elements[index].type == LABEL;
+}
+
+
 bool
 ASMText::isLabel(size_t index, const string &label) const
 {
-    const Element &e = elements[index];
-    return e.type == LABEL && e.fields[0] == label;
-}
-
-
-bool
-ASMText::startsWith(const string &s, const char *prefix)
-{
-    return s.compare(0, strlen(prefix), prefix) == 0;
-}
-
-
-bool
-ASMText::endsWith(const string &s, const char *suffix)
-{
-    size_t suffixLen = strlen(suffix);
-    if (s.length() < suffixLen)
-        return false;  // s too short
-    return s.compare(s.length() - suffixLen, suffixLen, suffix) == 0;
+    return isLabel(index) && elements[index].fields[0] == label;
 }
     
 
 bool
-ASMText::extractConstantLiteral(const string &s, int &val) {
-  if (s.find("#") != 0) return false;
-  const bool isHex = s.find("$") == 1;
-  val = mystoi(s.substr(isHex ? 2 : 1), NULL, isHex ? 16 : 10);
-  return true;
+extractConstantLiteral(const string &s, int &val)
+{
+    size_t len = s.length();
+    if (len == 0 || s[0] != '#')
+        return false;
+    const bool isHex = (len >= 2 && s[1] == '$');
+    const char *arg = s.c_str() + (isHex ? 2 : 1);
+    char *endptr;
+    val = (int) strtol(arg, &endptr, isHex ? 16 : 10);
+    return endptr != arg && *endptr == '\0';  // constant means non empty and entire argument used by strtol()
 }
 
 
@@ -3653,6 +5063,58 @@ ASMText::isInstrWithPreDecrOrPostIncr(size_t index) const {
   const string &op = e.fields[1];
   return (startsWith(op, ",-") || startsWith(op, "[,-") ||
           endsWith(op, "+") || endsWith(op, "+]"));
+}
+
+
+bool
+ASMText::parseRelativeOffset(const string &s, int &offset)
+{
+  size_t commaIndex = s.find(",");
+  if ((commaIndex == string::npos) || (commaIndex == 0) ||
+      (s.find("[") != string::npos)) {
+    return false;
+  }
+
+  offset = (int) (s[0] == '$' ? strtol(s.c_str() + 1, NULL, 16)
+                              : strtol(s.c_str(), NULL, 10));
+  return true;
+}
+
+
+bool
+ASMText::parseConstantLiteral(const string &s, int &literal)
+{
+  if (!startsWith(s, "#"))
+    return false;
+
+  literal = (int) (s[1] == '$' ? strtol(s.c_str() + 2, NULL, 16)
+                               : strtol(s.c_str() + 1, NULL, 10));
+  return true;
+}
+
+
+// Returns true iff 'arg' is an decimal or hex integer constant.
+//
+bool
+ASMText::isAbsoluteAddress(const string &arg)
+{
+    if (arg.length() == 0)
+        return false;
+    if (arg[0] == '$')
+    {
+        if (arg.length() == 1)
+            return false;
+        for (size_t i = 1; i < arg.length(); ++i)
+            if (!isxdigit(arg[i]))
+                return false;
+    }
+    else
+    {
+        for (size_t i = 0; i < arg.length(); ++i)
+            if (!isdigit(arg[i]))
+                return false;
+    }
+    return true;
 }
 
 
@@ -3671,7 +5133,25 @@ ASMText::writeElement(ostream &out, const Element &e)
         out << "* FUNCTION " << e.fields[0] << "(): defined at " << e.fields[1] << "\n";
         break;
     case FUNCTION_END  :
-        out << "* END FUNCTION\n";
+        out << "* END FUNCTION " << e.fields[0] << "(): defined at " << e.fields[1] << "\n";
+        // Emit labels that will give the function's size in the assembly listing file.
+        out << "funcend_" << e.fields[0] << "\tEQU *\n";
+        out << "funcsize_" << e.fields[0] << "\tEQU\tfuncend_" << e.fields[0] << "-_" << e.fields[0] << "\n";
+        break;
+    case SECTION_START:
+        out << "\n\n\t""SECTION\t" << e.fields[0] << "\n\n\n";
+        break;
+    case SECTION_END:
+        out << "\n\n\t""ENDSECTION\n\n\n";
+        break;
+    case EXPORT:
+        out << e.fields[0] << "\t""EXPORT\n";
+        break;
+    case IMPORT:
+        out << e.fields[0] << "\t""IMPORT\n";
+        break;
+    case END:
+        out << "\t""END\n";
         break;
     default: assert(!"unsupported element");
     }
@@ -3714,6 +5194,12 @@ ASMText::listRegisters(uint8_t registers)
 // that are read or written by the instruction in 'e'.
 // Those members remain zero if 'e' is not an instruction.
 //
+// N.B.: The CC bit of 'read' and 'written' is not set for every instruction that actually changes the flags.
+//       It is set for branches and "TFR CC,__", because those instructions are involved in particular cases.
+//       Example: !(k & m) gives { ANDB __; TFR CC,B } and we do not want stripOpToDeadReg() to remove the ANDB
+//                even though B is dead.
+//       Most of the code emitted by the compiler does not handle CC directly.
+//
 ASMText::InsEffects::InsEffects(const Element &e)
 :   read(0), written(0)
 {
@@ -3724,6 +5210,7 @@ ASMText::InsEffects::InsEffects(const Element &e)
     const string &arg = e.fields[1];
 
     bool isInlineASMIns = (e.fields[2].find(inlineASMTag) != string::npos);
+    bool disregardArgument = false;
 
     // Analyze opcode.
     //
@@ -3734,7 +5221,7 @@ ASMText::InsEffects::InsEffects(const Element &e)
     else if (ins == "BITB" || ins == "TSTB")
         read |= B;
     else if (ins == "BSR" || ins == "LBSR" || ins == "JSR")
-        read |= U, written = A | B | X | Y | U;
+        read |= A | B | X | Y | U, written = read;  // be pessimistic
     else if (ins[0] == 'B')  // all other B instructions are conditional branches
         ;
     else if (ins == "LDD")
@@ -3787,7 +5274,9 @@ ASMText::InsEffects::InsEffects(const Element &e)
             || ins == "ROLB" || ins == "RORB"
             || ins == "ANDB" || ins == "ORB" || ins == "EORB")
         read |= B, written |= B;
-    else if (startsWith(ins, "LB"))  // long branches
+    else if (isConditionalBranch(ins.c_str()))
+        read |= CC;
+    else if (startsWith(ins, "LB"))  // LBRA or LBRN
         ;
     else if (ins == "PSHS")
         read |= parsePushPullArg(arg);
@@ -3797,52 +5286,99 @@ ASMText::InsEffects::InsEffects(const Element &e)
         ;
     else if (ins == "RTS" || ins == "RTI")
         ;
-    else if (ins == "TFR")
+    else if (ins == "TFR" || ins == "EXG" || ins == "TST")
         ;  // processed below
     else if (ins == "ABX")
         read = B | X, written = X;
+    else if (ins == "ANDCC" || ins == "ORCC")
+        ;
+    else if (ins == "RMB" || ins == "ZMB" || ins == "FCB" || ins == "FDB" || ins == "FCC")
+        disregardArgument = true;
+    else if ((ins == "COM" || ins == "NEG" || ins == "CLR") && isConstantOffsetFromX(arg))
+        read = X;
     else
-        cout << "# failed to determine registers affected by opcode of " << ins << " " << arg << endl;
+        errormsg("failed to determine registers affected by opcode of %s %s", ins.c_str(), arg.c_str());
 
     // Analyze argument.
     //
-    if (isInlineASMIns)
+    if (isInlineASMIns || disregardArgument)
         ;
-    else if (ins == "TFR")
+    else if (ins == "TFR" || ins == "EXG")
     {
-        size_t commaPos = arg.find(',');
-        assert(commaPos > 0 && commaPos < string::npos);
-        read    |= parseRegName(string(arg, 0, commaPos));
-        written |= parseRegName(string(arg, commaPos + 1));
+        uint8_t firstReg, secondReg;
+        getRegPairNames(arg, firstReg, secondReg);
+        read    |= firstReg;
+        written |= secondReg;
     }
-    else if (endsWith(arg, ",X"))
+
+    if (endsWith(arg, ",X"))
         read |= X;
-    else if (endsWith(arg, ",U") || endsWith(arg, ",U]"))
+    else if (endsWith(arg, ",Y"))
+        read |= Y;
+    else if (endsWith(arg, ",U"))
         read |= U;
-    else if (arg == ",X+" || arg == ",X++")
+
+    if (arg == ",X+" || arg == ",X++")
         read |= X;
     else if (arg == ",Y+" || arg == ",Y++")
         read |= Y;
     else if (arg == ",U+" || arg == ",U++")
         read |= U;
-    else if (endsWith(arg, ",S") || arg == ",S+" || arg == ",S++")
-        ;  // do not care about S
-    else if (arg.empty() || arg[0] == '#' || arg[0] == '_' || isalpha(arg[0])
-            || onlyDecimalDigits(arg)
-            || (arg[0] == '$' || onlyHexDigits(arg, 1)))
-        ;
-    else if (arg[0] == '[' && endsWith(arg, ",S]"))
+
+    if (ins != "PSHS" && ins != "PULS")
     {
-        string middle(arg, 1, arg.length() - 4);
-        if (middle == "A")
-            read |= A;
-        else if (middle == "B")
-            read |= B;
-        else if (middle == "D")
+        if (startsWith(arg, "D,"))
             read |= A | B;
+        else if (startsWith(arg, "A,"))
+            read |= A;
+        else if (startsWith(arg, "B,"))
+            read |= B;
     }
-    else
-        cout << "# failed to determine registers affected by argument of " << ins << " " << arg << endl;
+
+    if (arg[0] == '[' && (endsWith(arg, ",S]")
+                               || endsWith(arg, ",X]")
+                               || endsWith(arg, ",U]")
+                               || endsWith(arg, ",Y]")  // relevant with OS-9
+                               || endsWith(arg, ",PCR]")))
+    {
+        if (arg[2] == ',')  // if "[_,reg]", then look at "_"
+        {
+            switch (arg[1])
+            {
+            case 'A': read |= A; break;
+            case 'B': read |= B; break;
+            case 'D': read |= A | B; break;
+            }
+        }
+        switch (arg[arg.length() - 2])  // look at index register used (do not care about S or PC)
+        {
+        case 'X': read |= X; break;
+        case 'Y': read |= Y; break;
+        case 'U': read |= U; break;
+        }
+
+    }
+}
+
+
+// Returns true iff arg =~ /^-?\d+,X$/.
+bool
+ASMText::isConstantOffsetFromX(const std::string &arg)
+{
+    if (!endsWith(arg, ",X"))
+        return false;
+    if (arg.length() == 2)
+        return true;  // just ",X"
+    // Require -\d+ until comma.
+    size_t i = 0;
+    if (arg[i] == '-')
+        ++i;
+    size_t numStart = i;
+    while (isdigit(arg[i]))
+        ++i;
+    if (i == numStart)
+        return false;  // no digits seen
+    return i + 2 == arg.length();  // only ",X" after digits
 }
 
 
@@ -3850,16 +5386,15 @@ string
 ASMText::InsEffects::toString() const
 {
     stringstream ss;
-    //ss << wordToString(read, true) << ", " << wordToString(written, true);
     ss << "(" << listRegisters(read) << "), (" << listRegisters(written) << ")";
     return ss.str();
 }
 
 
 uint8_t
-ASMText::parseRegName(const string &name)
+ASMText::parseRegName(const char *name)
 {
-    switch (name.empty() ? 0 : name[0])
+    switch (name[0])
     {
         case 'P': return PC;
         case 'U': return U;
@@ -3868,9 +5403,21 @@ ASMText::parseRegName(const string &name)
         case 'B': return B;
         case 'A': return A;
         case 'C': return CC;
-        case 'D': return name.length() == 1 ? (A | B) : DP;
+        case 'D': return name[1] != 'P' ? (A | B) : DP;
         default:  assert(!"unrecognized register name"); return 0;
     }
+}
+
+
+// arg: Must be a comma-separated pair of upper-case register names, e.g., "X,Y".
+//
+void
+ASMText::getRegPairNames(const string &arg, uint8_t &firstReg, uint8_t &secondReg)
+{
+    size_t commaPos = arg.find(',');
+    assert(commaPos > 0 && commaPos < string::npos);
+    firstReg  = parseRegName(arg.c_str());
+    secondReg = parseRegName(arg.c_str() + (commaPos + 1));
 }
 
 
@@ -3938,12 +5485,9 @@ Pseudo6809::process(const string &instr, const string &operand, int index, bool 
   indexToState[index] = make_pair(regs, stack);
 
   // Determine whether operand is a constant literal
-  const bool operandIsConstant = operand.find("#") == 0;
-  uint16_t val16 = 0;
-  if (operandIsConstant) {
-    const bool isHex = operand.find("$") == 1;
-    val16 = (uint16_t)mystoi(operand.substr(isHex ? 2 : 1), NULL, isHex ? 16 : 10);
-  }
+  int n = 0;
+  const bool operandIsConstant = extractConstantLiteral(operand, n);
+  const uint16_t val16 = (operandIsConstant ? uint16_t(n) : 0);
 
   // Determine whether instr is a comma op that is not an indexed op
   const bool isStackOp = instr == "PSHS" || instr == "PULS" ||
@@ -3954,7 +5498,7 @@ Pseudo6809::process(const string &instr, const string &operand, int index, bool 
   // Determine whether operand is indexed
   const size_t commaIndex = operand.find(",");
   const bool isIndexed = !isOddCommaOp && commaIndex != string::npos;
-  const string indexReg = isIndexed ? operand.substr(commaIndex+1, 1) : "";
+  const Register indexReg = isIndexed ? getRegisterFromName(operand.c_str() + commaIndex + 1) : NO_REGISTER;
 
   // Determine whether operand is indirect
   const bool isIndirect = operand.find("[") != string::npos;
@@ -3969,17 +5513,16 @@ Pseudo6809::process(const string &instr, const string &operand, int index, bool 
 
   // Determine whether there is an offset
   const bool hasOffset = isIndexed && ((commaIndex > 1) || (commaIndex > 0 && !isIndirect));
-  const string offsetStr = operand.substr(0, commaIndex);
-  const bool isConstantOffset = hasOffset && !(offsetStr == "D" || offsetStr == "A" || offsetStr == "B");
-  const int offsetVal 
-    = isConstantOffset ? (offsetStr[0] == '$' ? mystoi(offsetStr.substr(1), NULL, 16) 
-                                              : (offsetStr[0] == '-' || isdigit(offsetStr[0])) ? mystoi(offsetStr, NULL, 10) 
-                                                                                               : 0)
-                       : 0;
+  const char *offsetStr = operand.c_str();
+  const Register offsetStrReg = getRegisterFromName(offsetStr);
+  const bool isConstantOffset = hasOffset && !(offsetStrReg == D || offsetStrReg == A || offsetStrReg == B);
+  const int offsetVal = isConstantOffset ? (offsetStr[0] == '$' ? strtol(offsetStr + 1, NULL, 16)
+                                                                : (offsetStr[0] == '-' || isdigit(offsetStr[0])) ? strtol(offsetStr, NULL, 10) : 0)
+                                         : 0;
 
   // Run basic stack ops
   if (isStackOp) {
-    const string stackReg = instr.substr(3);
+    const Register stackReg = getRegisterFromName(instr.c_str() + 3);
     if (instr.find("PSH") == 0)
       processPush(stackReg, operand, index);
     else
@@ -3989,15 +5532,15 @@ Pseudo6809::process(const string &instr, const string &operand, int index, bool 
 
   // Tests A or B for zero
   if (instr == "TSTA" || instr == "TSTB") {
-    getVal(instr.substr(3), index);
+    getVal(instr[3] == 'A' ? A : B, index);
     return true;
   }
 
   // This instruction adds B to X
   if (instr == "ABX") {
-    getVal("B", index);
-    getVal("X", index);
-    addVal("X", "B", index);
+    getVal(B, index);
+    getVal(X, index);
+    addVal(X, B, index);
     return true;
   }
 
@@ -4009,18 +5552,18 @@ Pseudo6809::process(const string &instr, const string &operand, int index, bool 
 
   // Thie instruction converts A into a decimal equivalent
   if (instr == "DAA") {
-    PossiblyKnownVal<int> val = getVal("A", index);
+    PossiblyKnownVal<int> val = getVal(A, index);
     if (val.known && val.val <= 100)
-      loadVal("A", PossiblyKnownVal<int>(((val.val / 10)<<4) + (val.val % 10), true, index), index);
+      loadVal(A, PossiblyKnownVal<int>(((val.val / 10)<<4) + (val.val % 10), true, index), index);
     else
-      loadVal("A", PossiblyKnownVal<int>(0, false, index), index);
+      loadVal(A, PossiblyKnownVal<int>(0, false, index), index);
     return true;
   }
 
   // Transfer and exchange registgers
   if (instr == "TFR" || instr == "EXG") {
-    const string reg1 = operand.substr(0, commaIndex);
-    const string reg2 = operand.substr(commaIndex + 1);
+    Register reg1 = getRegisterFromName(operand.c_str());
+    Register reg2 = getRegisterFromName(operand.c_str() + commaIndex + 1);
     getVal(reg1, index);
     if (instr == "TFR") {
       tfr(reg1, reg2, index);
@@ -4031,28 +5574,28 @@ Pseudo6809::process(const string &instr, const string &operand, int index, bool 
     return true;
   }
 
-  // This instruction multiples AxB and puts the result in D
+  // This instruction multiplies AxB and puts the result in D.
   if (instr == "MUL") {
-    getVal("D", index);
+    getVal(D, index);
     if ((regs.accum.a.val == 0 && regs.accum.a.known) ||
         (regs.accum.b.val == 0 && regs.accum.b.known))
-      loadVal("D", PossiblyKnownVal<uint16_t>(0, true, index), index);
+      loadVal(D, PossiblyKnownVal<uint16_t>(0, true, index), index);
     else
-      loadVal("D", PossiblyKnownVal<uint16_t>(regs.accum.a.val * regs.accum.b.val,
+      loadVal(D, PossiblyKnownVal<uint16_t>(regs.accum.a.val * regs.accum.b.val,
                                               regs.accum.dknown(), index), index);
     return true;
   }
 
-  // If B >= 0x80, make A 0xFF, otherwise make it 0x00
+  // If B >= 0x80, make A 0xFF, otherwise make it 0x00.
   if (instr == "SEX") {
-    PossiblyKnownVal<int> val = getVal("B", index);
+    PossiblyKnownVal<int> val = getVal(B, index);
     if (val.known)
-      loadVal("A", PossiblyKnownVal<int>(val.val > 128 ? 0xff : 0, true, index), index);
+      loadVal(A, PossiblyKnownVal<int>(val.val > 128 ? 0xff : 0, true, index), index);
     else
-      loadVal("A", PossiblyKnownVal<int>(0, false, index), index);
+      loadVal(A, PossiblyKnownVal<int>(0, false, index), index);
   }
 
-  // Don't bother with stack ops for now
+  // Don't bother with branching ops for now.
   if (instr == "JSR" || instr == "JMP" ||
       instr.find("BRA") != string::npos ||
       instr.find("BCC") != string::npos ||
@@ -4080,11 +5623,11 @@ Pseudo6809::process(const string &instr, const string &operand, int index, bool 
   // Try to deal with the remaining instructions as generically as possible
   // First try to figure out the target register. If blank then this is
   // a memory op.
-  string targetRegister;
+  Register targetRegister;
   if (instr.find("OR") == 0 || instr.find("LD") == 0 || instr.find("ST") == 0)
-    targetRegister = instr.substr(2);
+    targetRegister = getRegisterFromName(instr.c_str() + 2);
   else
-    targetRegister = instr.substr(3);
+    targetRegister = getRegisterFromName(instr.c_str() + 3);
 
   // All instructions except LEA and LD reference targetRegister
   PossiblyKnownVal<int> lhs;
@@ -4107,7 +5650,7 @@ Pseudo6809::process(const string &instr, const string &operand, int index, bool 
     // Deal with pre decrement
     if (preDecrement1) {
       rhs = rhs - 1;
-      if (indexReg == "S")
+      if (indexReg == S)
         return false;
       if (preDecrement2) {
         rhs = rhs - 1;
@@ -4127,7 +5670,7 @@ Pseudo6809::process(const string &instr, const string &operand, int index, bool 
         getVal(indexReg, index);
       }
 
-      if (indexReg == "S") {
+      if (indexReg == S) {
         if (stack.size() < size_t((postIncrement2) ? 2 : 1)) {
           if (!ignoreStackErrors)
             return false;
@@ -4152,7 +5695,7 @@ Pseudo6809::process(const string &instr, const string &operand, int index, bool 
     if (isConstantOffset)
       rhs = rhs + offsetVal;
     else if (hasOffset)
-      rhs = rhs + getVal(offsetStr, index);
+      rhs = rhs + getVal(offsetStrReg, index);
 
     // Instructions that are not LEA, load from memory
     if (instr.find("LEA") != 0)
@@ -4166,7 +5709,7 @@ Pseudo6809::process(const string &instr, const string &operand, int index, bool 
 
   // Short cut - if there is no register than make the lhs = rhs.
   // This makes implementing instruction support easier.
-  if (targetRegister == "") {
+  if (targetRegister == NO_REGISTER) {
     lhs = rhs;
   }
 
@@ -4270,9 +5813,9 @@ Pseudo6809::process(const string &instr, const string &operand, int index, bool 
   // Perform an LEA
   if (instr.find("LEA") == 0) {
     // Deal with the S register specially
-    if (targetRegister == "S") {
+    if (targetRegister == S) {
       // Avoid voodoo magic
-      if (indexReg != "S")
+      if (indexReg != S)
         return false;
 
       // Try to deal with constant offsets here
@@ -4352,99 +5895,99 @@ Pseudo6809::process(const string &instr, const string &operand, int index, bool 
 
 
 void
-Pseudo6809::processPush(const string &stackReg, const string &operand, int index) 
+Pseudo6809::processPush(Register stackReg, const string &operand, int index)
 {
-  const bool isS = stackReg == "S";
+  const bool isS = stackReg == S;
   if (operand.find("PC") != string::npos) {
-    if (isS) push16(getVal("PC", index));
+    if (isS) push16(getVal(PC, index));
     addVal(stackReg, -2, index);
   }
   if (operand.find("U") != string::npos) {
-    if (isS) push16(getVal("U", index));
+    if (isS) push16(getVal(U, index));
     addVal(stackReg, -2, index);
   }
   if (operand.find("S") != string::npos) {
-    if (isS) push16(getVal("S", index));
+    if (isS) push16(getVal(S, index));
     addVal(stackReg, -2, index);
   }
   if (operand.find("Y") != string::npos) {
-    if (isS) push16(getVal("Y", index));
+    if (isS) push16(getVal(Y, index));
     addVal(stackReg, -2, index);
   }
   if (operand.find("X") != string::npos) {
-    if (isS) push16(getVal("X", index));
+    if (isS) push16(getVal(X, index));
     addVal(stackReg, -2, index);
   }
   if (operand.find("DP") != string::npos) {
-    if (isS) push8(getVal("DP", index));
+    if (isS) push8(getVal(DP, index));
     addVal(stackReg, -1, index);
   }
   if (operand.find("B") != string::npos) {
     if (isS)  {
-      push8(getVal("B", index));
+      push8(getVal(B, index));
     }
     addVal(stackReg, -1, index);
   }
   if (operand.find("A") != string::npos) {
     if (isS) {
-      push8(getVal("A", index));
+      push8(getVal(A, index));
     }
     addVal(stackReg, -1, index);
   }
   if (operand.find("CC") != string::npos) {
-    if (isS) push8(getVal("CC", index));
+    if (isS) push8(getVal(CC, index));
     addVal(stackReg, -1, index);
   }
 }
 
 bool
-Pseudo6809::processPull(const string &stackReg, const string &operand, int index)
+Pseudo6809::processPull(Register stackReg, const string &operand, int index)
 {
-  const bool isS = stackReg == "S";
+  const bool isS = stackReg == S;
 
   if (operand.find("CC") != string::npos) {
     if (stack.empty()) return false;
-    regs.setVal("CC", isS ? pull8(index) : PossiblyKnownVal<int>(0, false));
+    regs.setVal(CC, isS ? pull8(index) : PossiblyKnownVal<int>(0, false));
     addVal(stackReg, 1, index);
   }
   if (operand.find("A") != string::npos) {
     if (stack.empty()) return false;
-    regs.setVal("A", isS ? pull8(index) : PossiblyKnownVal<int>(0, false));
+    regs.setVal(A, isS ? pull8(index) : PossiblyKnownVal<int>(0, false));
     addVal(stackReg, 1, index);
   }
   if (operand.find("B") != string::npos) {
     if (stack.empty()) return false;
-    regs.setVal("B", isS ? pull8(index) : PossiblyKnownVal<int>(0, false));
+    regs.setVal(B, isS ? pull8(index) : PossiblyKnownVal<int>(0, false));
     addVal(stackReg, 1, index);
   }
   if (operand.find("DP") != string::npos) {
     if (stack.empty()) return false;
-    regs.setVal("DP", isS ? pull8(index) : PossiblyKnownVal<int>(0, false));
+    regs.setVal(DP, isS ? pull8(index) : PossiblyKnownVal<int>(0, false));
     addVal(stackReg, 1, index);
   }
   if (operand.find("X") != string::npos) {
     if (stack.size() < 2) return false;
-    regs.setVal("X", isS ? pull16(index) : PossiblyKnownVal<int>(0, false));
+    regs.setVal(X, isS ? pull16(index) : PossiblyKnownVal<int>(0, false));
     addVal(stackReg, 2, index);
   }
   if (operand.find("S") != string::npos) {
     if (stack.size() < 2) return false;
-    regs.setVal("S", isS ? pull16(index) : PossiblyKnownVal<int>(0, false));
+    regs.setVal(S, isS ? pull16(index) : PossiblyKnownVal<int>(0, false));
     addVal(stackReg, 2, index);
   }
   if (operand.find("Y") != string::npos) {
     if (stack.size() < 2) return false;
-    regs.setVal("Y", isS ? pull16(index) : PossiblyKnownVal<int>(0, false));
+    regs.setVal(Y, isS ? pull16(index) : PossiblyKnownVal<int>(0, false));
     addVal(stackReg, 2, index);
   }
   if (operand.find("U") != string::npos) {
     if (stack.size() < 2) return false;
-    regs.setVal("U", isS ? pull16(index) : PossiblyKnownVal<int>(0, false));
+    regs.setVal(U, isS ? pull16(index) : PossiblyKnownVal<int>(0, false));
     addVal(stackReg, 2, index);
   }
   if (operand.find("PC") != string::npos) {
     if (stack.size() < 2) return false;
-    regs.setVal("PC", isS ? pull16(index) : PossiblyKnownVal<int>(0, false));
+    regs.setVal(PC, isS ? pull16(index) : PossiblyKnownVal<int>(0, false));
     addVal(stackReg, 2, index);
   }
 

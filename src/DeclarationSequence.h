@@ -1,4 +1,4 @@
-/*  $Id: DeclarationSequence.h,v 1.6 2016/07/12 03:12:40 sarrazip Exp $
+/*  $Id: DeclarationSequence.h,v 1.8 2020/06/06 04:41:43 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -51,6 +51,11 @@ public:
 
     void removeEnumeratorList() { enumeratorList = NULL; }
 
+    // May be null.
+    //
+    const std::vector<Enumerator *> *getEnumeratorList() const { return enumeratorList; }
+    std::vector<Enumerator *> *getEnumeratorList() { return enumeratorList; }
+
 private:
 
     DeclarationSequence(const DeclarationSequence &);
@@ -58,7 +63,7 @@ private:
 
 private:
 
-    std::vector<Enumerator *> *enumeratorList;  // owns the vector<>, but not the Enumerator objects
+    std::vector<Enumerator *> *enumeratorList;  // owns the vector<>, but not the Enumerator objects
 
 };
 

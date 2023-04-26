@@ -1,4 +1,4 @@
-/*  $Id: SemanticsChecker.h,v 1.3 2016/07/10 06:36:22 sarrazip Exp $
+/*  $Id: SemanticsChecker.h,v 1.4 2017/06/25 20:38:45 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -28,6 +28,8 @@ class SemanticsChecker : public Tree::Functor
 public:
 
     SemanticsChecker();
+
+    ~SemanticsChecker();
 
     virtual bool open(Tree *t);
 

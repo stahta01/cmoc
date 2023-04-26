@@ -58,6 +58,9 @@ my $tagCounter = 0;
 my @headings;  # list of hashes
 
 
+# May increment $tagCounter and append objects to @headings.
+# Returns an HTML string.
+#
 sub fixHeading($$)
 {
     my ($headingLevel, $title) = @_;
@@ -65,9 +68,9 @@ sub fixHeading($$)
     my $anchor = "";
     if ($headingLevel >= 2)
     {
-	my $tag = ++$tagCounter;
-	push @headings, { level => $headingLevel, title => $title, tag => $tag };
-	$anchor = "<a name='t$tag'></a>";
+        my $tag = ++$tagCounter;
+        push @headings, { level => $headingLevel, title => $title, tag => $tag };
+        $anchor = "<a name='t$tag'></a>";
     }
 
     # Put a space in the <Hx> tag to mark it as modified.
@@ -91,12 +94,18 @@ sub work
     {
     }
 
+    # Replace <!-- --name="c_features" --> with <a name="XXX" />
+    #
+    while ($html =~ s,<!--\s+--name="(.*?)"\s*-->,<a name="$1" />,ig)
+    {
+    }
+
     my $htmlTOC = "";
     my $fh;
     if (!open($fh, '>', \$htmlTOC))
     {
-	errmsg("failed to open a file to write into a string: $!");
-	return;
+        errmsg("failed to open a file to write into a string: $!");
+        return;
     }
     print $fh "<H2>Table of Contents</H2>\n";
     print $fh "<small>\n";
@@ -104,12 +113,12 @@ sub work
     my $curLevel = 2;
     for my $h (@headings)
     {
-	if ($h->{level} > $curLevel)
-	{
-	    print $fh "<ul>\n";  #" <!-- ", $h->{level}, " $curLevel -->\n";
-	    $curLevel = $h->{level};
-	}
-	else
+        if ($h->{level} > $curLevel)
+        {
+            print $fh "<ul>\n";  #" <!-- ", $h->{level}, " $curLevel -->\n";
+            $curLevel = $h->{level};
+        }
+        else
         {
             while ($h->{level} < $curLevel)
             {
@@ -118,7 +127,7 @@ sub work
             }
         }
 
-	printf $fh "<li><a href='#t%s'>%s</a></li> <!--%d-->\n", $h->{tag}, $h->{title}, $h->{level};
+        printf $fh "<li><a href='#t%s'>%s</a></li> <!--%d-->\n", $h->{tag}, $h->{title}, $h->{level};
     }
     print $fh "</ul>\n";
     print $fh "</small>\n";

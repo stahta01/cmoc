@@ -1,4 +1,4 @@
-/*  $Id: ScopeCreator.cpp,v 1.12 2016/10/08 18:15:06 sarrazip Exp $
+/*  $Id: ScopeCreator.cpp,v 1.22 2022/07/13 03:27:19 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -27,6 +27,7 @@
 #include "VariableExpr.h"
 #include "IdentifierExpr.h"
 #include "FunctionCallExpr.h"
+#include "AssemblerStmt.h"
 
 using namespace std;
 
@@ -72,6 +73,7 @@ ScopeCreator::privateOpen(Tree *t)
 {
     Scope *cs = translationUnit.getCurrentScope();
     assert(cs != NULL);
+    //cout << "# ScopeCreator::privateOpen(" << typeid(*t).name() << "), ancestors.size()=" << ancestors.size() << "\n";
 
     // Compound statements (other than a function's top braces) create a scope.
     // So do the for() and while() statement bodies.
@@ -80,8 +82,9 @@ ScopeCreator::privateOpen(Tree *t)
         || dynamic_cast<ForStmt *>(t)
         || dynamic_cast<WhileStmt *>(t))
     {
-        Scope *s = new Scope(cs);
+        Scope *s = new Scope(cs, t->getLineNo());
         assert(s->getParent() == cs);
+        //cout << "# ScopeCreator::privateOpen:   creating scope " << s << " at " << t->getLineNo() << endl;
 
         // Note: 'cs' is now owner of 's', i.e., destroying 'cs' will call delete on 's'.
 
@@ -97,7 +100,7 @@ ScopeCreator::privateOpen(Tree *t)
         {
             if (Declaration *decl = dynamic_cast<Declaration *>(*it))
             {
-                /*cout << "ScopeCreator::open(" << t << "): Declaration: " << decl->getVariableId()
+                /*cout << "# ScopeCreator::privateOpen(" << t << "): Declaration: " << decl->getVariableId()
                         << " at line " << decl->getLineNo()
                         << ", cs=" << cs << "\n";*/
                 if (!cs->declareVariable(decl))
@@ -132,19 +135,11 @@ ScopeCreator::privateOpen(Tree *t)
         Declaration *decl = cs->getVariableDeclaration(id, true);
         if (decl != NULL)
         {
-            FunctionDef *fd = TranslationUnit::instance().getFunctionDef(id);
+            const FunctionDef *fd = TranslationUnit::instance().getFunctionDef(id);
             if (fd != NULL)
             {
-                fce->warnmsg("calling '%s', which is both a variable and a function name", id.c_str());
+                fce->warnmsg("calling `%s', which is both a variable and a function name", id.c_str());
                 return true;
-            }
-            else
-            {
-                const TypeDesc *declTD = decl->getTypeDesc();
-                if (declTD->type != POINTER_TYPE || declTD->pointedTypeDesc->type != VOID_TYPE)
-                {
-                    fce->warnmsg("variable '%s' used as function pointer without being of type void *", id.c_str());
-                }
             }
         }
 
@@ -175,10 +170,8 @@ ScopeCreator::close(Tree *t)
 // and of the created VariableExpr object.
 // In the case of an enumerated name, the type is not set, because it is
 // set by the ExpressionTypeSetter (look for the IdentifierExpr case).
-// (This method is intended to be called during parsing, so it would be too
+// (This method is intended to be called when it would be too
 // soon to set the type of an enumerated name's initialization expression.)
-//
-// This should be the only place that creates a VariableExpr object.
 //
 void
 ScopeCreator::processIdentifierExpr(IdentifierExpr &ie)
@@ -187,12 +180,12 @@ ScopeCreator::processIdentifierExpr(IdentifierExpr &ie)
     Scope *cs = translationUnit.getCurrentScope();
     assert(cs);
     Declaration *decl = cs->getVariableDeclaration(id, true);
+    //cout << "# ScopeCreator::processIdentifierExpr: " << ie.getLineNo() << ", id='" << id << "', cs=" << cs << ", decl=" << decl << endl;
     if (decl != NULL)
     {
         VariableExpr *ve = new VariableExpr(id);
         ve->setDeclaration(decl);
 
-        assert(decl->getType() != VOID_TYPE);
         ve->setTypeDesc(decl->getTypeDesc());
         ie.setVariableExpr(ve);  // sets the type of *ie
         return;
@@ -203,7 +196,7 @@ ScopeCreator::processIdentifierExpr(IdentifierExpr &ie)
     {
         VariableExpr *ve = new VariableExpr(id);
         ve->markAsFuncAddrExpr();
-        const TypeDesc *fpt  = translationUnit.getTypeManager().getFunctionPointerType();
+        const TypeDesc *fpt  = translationUnit.getTypeManager().getFunctionPointerType(*fd);
         ve->setTypeDesc(fpt);
         ie.setTypeDesc(fpt);
         ie.setVariableExpr(ve);
@@ -212,6 +205,12 @@ ScopeCreator::processIdentifierExpr(IdentifierExpr &ie)
 
     if (TranslationUnit::getTypeManager().isEnumeratorName(id))  // if known enumerated name
         return;
+
+    if (id == "__FUNCTION__" || id == "__func__")
+    {
+        ie.setTypeDesc(translationUnit.getTypeManager().getArrayOfChar());
+        return;
+    }
 
     ie.errormsg("undeclared identifier `%s'", id.c_str());
 }

@@ -1,4 +1,4 @@
-/*  $Id: TreeSequence.h,v 1.7 2016/09/15 03:34:57 sarrazip Exp $
+/*  $Id: TreeSequence.h,v 1.14 2022/02/01 04:05:44 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -27,12 +27,15 @@ class TreeSequence : public Tree
 {
 public:
 
-    // If 'tree' is not null, adds it to this sequence.
-    //
-    TreeSequence(Tree *tree = NULL);
+    TreeSequence();
 
+    // Calls delete on each Tree pointer passed to addTree() that is still
+    // part of this sequence.
+    //
     virtual ~TreeSequence();
 
+    // tree: Allowed to be null. Otherwise, must come from new.
+    //
     void addTree(Tree *tree);
 
     size_t size() const;
@@ -45,16 +48,41 @@ public:
     std::vector<Tree *>::const_reverse_iterator rend() const;
     std::vector<Tree *>::reverse_iterator rend();
 
+    // Does NOT call delete on the Tree pointers that may be contained in this sequence.
+    //
+    void clear();
+
     virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
 
     virtual bool iterate(Functor &f);
 
+    // Searches for 'existingChild' in this sequence, calls delete on it,
+    // then puts 'newChild' in its place in this sequence.
+    // existingChild MUST be in this sequence.
+    //
     virtual void replaceChild(Tree *existingChild, Tree *newChild);
+
+    // Removes the given pointer from the list of Tree pointers of this sequence.
+    // Does not destroy *existingChild.
+    // Does nothing if existingChild is not found in this sequence.
+    //
+    void detachChild(const Tree *existingChild);
 
     virtual bool isLValue() const { return false; }
 
+    std::string toString() const;
+
+    bool isTreeSequenceWithOnlyStringLiterals() const;
+
+    bool isTreeSequenceWithOnlyNumericalLiterals() const;
+
+    void setRequiredNumArrayElements(uint16_t requiredNumArrayElements);
+
+    uint16_t getRequiredNumArrayElements() const;
+
 private:
     std::vector<Tree *> sequence;  // owns the Tree objects
+    uint16_t requiredNumArrayElements;
 };
 
 

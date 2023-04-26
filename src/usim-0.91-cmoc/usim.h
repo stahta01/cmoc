@@ -56,6 +56,7 @@ public:
 public:
 
 		void		 load_intelhex(const char *filename, Word loadOffset);
+		void		 load_srec(const char *filename, Word loadOffset);
 
 	USim() : halted(0), memory(0), port(0), ir(0), pc(0) {}
 	virtual ~USim() {}

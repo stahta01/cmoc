@@ -9,7 +9,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 #include <sys/time.h>
+#include <errno.h>
 #include "usim.h"
 
 inline long long getCurrentTimeInMicroseconds()
@@ -127,7 +129,8 @@ void USim::load_intelhex(const char *filename, Word loadOffset)
 
 	fp = fopen(filename, "r");
 	if (!fp) {
-		perror("filename");
+		int e = errno;
+		fprintf(stderr, "%s: %s\n", filename, strerror(e));
 		exit(EXIT_FAILURE);
 	}
 
@@ -153,6 +156,114 @@ void USim::load_intelhex(const char *filename, Word loadOffset)
 		(void)fread_byte(fp);
 		if (fgetc(fp) == '\r') (void)fgetc(fp);
 	}
+
+	fclose(fp);
+}
+
+
+// https://en.wikipedia.org/wiki/SREC_(file_format)
+//
+class SRECReader
+{
+public:
+
+    SRECReader()
+    :   lineNo(1),
+        filename("")
+    {
+    }
+
+    bool read(FILE *fp, const char* _filename, Byte *memory, Word loadOffset, Word &pc)
+    {
+        filename = _filename;
+        bool haveStart = false;
+
+        char line[512];
+        while (fgets(line, sizeof(line), fp))
+        {
+            if (line[0] != 'S')
+                return fail("expecting S at start of line");
+            if (line[1] == '1')  // data line
+            {
+                Byte byteCount = decodeByte(line + 2);
+                if ((Word) strlen(line) < 4 + byteCount * 2)
+                    return fail("S1 (data) record too short");
+                Word addr = decodeWord(line + 4);
+                Byte dataByteCount = byteCount - 3;
+                for (Word i = 0; i < dataByteCount; ++i)
+                {
+                    Byte dataByte = decodeByte(line + 8 + i * 2);
+                    memory[loadOffset + addr + i] = dataByte;
+                }
+            }
+            else if (line[1] == '9')  // start address
+            {
+                if (haveStart)
+                    return fail("more than one S9 record");
+                if (strlen(line) < 8)
+                    return fail("S9 (start address) record too short");
+                pc = decodeWord(line + 4);
+                haveStart = true;
+            }
+            // Other types of records are ignored.
+
+            ++lineNo;
+        }
+        return true;  // success
+    }
+
+private:
+
+    bool fail(const char *msg)
+    {
+        printf("%s:%u: %s\n", filename, lineNo, msg);
+        return false;
+    }
+
+    static Word decodeWord(const char *p)
+    {
+        return ((Word) decodeByte(p) << 8) | decodeByte(p + 2);
+    }
+
+    static Byte decodeByte(const char *p)
+    {
+        return (decodeNybble(p[0]) << 4) | decodeNybble(p[1]);
+    }
+
+    static Byte decodeNybble(char c)
+    {
+        if (c >= '0' && c <= '9')
+            return c - '0';
+        c = toupper(c);
+        if (c >= 'A' && c <= 'F')
+            return c - 'A' + 10;
+        return 0;
+    }
+
+private:
+
+    unsigned lineNo;
+    const char *filename;
+
+};
+
+
+void USim::load_srec(const char *filename, Word loadOffset)
+{
+    FILE *fp = fopen(filename, "r");
+    if (!fp) {
+        int e = errno;
+        fprintf(stderr, "%s: %s\n", filename, strerror(e));
+        exit(EXIT_FAILURE);
+    }
+
+    SRECReader reader;
+    bool success = reader.read(fp, filename, memory, loadOffset, pc);
+
+    fclose(fp);
+
+    if (!success)
+        exit(EXIT_FAILURE);
 }
 
 //----------------------------------------------------------------------------

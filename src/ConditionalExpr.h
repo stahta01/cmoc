@@ -1,4 +1,4 @@
-/*  $Id: ConditionalExpr.h,v 1.7 2016/09/15 03:34:56 sarrazip Exp $
+/*  $Id: ConditionalExpr.h,v 1.8 2020/07/31 13:18:17 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -50,7 +50,7 @@ public:
 
 private:
 
-    static void promoteIfNeeded(ASMText &out, const Tree &exprToPromote, const Tree &otherExpr);
+    static void promoteIfNeeded(ASMText &out, const TypeDesc &typeToPromote, const TypeDesc &targetTypeDesc);
 
     // Forbidden:
     ConditionalExpr(const ConditionalExpr &);

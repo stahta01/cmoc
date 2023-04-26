@@ -1,4 +1,4 @@
-/*  $Id: TypeManager.h,v 1.18 2016/08/27 00:53:50 sarrazip Exp $
+/*  $Id: TypeManager.h,v 1.38 2022/07/07 16:14:09 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -20,7 +20,7 @@
 #ifndef _H_TypeManager
 #define _H_TypeManager
 
-#include "TypeDesc.h"
+#include "util.h"
 
 #include <vector>
 #include <map>
@@ -28,6 +28,8 @@
 class Declarator;
 class Enumerator;
 class Tree;
+class FunctionDef;
+class FormalParamList;
 
 
 // Represents an enumeration (enum) that has a name.
@@ -54,7 +56,7 @@ public:
 
     void createBasicTypes();
 
-    void createInternalStructs(class Scope &globalScope);
+    void createInternalStructs(class Scope &globalScope, TargetPlatform targetPlatform);
 
     const TypeDesc *getVoidType() const;
 
@@ -66,13 +68,21 @@ public:
 
     const TypeDesc *getLongType(bool isSigned) const;
 
-    const TypeDesc *getFloatType(bool isDoublePrecision) const;
+    const TypeDesc *getRealType(bool isDoublePrecision) const;
 
     const TypeDesc *getPointerTo(const TypeDesc *td) const;
 
-    const TypeDesc *getPointerTo(const TypeDesc *td, size_t level) const;
+    const TypeDesc *getPointerTo(const TypeDesc *td, const TypeQualifierBitFieldVector &typeQualifierBitFieldPerPointerLevel) const;
+
+    const TypeDesc *getPointerTo(const TypeDesc *td, size_t pointerLevel) const;
 
     const TypeDesc *getPointerToIntegral(BasicType byteOrWordType, bool isSigned) const;
+
+    const TypeDesc *getConst(const TypeDesc *typeDesc) const;
+
+    const TypeDesc *getArrayOfChar() const;
+
+    const TypeDesc *getArrayOfConstChar() const;
 
     const TypeDesc *getPointerToVoid() const;
 
@@ -85,7 +95,27 @@ public:
     //
     const TypeDesc *getClassType(const std::string &className, bool isUnion, bool createIfAbsent) const;
 
-    const TypeDesc *getFunctionPointerType() const;
+    // Returns a type that describes the designated function definition.
+    //
+    // Does not keep a reference to 'fd'.
+    //
+    const TypeDesc *getFunctionPointerType(const FunctionDef &fd) const;
+
+    // Returns a type that describes a function returning the given return type
+    // and formal parameter types.
+    //
+    // Does not keep a reference to 'params'.
+    //
+    const TypeDesc *getFunctionPointerType(const TypeDesc *returnTypeDesc,
+                                           const FormalParamList &params,
+                                           bool isISR,
+                                           bool receivesFirstParamInReg) const;
+
+    const TypeDesc *getInterruptType(const TypeDesc *existingType) const;
+
+    const TypeDesc *getFPIRType(const TypeDesc *existingType) const;
+
+    const TypeDesc *getTypeWithoutCallingConventionFlags(const TypeDesc *existingType) const;
 
     bool addTypeDef(const TypeDesc *declSpecTypeDef, Declarator *declarator);
 
@@ -110,45 +140,43 @@ public:
 
     bool isIdentiferMemberOfNamedEnum(const std::string &enumTypeName, const std::string &id) const;
 
-    void setEnumeratorTypes() const;
-
     void dumpTypes(std::ostream &out) const;
+
+    // In bytes. Returns 0 if floats are not supposed on the given platform.
+    //
+    static size_t getFloatingPointFormatSize(TargetPlatform platform, bool isDoublePrecision);
 
 private:
 
     void createStructWithArrayOfBytes(Scope &globalScope, const char *structName, size_t numBytesInArray);
     void createStructWithPairOfWords(Scope &globalScope, const char *structName, bool isHighWordSigned);
+    Enumerator *findEnumerator(const std::string &enumeratorName) const;
+    const TypeDesc *findFunctionPointerType(const TypeDesc *returnTypeDesc,
+                                            const FormalParamList &params,
+                                            bool isISR,
+                                            bool receivesFirstParamInReg) const;
+    const TypeDesc *getSizedOneDimArrayOf(const TypeDesc *pointedTypeDesc, size_t numArrayElements) const;
 
 private:
 
     typedef std::map<std::string, const TypeDesc *> TypeDefMap;  // key: typedef name; value: type defined in types[]
     typedef std::map<std::string, NamedEnum> EnumTypeNameMap;  // key: enum type name
-    typedef std::map<std::string, class Enumerator *> EnumeratorMap;  // key: enum name
+
+    typedef std::pair<std::string, class Enumerator *> EnumeratorNamePair;
+    typedef std::vector<EnumeratorNamePair> EnumeratorList;  // key: enum name
+        // NOTE: Enumerators listed in declaration order so that they get processed in that order by the DeclarationFinisher.
 
     mutable std::vector<TypeDesc *> types;  // see the constructor for predefined types
     TypeDefMap typeDefs;
     EnumTypeNameMap enumTypeNames;
-    EnumeratorMap enumerators;  // owns the Enumerators, must delete them
+    EnumeratorList enumerators;  // owns the Enumerators, must delete them
 
 };
 
 
-class TypeSpecifier
-{
-public:
-    const TypeDesc *typeDesc;
-    std::string enumTypeName;  // empty for anonymous enum, and for non-enum type
-    std::vector<Enumerator *> *enumeratorList;
-
-    TypeSpecifier(const TypeDesc *_typeDesc, const std::string &_enumTypeName, std::vector<Enumerator *> *_enumeratorList)
-    :   typeDesc(_typeDesc), enumTypeName(_enumTypeName), enumeratorList(_enumeratorList) {}
-
-private:
-    TypeSpecifier(const TypeSpecifier &);
-    TypeSpecifier &operator = (const TypeSpecifier &);
-};
-
-
+// Represents a member of an enum, e.g., A in "enum { A };".
+// In "enum {B = 42}", valueExpr is the tree that represents 42.
+//
 class Enumerator
 {
 public:

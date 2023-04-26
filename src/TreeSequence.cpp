@@ -1,4 +1,4 @@
-/*  $Id: TreeSequence.cpp,v 1.8 2016/05/06 03:42:56 sarrazip Exp $
+/*  $Id: TreeSequence.cpp,v 1.17 2022/01/06 03:39:31 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -21,16 +21,18 @@
 
 #include "TranslationUnit.h"
 #include "CastExpr.h"
+#include "IdentifierExpr.h"
+#include "StringLiteralExpr.h"
+#include "CommaExpr.h"
 
 using namespace std;
 
 
-TreeSequence::TreeSequence(Tree *tree /*= NULL*/)
+TreeSequence::TreeSequence()
 :   Tree(),
-    sequence()
+    sequence(),
+    requiredNumArrayElements(0)
 {
-    if (tree != NULL)
-        addTree(tree);
 }
 
 
@@ -45,7 +47,6 @@ TreeSequence::~TreeSequence()
 void
 TreeSequence::addTree(Tree *tree)
 {
-    assert(tree != NULL);
     sequence.push_back(tree);
 }
 
@@ -113,12 +114,18 @@ TreeSequence::rend()
 }
 
 
+void
+TreeSequence::clear()
+{
+    sequence.clear();
+}
+
+
 /*virtual*/
 CodeStatus
 TreeSequence::emitCode(ASMText &out, bool lValue) const
 {
-    if (lValue)
-        return false;
+    const bool isCommaExpr = !!dynamic_cast<const CommaExpr *>(this);
 
     pushScopeIfExists();
 
@@ -127,15 +134,31 @@ TreeSequence::emitCode(ASMText &out, bool lValue) const
     {
         const Tree *tree = *it;
 
-        // Do not emit anything if 'tree' is (void) 0 (or other constant expression).
+        // Do not emit anything if 'tree' is a constant or a variable name
+        // cast to some type (e.g., (void) 0 or (void) n).
+        //
+        // or (void) variable.
         if (const CastExpr *castExpr = dynamic_cast<const CastExpr *>(tree))
         {
+            const Tree *subExpr = castExpr->getSubExpr();
+            if (dynamic_cast<const IdentifierExpr *>(subExpr))
+                continue;
             uint16_t result = 0;
-            if (castExpr->getSubExpr()->evaluateConstantExpr(result))
+            if (subExpr->evaluateConstantExpr(result))
                 continue;
         }
 
-        if (!tree->emitCode(out, false))
+        // Emit the tree as an r-value, unless it is:
+        // - a struct (including longs and reals), then it has to be emitted as an l-value;
+        // - the last sub-expression of a comma expression, and the caller wants an l-value;
+        //   this supports a statement like (a = 1, b = 2) = 3, which ends by putting 3 in b.
+        //
+        bool emitAsLValue = false;
+        if (tree->getType() == CLASS_TYPE)
+            emitAsLValue = true;
+        else if (lValue && isCommaExpr && it + 1 == sequence.end())
+            emitAsLValue = true;
+        if (!tree->emitCode(out, emitAsLValue))
         {
             success = false;
             break;  // go pop the scope before returning
@@ -174,3 +197,91 @@ TreeSequence::replaceChild(Tree *existingChild, Tree *newChild)
             return;
     assert(!"child not found");
 }
+
+
+void
+TreeSequence::detachChild(const Tree *existingChild)
+{
+    sequence.erase(std::remove(sequence.begin(), sequence.end(), existingChild), sequence.end());
+}
+
+
+string
+TreeSequence::toString() const
+{
+    stringstream ss;
+    for (vector<Tree *>::const_iterator it = begin(); it != end(); ++it)
+    {
+        if (it != begin())
+            ss << ", ";
+        ss << (*it)->getTypeDesc()->toString();
+    }
+    return ss.str();
+}
+
+
+// Recursive check.
+// Returns false if no string literal is found at any level.
+//
+bool
+TreeSequence::isTreeSequenceWithOnlyStringLiterals() const
+{
+    bool atLeastOne = false;
+
+    for (vector<Tree *>::const_iterator it = begin(); it != end(); ++it)
+    {
+        const Tree *tree = *it;
+
+        if (const TreeSequence *subSeq = dynamic_cast<const TreeSequence *>(tree))
+        {
+            if (!subSeq->isTreeSequenceWithOnlyStringLiterals())
+                return false;
+            atLeastOne = true;
+            continue;
+        }
+
+        if (dynamic_cast<const StringLiteralExpr *>(tree) == NULL)
+            return false;
+
+        atLeastOne = true;
+    }
+
+    return atLeastOne;
+}
+
+
+bool
+TreeSequence::isTreeSequenceWithOnlyNumericalLiterals() const
+{
+    for (vector<Tree *>::const_iterator it = begin(); it != end(); ++it)
+    {
+        const Tree *tree = *it;
+
+        if (const TreeSequence *subSeq = dynamic_cast<const TreeSequence *>(tree))
+        {
+            if (!subSeq->isTreeSequenceWithOnlyNumericalLiterals())
+                return false;
+            continue;
+        }
+
+        if (!tree->isNumericalLiteral())
+            return false;
+    }
+
+    return true;
+}
+
+
+void
+TreeSequence::setRequiredNumArrayElements(uint16_t _requiredNumArrayElements)
+{
+    requiredNumArrayElements = _requiredNumArrayElements;
+}
+
+
+uint16_t
+TreeSequence::getRequiredNumArrayElements() const
+{
+    return requiredNumArrayElements;
+}
+

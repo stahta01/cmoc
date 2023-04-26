@@ -31,7 +31,7 @@ if test "x$PERL" != x; then
     # Would be nice to log result here, but can't rely on autoconf internals
     $PERL "-M$ac_perl_module" -e exit > /dev/null 2>&1
     if test $? -ne 0; then
-      AC_MSG_RESULT(no);
+      AC_MSG_ERROR(no);
       ac_perl_modules_failed=1
    else
       AC_MSG_RESULT(ok);
@@ -47,7 +47,7 @@ if test "x$PERL" != x; then
     $3
   fi
 else
-  AC_MSG_WARN(could not find perl)
+  AC_MSG_ERROR(could not find perl)
 fi])dnl
 
 

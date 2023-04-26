@@ -1,4 +1,4 @@
-/*  $Id: FunctionDef.cpp,v 1.32 2016/10/08 18:15:06 sarrazip Exp $
+/*  $Id: FunctionDef.cpp,v 1.75 2022/08/12 03:44:18 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -43,8 +43,12 @@
 #include "LabeledStmt.h"
 
 #include <assert.h>
+#include <iomanip>
 
 using namespace std;
+
+
+uint16_t FunctionDef::functionStackSpace = 0;
 
 
 class Tracer : public Tree::Functor
@@ -65,7 +69,7 @@ public:
         if (scope != NULL)
         {
             vector<string> v;
-            scope->getDeclarationIds(v);
+            scope->getDeclarationIds(v, false);
             trace << ind << "scope at " << scope << " w/ decls: {";
             for (vector<string>::const_iterator it = v.begin();
                                                 it != v.end(); it++)
@@ -105,21 +109,34 @@ public:
 
 
 // Counts the number of return statements in the body of a function.
+// Remembers the last two trees that the iteration visits.
 //
 class ReturnStmtChecker : public Tree::Functor
 {
 public:
-    ReturnStmtChecker() : numReturnStmts(0) {}
+    ReturnStmtChecker() : numReturnStmts(0)
+    {
+        lastClosedTrees[0] = lastClosedTrees[1] = NULL;
+    }
     virtual ~ReturnStmtChecker() {}
     virtual bool close(Tree *t)
     {
         JumpStmt *jump = dynamic_cast<JumpStmt *>(t);
         if (jump && jump->getJumpType() == JumpStmt::RET)
             ++numReturnStmts;
+        lastClosedTrees[1] = lastClosedTrees[0];  // new next-to-last tree
+        lastClosedTrees[0] = t;  // new last tree
         return true;
     }
 
+    const Tree *getNextToLastTree() const { return lastClosedTrees[1]; }
+
     size_t numReturnStmts;
+    Tree *lastClosedTrees[2];  // does not own the Tree objects
+
+private:
+    ReturnStmtChecker(const ReturnStmtChecker &);
+    ReturnStmtChecker &operator = (const ReturnStmtChecker &);
 };
 
 
@@ -160,24 +177,40 @@ private:
 ///////////////////////////////////////////////////////////////////////////////
 
 
-// dsl: Specifies the return type of this function.
-//
-FunctionDef::FunctionDef(const DeclarationSpecifierList &dsl,
-                         const Declarator &declarator)
-  : Tree(declarator.processPointerLevel(dsl.getTypeDesc())),
+FunctionDef::FunctionDef(const DeclarationSpecifierList *dsl,
+                         Declarator &declarator)
+  : Tree(),
     functionId(declarator.getId()),
-    formalParamList(declarator.getFormalParamList()),
+    formalParamList(declarator.detachFormalParamList()),
     functionLabel("_" + functionId),
     endLabel(TranslationUnit::instance().generateLabel('L')),
-    scope(NULL),
-    minDisplacement(9999),  // positive value means allocateLocalVariables() not called yet
     bodyStmts(NULL),
     formalParamDeclarations(),
-    isISR(dsl.isInterruptServiceFunction()),
-    asmOnly(dsl.isAssemblyOnly()),
-    called(false)
+    hiddenParamDeclaration(NULL),
+    numLocalVariablesAllocated(0),
+    minDisplacement(9999),  // positive value means allocateLocalVariables() not called yet
+    isISR(dsl && dsl->isInterruptServiceFunction()),
+    isStatic(dsl && dsl->isStaticDeclaration()),
+    asmOnly(dsl && dsl->isAssemblyOnly()),
+    noReturnInstruction(dsl && dsl->hasNoReturnInstruction()),
+    called(false),
+    firstParamReceivedInReg(dsl && dsl->isFunctionReceivingFirstParamInReg())
 {
-    assert(formalParamList != NULL);
+    // The "interrupt" and "_CMOC_fpir_" flags only make sense on function types
+    // and function pointer types.
+    // Set the return type of the function so that this type does not contain those flags,
+    // unless the return type is a function pointer type.
+    //
+    TypeManager &tm = TranslationUnit::instance().getTypeManager();
+    const TypeDesc *returnTD = dsl ? dsl->getTypeDesc() : tm.getIntType(WORD_TYPE, true);  // support absence of return type, as per K&R C
+    returnTD = declarator.processPointerLevel(returnTD);
+    if (! returnTD->isPtrToFunction() && returnTD->isTypeWithCallingConventionFlags())
+        returnTD = tm.getTypeWithoutCallingConventionFlags(returnTD);
+    setTypeDesc(returnTD);
+
+    /*cout << "# FunctionDef::FunctionDef: " << declarator.getId() << "(): returns {"
+         << getTypeDesc()->toString() << "}, formalParamList=(" << formalParamList->toString() << ")\n";*/
+    assert(getTypeDesc()->isPtrToFunction() || getTypeDesc()->isTypeWithoutCallingConventionFlags());
 }
 
 
@@ -193,72 +226,135 @@ FunctionDef::~FunctionDef()
 {
     delete formalParamList;
 
+    delete hiddenParamDeclaration;
+
     for_each(formalParamDeclarations.begin(), formalParamDeclarations.end(), deletePtr<Declaration>);
 
     delete bodyStmts;
 }
 
 
+bool
+FunctionDef::hasHiddenParam() const
+{
+    return getType() == CLASS_TYPE;
+}
+
+
+string
+FunctionDef::getAddressOfReturnValue() const
+{
+    if (hasHiddenParam() && firstParamReceivedInReg)
+    {
+        assert(hiddenParamDeclaration);
+        return hiddenParamDeclaration->getFrameDisplacementArg();
+    }
+    assert(!hiddenParamDeclaration);
+    return intToString(Declaration::FIRST_FUNC_PARAM_FRAME_DISPLACEMENT) + ",U";
+}
+
+
 // Generates Declaration objects for each formal parameter.
-// Stores them in 'scope'.
-// Sets the declaration's frame displacement.
-// Issues error messages if needed (e.g., two params with same name).
+// Stores them in this function's Scope object.
+// Sets the declarations' frame displacement.
+// Issues error messages if needed (e.g., two parameters with the same name).
 // Must be called before setBody().
 //
 void
 FunctionDef::declareFormalParams()
 {
-    assert(formalParamList != NULL);
-    assert(scope != NULL);
+    if (formalParamList == NULL)
+        return;  // error message already reported by TranslationUnit::registerFunction()
 
-    int16_t paramFrameDisplacement = 2 + 2;  // 2 bytes for saved stack frame pointer, 2 bytes for return address
-    for (vector<Tree *>::const_iterator it = formalParamList->begin();
-                                       it != formalParamList->end(); it++)
+    assert(getScope() != NULL);
+
+    int16_t paramFrameDisplacement = Declaration::FIRST_FUNC_PARAM_FRAME_DISPLACEMENT;
+
+    // If return type is struct/union, receive address of return value
+    // as hidden parameter.
+    //
+    if (hasHiddenParam())
+    {
+        if (firstParamReceivedInReg)  // if hidden param received in register
+        {
+            const TypeDesc *voidPtrTypeDesc = TranslationUnit::instance().getTypeManager().getPointerToVoid();
+            assert(!hiddenParamDeclaration);
+            hiddenParamDeclaration = new Declaration("$hidden", voidPtrTypeDesc, vector<uint16_t>(), false, false);
+            hiddenParamDeclaration->copyLineNo(*this);
+            if (!getScope()->declareVariable(hiddenParamDeclaration))  // scope keeps copy of 'hiddenParamDeclaration' pointer but does not take ownership
+                assert(false);
+            // hiddenParamDeclaration to be destroyed by the ~FunctionDef().
+
+            // setFrameDisplacement() now called on 'decl' because Scope::allocateLocalVariables() will do it.
+        }
+        else  // hidden param received in stack
+            paramFrameDisplacement += 2;
+    }
+
+    vector<Tree *>::const_iterator it = formalParamList->begin();
+
+    for ( ; it != formalParamList->end(); it++)
     {
         const FormalParameter *fp = dynamic_cast<FormalParameter *>(*it);
         assert(fp != NULL);
         uint16_t argIndex = uint16_t(it - formalParamList->begin()) + 1;
 
-        if (fp->getType() == CLASS_TYPE)
-        {
-            errormsg("argument %u of %s() receives `%s' by value",
-                     argIndex, functionId.c_str(), fp->getTypeDesc()->toString().c_str());
-            continue;
-        }
-
         string fpId = fp->getId();
         if (fpId.empty())
             fpId = "$" + wordToString(argIndex);  // to avoid clash between two unnamed parameters
 
-        Declaration *decl = new Declaration(fpId, fp->getTypeDesc(), fp->getArrayDimensions(), false, false);
+        const TypeDesc *fpTypeDesc = fp->getTypeDesc();
+        const vector<uint16_t> &fpArrayDims = fp->getArrayDimensions();
+        //cout << "# FunctionDef::declareFormalParams: fpId=" << fpId << ", fpTypeDesc='" << fpTypeDesc->toString() << "', fpArrayDims=" << vectorToString(fpArrayDims) << endl;
+
+        Declaration *decl = new Declaration(fpId, fpTypeDesc, fpArrayDims, false, false);
         decl->copyLineNo(*fp);
-        if (!scope->declareVariable(decl))  // 'scope' keeps copy of 'decl' pointer but does not take ownership
+        if (!getScope()->declareVariable(decl))  // scope keeps copy of 'decl' pointer but does not take ownership
             errormsg("function %s() has more than one formal parameter named '%s'",
                                                 functionId.c_str(), fpId.c_str());
 
         // Keep a copy of 'decl' so that ~FunctionDef() destroys them.
         formalParamDeclarations.push_back(decl);
 
-        if (fp->getType() == BYTE_TYPE)
-            paramFrameDisplacement++;
-        decl->setFrameDisplacement(paramFrameDisplacement);
+        // This (visible) parameter is passed in a register if it is the first visible parameter,
+        // and the function receives no hidden parameter.
+        const bool formalParamIsLocalVar = (firstParamReceivedInReg && it == formalParamList->begin() && !hasHiddenParam());
+        if (!formalParamIsLocalVar)
+        {
+            if (TranslationUnit::instance().getTypeSize(*fp->getTypeDesc()) == 1)  // if byte or 1-byte struct/union
+                paramFrameDisplacement++;
+            decl->setFrameDisplacement(paramFrameDisplacement);
+        }
 
-        uint16_t size = 0;
-        if (!decl->getVariableSizeInBytes(size))
-            assert(false);
-        else
-            paramFrameDisplacement += int16_t(size);
+        // If struct, check that it is defined.
+        if (fp->getType() == CLASS_TYPE && TranslationUnit::instance().getClassDef(fp->getTypeDesc()->className) == NULL)
+        {
+            errormsg("argument %u of %s() receives undefined `%s' by value",
+                     argIndex, functionId.c_str(), fp->getTypeDesc()->toString().c_str());
+            continue;
+        }
+
+        if (!formalParamIsLocalVar)
+        {
+            uint16_t size = 0;
+            if (!decl->getVariableSizeInBytes(size))
+                decl->errormsg("failed to get size of `%s'", decl->getVariableId().c_str());
+            else
+                paramFrameDisplacement += int16_t(size);
+        }
     }
 
     // Require at least one named argument before an ellipsis, as does GCC.
     //
-    if (formalParamList->endsWithEllipsis() && formalParamList->size() == 0)
+    if (formalParamList->endsWithEllipsis() && ! formalParamList->isEllipsisImplied() && formalParamList->size() == 0)
         errormsg("%s %s() uses `...' but has no named argument before it",
                  bodyStmts ? "function" : "prototype",
                  functionId.c_str());
 }
 
 
+// declareFormalParams() must have been called.
+//
 void
 FunctionDef::setBody(TreeSequence *body)
 {
@@ -286,20 +382,6 @@ TreeSequence *
 FunctionDef::getBody()
 {
     return bodyStmts;
-}
-
-
-const Scope *
-FunctionDef::getScope() const
-{
-    return scope;
-}
-
-
-Scope *
-FunctionDef::getScope()
-{
-    return scope;
 }
 
 
@@ -336,10 +418,9 @@ FunctionDef::hasSameFormalParams(const FunctionDef &fd) const
 {
     const FormalParamList *otherFormalParams = fd.formalParamList;
     if (otherFormalParams == NULL)
-    {
-        assert(false);
+        return formalParamList == NULL;
+    if (formalParamList == NULL)
         return false;
-    }
 
     if (otherFormalParams->size() != formalParamList->size())
         return false;
@@ -376,8 +457,7 @@ FunctionDef::hasSameFormalParams(const FunctionDef &fd) const
 size_t
 FunctionDef::getNumFormalParams() const
 {
-    assert(formalParamList != NULL);
-    return formalParamList->size();
+    return formalParamList ? formalParamList->size() : 0;
 }
 
 
@@ -395,6 +475,8 @@ FunctionDef::isCalled() const
 }
 
 
+// Also declares the function's formal parameters in the function's Scope object.
+//
 /*virtual*/
 void
 FunctionDef::checkSemantics(Functor &f)
@@ -408,10 +490,9 @@ FunctionDef::checkSemantics(Functor &f)
         This means the global Scope object owns 'scope'.
         When the global Scope will be destroyed, delete will be called on 'scope'.
     */
-    assert(scope == NULL);
-    scope = new Scope(&TranslationUnit::instance().getGlobalScope());
-    //cerr << "FunctionDef's top scope at " << scope << "\n";
-    assert(scope->getParent() == &TranslationUnit::instance().getGlobalScope());
+    assert(getScope() == NULL);
+    setScope(new Scope(&TranslationUnit::instance().getGlobalScope(), getLineNo()));
+    assert(getScope()->getParent() == &TranslationUnit::instance().getGlobalScope());
 
     /*  An interrupt service routine is not allowed to receive parameters,
         because it is only called by the system, which does not provide
@@ -419,6 +500,22 @@ FunctionDef::checkSemantics(Functor &f)
     */
     if (isISR && getNumFormalParams() > 0)
         errormsg("interrupt service routine %s() has parameters", functionId.c_str());
+
+    /*  Forbid _CMOC_fpir_ if the function's first visible parameter is a struct or larger than 2 bytes,
+        and the function has no hidden parameter.
+    */
+    if (firstParamReceivedInReg && !hasHiddenParam() && formalParamList->size() >= 1)
+    {
+         const TypeDesc *firstParamTD = (*formalParamList->begin())->getTypeDesc();
+         int16_t firstParamSize = TranslationUnit::instance().getTypeSize(*firstParamTD);
+         if (firstParamSize > 2 || firstParamTD->type == CLASS_TYPE)
+             errormsg("_CMOC_fpir_ not allowed on function whose first parameter is struct, union or larger than 2 bytes");
+    }
+
+    /*  main() not allowed to be static.
+    */
+    if (getId() == "main" && hasInternalLinkage())
+        errormsg("main() must not be static");
 
     /*  Declare the function's formal parameters in 'scope'.
     */
@@ -430,8 +527,10 @@ FunctionDef::checkSemantics(Functor &f)
             The function's main braces do not get their own scope. They are part of
             the function's scope.
         */
-        ScopeCreator sc(TranslationUnit::instance(), scope);
-        bodyStmts->iterate(sc);
+        {
+            ScopeCreator sc(TranslationUnit::instance(), getScope());
+            bodyStmts->iterate(sc);
+        }  // destroy ScopeCreator here so that it pops all scopes it pushed onto the TranslationUnit's stack
 
         static const bool debug = (getenv("DEBUG") != 0);
         if (debug)
@@ -445,7 +544,7 @@ FunctionDef::checkSemantics(Functor &f)
             for (vector<Tree *>::const_iterator it = bodyStmts->begin(); it != bodyStmts->end(); ++it)
             {
                 if (AssemblerStmt *asmStmt = dynamic_cast<AssemblerStmt *>(*it))
-                    asmStmt->setAssemblyOnly(scope);
+                    asmStmt->setAssemblyOnly(getScope());
                 else
                 {
                     (*it)->errormsg("body of function %s() contains statement(s) other than inline assembly",
@@ -455,6 +554,8 @@ FunctionDef::checkSemantics(Functor &f)
             }
             return;
         }
+        if (noReturnInstruction && !asmOnly)
+            errormsg("`__norts__' must be used with `asm' when defining an asm-only function");
 
         ExpressionTypeSetter ets;
         bodyStmts->iterate(ets);
@@ -462,12 +563,16 @@ FunctionDef::checkSemantics(Functor &f)
         // Check if a non-void returning function contains at least one return statement.
         // (This does not prove that all code paths have a return statement however.)
         //
+        // Do not issue a warning if the last statement in the function body is an
+        // asm{} statement, because the return value will typically be stored directly
+        // in B or D by that inline assembly code.
+        //
         if (getType() != VOID_TYPE)
         {
             ReturnStmtChecker rsc;
             bodyStmts->iterate(rsc);
-            if (rsc.numReturnStmts == 0)
-                errormsg("function '%s' is not void but does not have any return statement", functionId.c_str());
+            if (rsc.numReturnStmts == 0 && ! dynamic_cast<const AssemblerStmt *>(rsc.getNextToLastTree()))
+                warnmsg("function '%s' is not void but does not have any return statement", functionId.c_str());
         }
 
         // Check ID-labeled statements.
@@ -483,15 +588,16 @@ void
 FunctionDef::allocateLocalVariables()
 {
     assert(minDisplacement > 0);  // must be first call
-    assert(scope != NULL);
-    assert(scope->getParent() != NULL);  // function's scope is not the global one
+    assert(getScope() != NULL);
+    assert(getScope()->getParent() != NULL);  // function's scope is not the global one
 
     if (bodyStmts == NULL)
         return;  // no body: nothing to do
 
-    assert(bodyStmts->getScope() == NULL);  // function's top-level braced scope is 'scope'
+    assert(bodyStmts->getScope() == NULL);  // function's top-level braced scope is the one returned by getScope()
 
-    minDisplacement = scope->allocateLocalVariables(0, true);
+    numLocalVariablesAllocated = 0;
+    minDisplacement = getScope()->allocateLocalVariables(0, true, numLocalVariablesAllocated);
 
     assert(minDisplacement <= 0);
 }
@@ -501,8 +607,8 @@ FunctionDef::allocateLocalVariables()
 CodeStatus
 FunctionDef::emitCode(ASMText &out, bool lValue) const
 {
-    assert(scope != NULL);
-    assert(scope->getParent() != NULL);  // function's scope is not the global one
+    assert(getScope() != NULL);
+    assert(getScope()->getParent() != NULL);  // function's scope is not the global one
 
     if (bodyStmts == NULL)
         return true;
@@ -518,15 +624,38 @@ FunctionDef::emitCode(ASMText &out, bool lValue) const
     out.emitFunctionStart(functionId, getLineNo());
     out.emitLabel(functionLabel);
 
-    // A stack frame is only needed if the function has parameters or
-    // if it has local variables. There is no stack frame if the source
-    // code explicitly forbids it with the 'asm' keyword.
+    if (isAssemblyOnly())
+        out.emitComment("Assembly-only function.");
+    else
+        out.emitComment("Calling convention: " + string(firstParamReceivedInReg ? "First parameter received in register" : "Default"));
+
+    // A stack frame is only needed if the function:
+    // - receives parameters or declares local variables or returns a struct (including a real number);
+    // and:
+    // - is not an asm-only function (the point of which is to forego the stack frame).
     //
-    bool needStackFrame = !asmOnly && (getNumFormalParams() > 0 || minDisplacement < 0);
+    // (We use numLocalVariablesAllocated to determine if this functoin has
+    // local variables, instead of minDisplacement < 0, because minDisplacement
+    // can be 0 if all locals are empty structs.)
+    //
+    bool needStackFrame = !asmOnly && (getNumFormalParams() > 0 || numLocalVariablesAllocated > 0 || getType() == CLASS_TYPE);
+
+    if (needStackFrame)
+        out.ins("PSHS", "U");
+
+    // Function-entry stack check, if enabled. This is the point where it is done under OS-9.
+    if (!asmOnly && getFunctionStackSpace() > 0)
+    {
+        // Call a utility routine that receives it argument as a word that follows the call.
+        // This avoids trashing a register.
+        // The routine (see crt.asm) knows about the argument and adjusts the stacked return address accordingly.
+        //
+        callUtility(out, "_stkcheck");
+        out.ins("FDB", "-" + wordToString(getFunctionStackSpace() - minDisplacement), "argument for _stkcheck");
+    }
 
     if (needStackFrame)
     {
-        out.ins("PSHS", "U");
         out.ins("LEAU", ",S");  // takes 4 cycles and 2 bytes; TFR U,S takes 6 cycles
         if (minDisplacement < 0)
             out.ins("LEAS", intToString(minDisplacement) + ",S");
@@ -534,13 +663,81 @@ FunctionDef::emitCode(ASMText &out, bool lValue) const
 
     if (TranslationUnit::instance().isStackOverflowCheckingEnabled())
     {
-        out.ins("LBSR", "check_stack_overflow");
+        callUtility(out, "check_stack_overflow");
+    }
+
+    // If first argument received in register, spill it in stack.
+
+    if (firstParamReceivedInReg)
+    {
+        assert(formalParamList);
+        if (hasHiddenParam())
+        {
+            const Declaration *decl = getScope()->getVariableDeclaration("$hidden", false);
+            assert(decl);
+            Register reg = TranslationUnit::instance().getFirstParameterRegister(false);
+            out.ins(string("ST") + getRegisterName(reg), decl->getFrameDisplacementArg(0), "spill hidden parameter");
+        }
+        else if (formalParamList->size() > 0)
+        {
+            const FormalParameter *fp = dynamic_cast<FormalParameter *>(*formalParamList->begin());
+            assert(fp != NULL);
+            const Declaration *decl = getScope()->getVariableDeclaration(fp->getId(), false);
+            assert(decl);
+            Register reg = TranslationUnit::instance().getFirstParameterRegister(fp->getType() == BYTE_TYPE);
+            out.ins(string("ST") + getRegisterName(reg), decl->getFrameDisplacementArg(0),
+                                    "spill parameter `" + fp->getId() + "', declared at " + decl->getLineNo());
+        }
+    }
+
+    // Issue comments indicating where the parameters and locals are allocated.
+
+    vector<string> declarationIds;
+    getScope()->getDeclarationIds(declarationIds, true);
+    if (declarationIds.size() > 0 && !isAssemblyOnly())
+    {
+        map<int16_t, string> paramsMap, localsMap;  // key: offset from frame ptr; value: description
+
+        // Fill the maps from the non-extern declarationIds.
+        //
+        for (vector<string>::const_iterator it = declarationIds.begin(); it != declarationIds.end(); ++it)
+        {
+            const Declaration *decl = getScope()->getVariableDeclaration(*it, false, true);  // look in sub-scopes
+            assert(decl);
+            if (decl->isExtern || decl->isLocalStatic())
+                continue;
+            uint16_t sizeInBytes = 0;
+            if (!decl->getVariableSizeInBytes(sizeInBytes, false))
+                assert(!"Declaration::getVariableSizeInBytes() failed");
+            stringstream ss;
+            ss << setw(8) << decl->getFrameDisplacementArg(0)
+               << ": " << setw(4) << sizeInBytes << " byte" << (sizeInBytes == 1 ? " " : "s")
+               << ": " << *it
+               << ": " << decl->getTypeDesc()->toString();
+            int16_t displacement = decl->getFrameDisplacement(0);
+            (displacement >= 0 ? paramsMap : localsMap)[displacement] = ss.str();
+        }
+
+        // Emit the comments from the maps.
+        //
+        if (paramsMap.size() > 0)
+        {
+            out.emitComment("Formal parameter(s):");
+            for (auto const &pair : paramsMap)
+                out.emitComment(pair.second);
+        }
+        if (localsMap.size() > 0)
+        {
+            out.emitComment("Local non-static variable(s):");
+            for (auto const &pair : localsMap)
+                out.emitComment(pair.second);
+        }
     }
 
     // Generate code for the body:
 
     TranslationUnit::instance().setCurrentFunctionEndLabel(endLabel);
-    TranslationUnit::instance().pushScope(scope);
+    TranslationUnit::instance().pushScope(const_cast<Scope *>(getScope()));  // const_cast should be removed...
     bool success = bodyStmts->emitCode(out, false);
     out.emitLabel(endLabel, "end of " + functionId + "()");
 
@@ -551,6 +748,7 @@ FunctionDef::emitCode(ASMText &out, bool lValue) const
 
     if (needStackFrame)
     {
+        assert(!asmOnly);
         out.ins("LEAS", ",U");  // takes 4 cycles and 2 bytes; TFR U,S takes 6 cycles
         if (isISR)
         {
@@ -561,9 +759,12 @@ FunctionDef::emitCode(ASMText &out, bool lValue) const
             out.ins("PULS", "U,PC");
     }
     else
-        out.ins(isISR ? "RTI" : "RTS");
+    {
+        if (!noReturnInstruction)
+            out.ins(isISR ? "RTI" : "RTS");
+    }
 
-    out.emitFunctionEnd();
+    out.emitFunctionEnd(functionId, getLineNo());
 
     return success;
 }
@@ -592,10 +793,10 @@ FunctionDef::getFormalParamList() const
 bool
 FunctionDef::isAcceptableNumberOfArguments(size_t numArguments) const
 {
-    if (formalParamList->endsWithEllipsis())
-        return numArguments >= formalParamList->size();
+    if (formalParamList == NULL)
+        return numArguments == 0;
 
-    return numArguments == formalParamList->size();
+    return formalParamList->isAcceptableNumberOfArguments(numArguments);
 }
 
 
@@ -643,7 +844,35 @@ FunctionDef::isInterruptServiceRoutine() const
 
 
 bool
+FunctionDef::isFunctionReceivingFirstParamInReg() const
+{
+    return firstParamReceivedInReg;
+}
+
+
+bool
 FunctionDef::isAssemblyOnly() const
 {
     return asmOnly;
+}
+
+
+bool
+FunctionDef::hasInternalLinkage() const
+{
+    return isStatic;
+}
+
+
+uint16_t
+FunctionDef::getFunctionStackSpace()
+{
+    return functionStackSpace;
+}
+
+
+void
+FunctionDef::setFunctionStackSpace(uint16_t numBytes)
+{
+    functionStackSpace = numBytes;
 }

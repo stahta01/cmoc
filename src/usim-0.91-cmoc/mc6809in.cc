@@ -391,13 +391,14 @@ void mc6809::cmpb(void)
 void mc6809::help_cmp(Byte x)
 {
 	Byte	m = fetch_operand();
+
+	// Taken from SET_V8() in XRoar 0.35:
+	const unsigned out = x - m;
+	enum { CC_V = 0x02 };
+	const unsigned xroarV = (((x)^(m)^(out)^((out)>>1))>>6) & CC_V;
+
 	Byte	carry = (x < m);
 	m = (~m) + 1;
-
-	{
-		Byte	t = (x & 0x7f) + (m & 0x7f);
-		cc.bit.v = btst(t, 7);
-	}
 
 	{
 		Word	t = Word(x) + Word(m);
@@ -405,7 +406,7 @@ void mc6809::help_cmp(Byte x)
 		x = t & 0xff;
 	}
 
-	cc.bit.v ^= cc.bit.c;
+	cc.bit.v = (xroarV == CC_V);
 	cc.bit.c = carry;
 	cc.bit.n = btst(x, 7);
 	cc.bit.z = !x;

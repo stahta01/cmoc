@@ -1,4 +1,4 @@
-/*  $Id: StringLiteralExpr.h,v 1.8 2016/09/15 03:34:57 sarrazip Exp $
+/*  $Id: StringLiteralExpr.h,v 1.12 2021/01/09 19:21:01 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -31,7 +31,8 @@ public:
 
     virtual ~StringLiteralExpr();
 
-    std::string getLiteral() const;
+    const std::string &getLiteral() const;  // before backslash interpretation
+    const std::string &getValue() const;  // after backslash interpretation
     std::string getLabel() const;
     void setLabel(const std::string &newLabel);
     std::string getArg() const;
@@ -43,7 +44,19 @@ public:
     std::string decodeEscapedLiteral(bool &hexEscapeOutOfRange,
                                      bool &octalEscapeOutOfRange) const;
     size_t getDecodedLength() const;
-    static void emitStringLiteralDefinition(ASMText &out, const std::string &value);
+    bool wasEmitted() const { return emitted; }
+
+    // Emits FCC and FCB directives that represent the contents of 'value',
+    // which must be a string where the backslash escapes have been resolved,
+    // e.g., an actual character 13 where the original literal specified \r.
+    // Ends with an FCB 0 directive that represents the C string terminator.
+    //
+    static void emitStringLiteralDefinition(ASMText &out, const std::string &value, bool emitTerminatingNullByte = true);
+
+    // Calls the static emitStringLiteralDefinition() with the post-backslash
+    // value of this literal.
+    //
+    void emitStringLiteralDefinition(ASMText &out) const;
 
     virtual bool isLValue() const { return false; }
 
@@ -54,7 +67,9 @@ private:
                                         bool &octalEscapeOutOfRange) const;
 
     std::string stringLiteral;  // contents of the literal (between the quotes, before backslash interpretation)
-    std::string stringLabel;
+    std::string stringValue;  // contents of string (between the quotes, after backslash interpretation)
+    std::string asmLabel;
+    mutable bool emitted;  // true when at least one use of this literal has been recorded
 
 };
 

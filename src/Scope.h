@@ -1,4 +1,4 @@
-/*  $Id: Scope.h,v 1.5 2016/09/18 06:10:52 sarrazip Exp $
+/*  $Id: Scope.h,v 1.12 2022/03/03 23:41:43 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -34,7 +34,7 @@ public:
     // Calls addSubScope(this) on _parent if _parent is not null.
     // _parent thus becomes owner of this Scope.
     //
-    Scope(Scope *_parent);
+    Scope(Scope *_parent, const std::string &_startLineNo);
 
     // Calls delete on each sub-scope of this scope.
     //
@@ -49,6 +49,20 @@ public:
 
     Scope *getParent();
 
+    class DeclarationFunctor
+    {
+    public:
+        virtual ~DeclarationFunctor() {}
+        virtual bool operator()(Declaration &decl) = 0;
+    };
+
+    // Calls operator(Declaration &) on f for each Declaration object in this scope.
+    // If any of these calls returns false, the iteration stops.
+    // processSubScopes: If true, iterates through the sub-scopes.
+    // Returns true if the iteration was stopped by the function returning false.
+    //
+    bool iterateDeclarations(DeclarationFunctor &f, bool processSubScopes) const;
+
     // Allocate a frame displacement to each Declaration in this scope's
     // declaration table, except those that represent a global array with
     // an initializer.
@@ -56,13 +70,17 @@ public:
     // they were added by declareVariable().
     // The declaractions in the sub-scopes are only processed if
     // 'processSubScopes' is true.
+    // displacement: Typically 0. (This method is recursive and the recursions
+    //               will typically pass a negative value.)
+    // numLocalVariablesAllocated: Caller must initialize this to 0.
     //
-    int16_t allocateLocalVariables(int16_t displacement, bool processSubScopes);
+    int16_t allocateLocalVariables(int16_t displacement, bool processSubScopes, size_t &numLocalVariablesAllocated);
 
     // Keeps a copy of the Declaration address.
     // This Scope object does NOT own the Declaration objects.
-    // Returns false if a declaration of the same ID is already present
+    // Returns false if 'd' is a non-extern declaration and another non-extern declaration of the same ID is already present
     // in this Scope.
+    // Returns false if there is already a declaration of the same ID but they are not exactly of the same type.
     // Returns true otherwise ('d' has been added to this Scope's
     // declaration table).
     //
@@ -71,13 +89,15 @@ public:
     // Returns the Declaration object belonging to this Scope
     // whose ID is the given one.
     // Only consults the ancestors of this Scope if 'lookInAncestors' is true.
+    // Only consults the sub-scopes of this Scope if 'processSubScopes' is true.
     //
     Declaration *getVariableDeclaration(const std::string &id,
-                                        bool lookInAncestors) const;
+                                        bool lookInAncestors,
+                                        bool processSubScopes = false) const;
 
     // Returns the identifiers of all declarations in this scope.
     //
-    void getDeclarationIds(std::vector<std::string> &dest) const;
+    void getDeclarationIds(std::vector<std::string> &dest, bool processSubScopes) const;
 
     // Calls operator delete on each Declaration object passed to
     // this Scope through calls to declareVariable().
@@ -89,23 +109,28 @@ public:
 
     const ClassDef *getClassDef(const std::string &className) const;
 
-    /** @param  f               functor that accepts a reference to a
-                                ClassDef object
+    /** @param  f               Functor that accepts a reference to a ClassDef object
+                                and returns a boolean (true to continue the iteration,
+                                false to stop it).
+        @returns                False if the function requested that the iteration stop.
     */
     template <class F>
-    void forEachClassDef(F &f);
+    bool forEachClassDef(F &f);
 
     virtual bool isLValue() const { return false; }
 
 private:
 
+    typedef std::vector< std::pair<std::string, Declaration *> > DeclarationTable;
+
     Scope *parent;  // NULL if global scope; 'parent' not owned by this Scope
     std::vector<Scope *> subScopes;  // OWNS the pointed objects
-    std::vector< std::pair<std::string, Declaration *> > declTable;
+    DeclarationTable declTable;
                                 // does not own the pointed objects
                                 // no two entries may have same string value
     std::map<std::string, ClassDef *> classTable;
                                 // owns the pointed objects
+    std::string startLineNo;
 
     // Forbidden operations:
     Scope(const Scope &x);
@@ -115,12 +140,14 @@ private:
 
 
 template <class F>
-void
+bool
 Scope::forEachClassDef(F &f)
 {
     for (std::map<std::string, ClassDef *>::iterator it = classTable.begin();
                                                 it != classTable.end(); it++)
-        f(*it->second);
+        if (! f(*it->second))
+            return false;
+    return true;
 }
 
 

@@ -1,4 +1,4 @@
-/*  $Id: DeclarationSequence.cpp,v 1.9 2016/08/27 00:53:50 sarrazip Exp $
+/*  $Id: DeclarationSequence.cpp,v 1.19 2022/07/07 16:14:08 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -49,35 +49,74 @@ void DeclarationSequence::processDeclarator(Declarator *declarator, const Declar
         return;
     const TypeDesc *specificTypeDesc = getTypeDesc();
 
-    // Apply asterisks specified in the Declarator, unless the declarator
-    // declares a function pointer.
-    // For example: if the declaration is of type char **, then getTypeDesc()
-    // returned type "char", and declarator->pointerLevel == 2.
+    // Apply asterisks specified in the Declarator.
+    // For example: if the declaration is of type char **, then specificTypeDesc
+    // currently is type "char", and declarator->getPointerLevel() == 2.
     // After the call to processPointerLevel(), specificTypeDesc will be "char **".
     //
-    if (! declarator->isFunctionPointer())
-        specificTypeDesc = declarator->processPointerLevel(specificTypeDesc);
+    // If the declarator is a function pointer, specificTypeDesc will end up
+    // representing the return type.
+    //
+    // If dsl says const, then we apply that before calling processPointerLevel().
+    // Example: If the program declared "const int * const ptr;" then
+    //          dsl.isConstant() is true to represent the 1st const,
+    //          while declarator->typeQualifierBitFieldVector contains CONST_BIT to represent
+    //          the asterisk and the 2nd const.
+    //          specificTypeDesc starts as "int".
+    //          We first call getConst() to go from "int" to "const int".
+    //          Then we call processPointerLevel() to go to "const int * const".
+    //
+    if (dsl.isConstant())
+        specificTypeDesc = TranslationUnit::getTypeManager().getConst(specificTypeDesc);
+    specificTypeDesc = declarator->processPointerLevel(specificTypeDesc);
 
-    //cout << "# DeclarationSequence::processDeclarator: specificTypeDesc='" << *specificTypeDesc
-    //     << "', " << declarator->getId() << "\n";
+    /*cout << "# DeclarationSequence::processDeclarator: specificTypeDesc='" << *specificTypeDesc
+         << "', declarator='" << declarator->getId() << "'"
+         << (declarator->isFunctionPointer() ? " (func ptr)" : "")
+         << (declarator->isArray() ? " (array)" : "")
+         << ", at " << getLineNo() << "\n";*/
 
-    if (declarator->getFormalParamList() != NULL)  // if function prototype
+    if (declarator->isFunctionPrototype())  // if function prototype
     {
-        FunctionDef *fd = new FunctionDef(dsl, *declarator);
+        FunctionDef *fd = new FunctionDef(&dsl, *declarator);  // takes ownership of declarator's FormalParamList
         fd->setLineNo(declarator->getSourceFilename(), declarator->getLineNo());
         // Body of 'fd' is left null.
         addTree(fd);
     }
     else
     {
-        if (! dsl.isModifierLegalOnVariable())
-            errormsg("illegal modifier used on declaration of variable `%s'", declarator->getId().c_str());
+        if (dsl.isAssemblyOnly())
+            errormsg("modifier `asm' cannot be used on declaration of variable `%s'", declarator->getId().c_str());
+        if (dsl.hasNoReturnInstruction())
+            errormsg("modifier `__norts__' cannot be used on declaration of variable `%s'", declarator->getId().c_str());
 
-        const TypeDesc *typeDesc = (declarator->isFunctionPointer()
-                                    ? TranslationUnit::getTypeManager().getFunctionPointerType()
-                                    : specificTypeDesc);
+        const TypeDesc *td = NULL;
+        if (declarator->isFunctionPointer() || declarator->isArrayOfFunctionPointers() || declarator->getFunctionPointerLevel() > 1)
+        {
+            assert(declarator->getFormalParamList());
+            td = TranslationUnit::getTypeManager().getFunctionPointerType(specificTypeDesc,
+                                                                          *declarator->getFormalParamList(),
+                                                                          dsl.isInterruptServiceFunction(),
+                                                                          dsl.isFunctionReceivingFirstParamInReg());
+            assert(td && td->type == POINTER_TYPE);
 
-        Declaration *decl = declarator->declareVariable(typeDesc, dsl.isStaticDeclaration(), dsl.isExternDeclaration());
+            // Support pointers to pointers to functions.
+            for (size_t fpl = declarator->getFunctionPointerLevel() - 1; fpl--; )
+            {
+                td = TranslationUnit::getTypeManager().getPointerTo(td);
+                assert(td && td->type == POINTER_TYPE && td->pointedTypeDesc->type == POINTER_TYPE);
+            }
+        }
+        else
+        {
+            if (dsl.isInterruptServiceFunction())
+                errormsg("modifier `interrupt' used on declaration of variable `%s'", declarator->getId().c_str());
+            td = specificTypeDesc;
+        }
+
+        //cout << "# DeclarationSequence::processDeclarator:   declaring '" << declarator->getId() << "' with type " << td->toString() << endl;
+
+        Declaration *decl = declarator->declareVariable(td, dsl.isStaticDeclaration(), dsl.isExternDeclaration());
 
         if (decl)
             addTree(decl);

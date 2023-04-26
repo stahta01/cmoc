@@ -1,4 +1,4 @@
-/*  $Id: JumpStmt.cpp,v 1.12 2016/09/08 23:57:13 sarrazip Exp $
+/*  $Id: JumpStmt.cpp,v 1.29 2022/10/25 16:35:39 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -24,6 +24,7 @@
 #include "SemanticsChecker.h"
 #include "WordConstantExpr.h"
 #include "CastExpr.h"
+#include "Declaration.h"
 
 #include <assert.h>
 
@@ -87,7 +88,8 @@ JumpStmt::checkSemantics(Functor &f)
 
     if (jumpType == RET)
     {
-        const BasicType funcRetType = currentFunctionDef->getType();
+        const TypeDesc *funcRetTypeDesc = currentFunctionDef->getTypeDesc();
+        const BasicType funcRetType = funcRetTypeDesc->type;
         if (argument != NULL)
         {
             uint16_t value = 0;
@@ -106,12 +108,28 @@ JumpStmt::checkSemantics(Functor &f)
                 ;  // returning zero from a pointer function: fine
             else if (funcRetType == POINTER_TYPE
                     && argType == ARRAY_TYPE
-                    && *currentFunctionDef->getTypeDesc()->pointedTypeDesc == *argument->getTypeDesc()->pointedTypeDesc)
+                    && *funcRetTypeDesc->pointedTypeDesc == *argument->getTypeDesc()->pointedTypeDesc)
                 ;  // returning T[] from function that must return T *: fine
-            else if (currentFunctionDef->getTypeDesc() != argument->getTypeDesc())
-                errormsg("returning expression of type %s, which differs from function's return type (%s)",
+            else if (funcRetTypeDesc->isLong() && argument->getTypeDesc()->isByteOrWord())
+                ;  // returning char or short fro function that returns long
+            else if (funcRetType == POINTER_TYPE && CastExpr::isZeroCastToVoidPointer(*argument))
+                ;
+            else if (TypeDesc::sameTypesModuloConstAtPtrLevel(*funcRetTypeDesc, *argument->getTypeDesc())
+                     && (funcRetTypeDesc->isConstant()
+                         || (funcRetTypeDesc->type == POINTER_TYPE
+                             && funcRetTypeDesc->getPointedTypeDesc()->isConstant())
+                        )
+                     )  // returning T * from function returning const T *
+                ;
+            else if (funcRetType == POINTER_TYPE
+                        && funcRetTypeDesc->pointedTypeDesc->type == VOID_TYPE
+                        && argument->getType() == POINTER_TYPE
+                        && ! argument->getTypeDesc()->getPointedTypeDesc()->isConstant())
+                ;  // returning non-const T * from function returning (const or non-const) void *
+            else if (*funcRetTypeDesc != *argument->getTypeDesc())
+                errormsg("returning expression of type `%s', which differs from function's return type (`%s')",
                             argument->getTypeDesc()->toString().c_str(),
-                            currentFunctionDef->getTypeDesc()->toString().c_str());
+                            funcRetTypeDesc->toString().c_str());
         }
         else if (funcRetType != VOID_TYPE)
             errormsg("return without argument in a non-void function");
@@ -133,17 +151,19 @@ JumpStmt::emitCode(ASMText &out, bool lValue) const
     if (lValue)
         return false;
 
+    TranslationUnit &tu = TranslationUnit::instance();
+
     switch (jumpType)
     {
         case BRK:
         case CONT:
             {
                 const char *t = (jumpType == BRK ? "break" : "continue");
-                const BreakableLabels *b = TranslationUnit::instance().getCurrentBreakableLabels();
+                const BreakableLabels *b = tu.getCurrentBreakableLabels();
                 if (b == NULL)
                 {
                     errormsg("%s outside of a %sable statement", t, t);
-                    return false;
+                    return true;
                 }
                 if (jumpType == CONT && b->continueLabel.empty())
                     errormsg("continue statement is not supported in a switch");
@@ -156,12 +176,81 @@ JumpStmt::emitCode(ASMText &out, bool lValue) const
             {
                 if (argument != NULL)  // if value to be returned
                 {
-                    writeLineNoComment(out, "return with value");
+                    uint16_t value = 0;
+                    if (currentFunctionDef->getType() == BYTE_TYPE && argument->is8BitConstant(&value))  // if returning byte from constant
+                    {
+                        if (value == 0)
+                            out.ins("CLRB");
+                        else
+                            out.ins("LDB", "#" + wordToString(value));
+                    }
+                    else if (currentFunctionDef->getTypeDesc()->isLong())
+                    {
+                        if (argument->getTypeDesc()->isLong())
+                        {
+                            // Emit the long as an l-value, so we get its address in X.
+                            if (!argument->emitCode(out, true))
+                                return false;
+                            // Get the address where to write the long.
+                            // It has been passed to the current function as a hidden 1st parameter.
+                            out.ins("LDD", currentFunctionDef->getAddressOfReturnValue(), "address of return value");
+                            callUtility(out, "copyDWordFromXToD");
+                        }
+                        else
+                        {
+                            assert(argument->getTypeDesc()->isByteOrWord());
+                            // Emit the integer in D or B.
+                            if (!argument->emitCode(out, false))
+                                return false;
+                            if (argument->getType() == BYTE_TYPE)
+                                out.ins(argument->getConvToWordIns());
+                            // Get the address where to write the long.
+                            // It has been passed to the current function as a hidden 1st parameter.
+                            out.ins("LDX", currentFunctionDef->getAddressOfReturnValue(), "address of return value");
+                            callUtility(out, argument->isSigned() ? "initDWordFromSignedWord" : "initDWordFromUnsignedWord", "preserves X");
+                        }
+                    }
+                    else if (currentFunctionDef->getTypeDesc()->isSingle())
+                    {
+                        // Emit the struct/union as an l-value, so we get its address in X.
+                        if (!argument->emitCode(out, true))
+                            return false;
+                        out.ins("TFR", "X,D", "source float");
 
-                    if (!argument->emitCode(out, false))  // value in D
-                        return false;
+                        // Get the address where to write the struct/union.
+                        // It has been passed to the current function as a hidden 1st parameter.
+                        out.ins("LDX", currentFunctionDef->getAddressOfReturnValue(), "address of return value");
 
-                    CastExpr::emitCastCode(out, currentFunctionDef->getTypeDesc(), argument->getTypeDesc());
+                        callUtility(out, "copySingle");
+                    }
+                    else if (currentFunctionDef->getType() == CLASS_TYPE)  // if returning struct/union
+                    {
+                        writeLineNoComment(out, "return struct/union by value");
+
+                        // Emit the struct/union as an l-value, so we get its address in X.
+                        if (!argument->emitCode(out, true))
+                            return false;
+                        out.ins("PSHS", "X", "source struct/union");
+
+                        // Get the address where to write the struct/union.
+                        // It has been passed to the current function as a hidden 1st parameter.
+                        out.ins("LDX", currentFunctionDef->getAddressOfReturnValue(), "address of return value");
+
+                        uint16_t objectSize = tu.getTypeSize(*currentFunctionDef->getTypeDesc());
+                        out.ins("LDD", "#" + wordToString(objectSize), "size of " + currentFunctionDef->getTypeDesc()->toString());
+
+                        callUtility(out, "copyMem");
+                        out.ins("LEAS", "2,S", "discard copyMem argument");
+                    }
+                    else  // returning type that fits in B or D:
+                    {
+                        writeLineNoComment(out, "return with value");
+
+                        if (!argument->emitCode(out, false))  // value in B or D
+                            return false;
+
+                        CastExpr::emitCastCode(out, currentFunctionDef->getTypeDesc(), argument->getTypeDesc(), *this);
+                    }
                 }
                 string label = TranslationUnit::instance().getCurrentFunctionEndLabel();
                 if (label.empty())

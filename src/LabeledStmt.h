@@ -1,4 +1,4 @@
-/*  $Id: LabeledStmt.h,v 1.8 2016/09/15 03:34:57 sarrazip Exp $
+/*  $Id: LabeledStmt.h,v 1.9 2019/03/10 18:29:45 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -27,13 +27,6 @@ class LabeledStmt : public Tree
 {
 public:
 
-    enum Type
-    {
-        ID_LABEL,
-        CASE_LABEL,
-        DEFAULT_LABEL
-    };
-
     LabeledStmt(Tree *_caseExpr, Tree *_statement);
 
     LabeledStmt(Tree *_defaultStatement);
@@ -49,6 +42,8 @@ public:
     bool isCase() const { return id.empty() && expression; }
 
     bool isDefault() const { return id.empty() && !expression; }
+
+    bool isCaseOrDefault() const { return id.empty(); }
 
     bool isId() const { return !id.empty(); }
 

@@ -1,7 +1,7 @@
-/*  $Id: Tree.cpp,v 1.22 2016/07/24 23:03:07 sarrazip Exp $
+/*  $Id: Tree.cpp,v 1.44 2022/06/09 03:23:43 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -22,12 +22,17 @@
 #include "TranslationUnit.h"
 #include "ClassDef.h"
 #include "WordConstantExpr.h"
+#include "DWordConstantExpr.h"
+#include "RealConstantExpr.h"
+#include "StringLiteralExpr.h"
 #include "VariableExpr.h"
 #include "IdentifierExpr.h"
 #include "Declaration.h"
 #include "BinaryOpExpr.h"
 #include "UnaryOpExpr.h"
 #include "CastExpr.h"
+#include "ObjectMemberExpr.h"
+#include "TreeSequence.h"
 #include "TypeManager.h"
 
 using namespace std;
@@ -41,7 +46,8 @@ Tree::Tree()
   : scope(NULL),
     sourceFilename(::sourceFilename),
     lineno(::lineno),
-    typeDesc(TranslationUnit::getTypeManager().getVoidType())
+    typeDesc(TranslationUnit::getTypeManager().getVoidType()),
+    yieldedValueNeeded(true)
 {
     assert(typeDesc);
 }
@@ -51,7 +57,8 @@ Tree::Tree(const TypeDesc *td)
   : scope(NULL),
     sourceFilename(::sourceFilename),
     lineno(::lineno),
-    typeDesc(td)
+    typeDesc(td),
+    yieldedValueNeeded(true)
 {
     assert(typeDesc);
     assert(typeDesc->type != SIZELESS_TYPE);
@@ -175,19 +182,43 @@ Tree::getPointedTypeSize() const
     assert(typeDesc && typeDesc->isValid());
     assert(typeDesc->isPtrOrArray());
 
-    // If this tree is an array variable, get the size from its Declaration.
-    // This is necessary in the case of an array because Declaration::getVariableSizeInBytes()
-    // knows the array dimensions.
-    //
-    const VariableExpr *ve = asVariableExpr();
-    if (ve && typeDesc->type == ARRAY_TYPE)
+    if (typeDesc->type == ARRAY_TYPE)
     {
-        const Declaration *decl = ve->getDeclaration();
-        assert(decl);
-        uint16_t sizeInBytes = 0;
-        if (!decl->getVariableSizeInBytes(sizeInBytes, true))  // true means skipFirstDimensionIfArray, because we want the *pointed* size
-            assert(!"Declaration::getVariableSizeInBytes() failed");
-        return sizeInBytes;
+        // If this tree is an array variable, get the size from its Declaration.
+        // This is necessary in the case of an array because Declaration::getVariableSizeInBytes()
+        // knows the array dimensions.
+        //
+        const VariableExpr *ve = asVariableExpr();
+        if (ve)
+        {
+            const Declaration *decl = ve->getDeclaration();
+            assert(decl);
+            uint16_t sizeInBytes = 0;
+            if (!decl->getVariableSizeInBytes(sizeInBytes, true))  // true means skipFirstDimensionIfArray, because we want the *pointed* size
+                assert(!"Declaration::getVariableSizeInBytes() failed");
+            return sizeInBytes;
+        }
+
+        if (const ObjectMemberExpr *ome = dynamic_cast<const ObjectMemberExpr *>(this))
+        {
+            const ClassDef *classDef = ome->getClass();
+            assert(classDef);
+            const ClassDef::ClassMember *member = classDef->getDataMember(ome->getMemberName());
+            assert(member);
+            vector<uint16_t> dims = member->getArrayDimensions();
+
+            // The following code is similar to Declaration::getVariableSizeInBytes():
+            assert(dims.size() > 0);
+            uint16_t totalNumElements = 1;
+            for (vector<uint16_t>::const_iterator it = dims.begin() + 1; it != dims.end(); ++it)
+            {
+                uint16_t dim = *it;
+                assert(dim > 0);
+                totalNumElements *= dim;
+            }
+            uint16_t sizeInBytes = uint16_t(ome->getFinalArrayElementTypeSize()) * totalNumElements;
+            return sizeInBytes;
+        }
     }
 
     return TranslationUnit::instance().getTypeSize(*typeDesc->pointedTypeDesc);
@@ -231,7 +262,7 @@ Tree::getFinalArrayElementTypeSize() const
 
 
 // Returns true if this tree represents an unsigned expression
-// or a positive constant that can be seen as unsigned.
+// or a positive (16-bit) constant that can be seen as unsigned.
 //
 bool
 Tree::isUnsignedOrPositiveConst() const
@@ -255,7 +286,7 @@ Tree::getTypeDesc() const
 }
 
 
-string
+const string &
 Tree::getClassName() const
 {
     assert(typeDesc && typeDesc->isValid());
@@ -267,7 +298,7 @@ Tree::getClassName() const
 void
 Tree::setTypeDesc(const TypeDesc *td)
 {
-    assert(!td || td->isValid());
+    assert(td && td->isValid());
     assert(td->type != SIZELESS_TYPE);
     typeDesc = td;
 }
@@ -303,18 +334,30 @@ Tree::setPointerType(const Tree &treeOfPointedType)
 
 
 bool
-Tree::isExpressionAlwaysTrue() const
+Tree::isExpressionAlwaysTrueOrFalse(bool boolToReturnIfZero) const
 {
     uint16_t value = 0;
-    return evaluateConstantExpr(value) && value != 0;
+    if (evaluateConstantExpr(value))
+        return value == 0 ? boolToReturnIfZero : !boolToReturnIfZero;
+    if (auto dce = dynamic_cast<const DWordConstantExpr *>(this))
+        return dce->getRealValue() == 0.0f ? boolToReturnIfZero : !boolToReturnIfZero;
+    if (auto dce = dynamic_cast<const RealConstantExpr *>(this))
+        return dce->getRealValue() == 0.0f ? boolToReturnIfZero : !boolToReturnIfZero;
+    return false;
+}
+
+
+bool
+Tree::isExpressionAlwaysTrue() const
+{
+    return isExpressionAlwaysTrueOrFalse(false);
 }
 
 
 bool
 Tree::isExpressionAlwaysFalse() const
 {
-    uint16_t value = 0;
-    return evaluateConstantExpr(value) && value == 0;
+    return isExpressionAlwaysTrueOrFalse(true);
 }
 
 
@@ -342,6 +385,26 @@ Tree::warnmsg(const char *fmt, ...) const
     va_list ap;
     va_start(ap, fmt);
     diagnoseVa("warning", getLineNo(), fmt, ap);
+    va_end(ap);
+}
+
+
+void
+Tree::errormsg(const Tree *optionalTree, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    diagnoseVa("error", optionalTree ? optionalTree->getLineNo() : getSourceLineNo(), fmt, ap);
+    va_end(ap);
+}
+
+
+void
+Tree::warnmsg(const Tree *optionalTree, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    diagnoseVa("warning", optionalTree ? optionalTree->getLineNo() : getSourceLineNo(), fmt, ap);
     va_end(ap);
 }
 
@@ -387,10 +450,6 @@ Tree::evaluateConstantExpr(uint16_t &result) const
 uint16_t
 Tree::evaluateConstantExpr() const
 {
-    BasicType type = getTypeDesc()->type;
-    if (type != WORD_TYPE && type != BYTE_TYPE)
-        throw -1;
-
     if (const WordConstantExpr *wce = dynamic_cast<const WordConstantExpr *>(this))
         return wce->getWordValue();
 
@@ -438,6 +497,10 @@ Tree::evaluateConstantExpr() const
             if (leftExpr.isSigned())
                 return int16_t(left) >> right;
             return uint16_t(left) >> right;
+        case BinaryOpExpr::EQUALITY:
+            return left == right;
+        case BinaryOpExpr::INEQUALITY:
+            return left != right;
         default:
             throw -1;
         }
@@ -473,12 +536,15 @@ Tree::evaluateConstantExpr() const
 
     if (const CastExpr *castExpr = dynamic_cast<const CastExpr *>(this))
     {
+        if (! castExpr->getTypeDesc()->isByteOrWord())
+            throw -1;  // casting to long is not considered constant b/c result would not necessarily fit uint16_t
+
         uint16_t sub = castExpr->getSubExpr()->evaluateConstantExpr();  // may throw
 
         switch (castExpr->getType())
         {
         case BYTE_TYPE:
-            return sub & 0xFF;
+            return castExpr->isSigned() ? ((int16_t) (int8_t) sub) : (sub & 0xFF);
         default:
             return sub;
         }
@@ -486,6 +552,8 @@ Tree::evaluateConstantExpr() const
 
     if (const IdentifierExpr *ie = dynamic_cast<const IdentifierExpr *>(this))
     {
+        if (!ie->isEnumeratorName())
+            throw -1;
         uint16_t value;
         if (TranslationUnit::getTypeManager().getEnumeratorValue(ie->getId(), value))
             return value;
@@ -496,25 +564,100 @@ Tree::evaluateConstantExpr() const
 
 
 bool
-Tree::is8BitConstant() const
+Tree::isNumericalLiteral() const
 {
+    if (dynamic_cast<const DWordConstantExpr *>(this))
+        return true;
+    if (dynamic_cast<const RealConstantExpr *>(this))
+        return true;
+
+    uint16_t dummy;
+    if (evaluateConstantExpr(dummy))
+        return true;
+
+    // If --no-relocatable has NOT been specified, no other cases are
+    // considered to be numerical literals.
+    //
+    if (TranslationUnit::instance().isRelocatabilitySupported())
+        return false;
+
+    // Check for identifier that designates a global array name.
+    //
+    if (const IdentifierExpr *ie = dynamic_cast<const IdentifierExpr *>(this))
+    {
+        const Declaration *globalDeclaration = TranslationUnit::instance().getGlobalScope().getVariableDeclaration(ie->getId(), false);
+        if (globalDeclaration)
+            return globalDeclaration->getTypeDesc()->isArray();
+        return ie->isFuncAddrExpr();
+    }
+
+    return false;
+}
+
+
+bool
+Tree::isCastToMultiByteType() const
+{
+    if (const CastExpr *castExpr = dynamic_cast<const CastExpr *>(this))
+    {
+        return castExpr->getTypeSize() > 1;
+    }
+    return false;
+}
+
+
+bool
+Tree::is8BitConstant(uint16_t *valuePtr) const
+{
+    if (isCastToMultiByteType())
+        return false;
+
     uint16_t value = 0;
     if (! evaluateConstantExpr(value))
         return false;
     if (value <= 255)
+    {
+        if (valuePtr != NULL)
+            *valuePtr = value;
         return true;
+    }
 
     // 0xFFB0 is -80 when cast to int16_t, but if the tree is marked UNsigned,
     // it is normally because the user wrote 0xFFB0 or 65456 and not -80.
     //
     if ((int16_t) value >= -128 && (int16_t) value < 0 && isSigned())
+    {
+        if (valuePtr != NULL)
+            *valuePtr = uint8_t(value);
         return true;
+    }
     return false;
 }
 
 
-// Destroys a tree pointer if it points to a tree to be replaced,
-// then assigns a new address to this pointer.  Does nothing otherwise.
+bool
+Tree::fits8Bits() const
+{
+    return getType() == BYTE_TYPE || is8BitConstant(); 
+}
+
+
+bool
+Tree::fits8BitsWithSignedness() const
+{
+    uint16_t value = 0;
+    if (is8BitConstant(&value))
+    {
+        if (isSigned())
+            return (int16_t) value >= -128 && (int16_t) value <= 127;  // e.g., 255 is constant that fits 8 bits, but does not fit signed char type
+        return (int16_t) value >= 0;  // reject -128..-1 if unsigned type
+    }
+    return getType() == BYTE_TYPE;
+}
+
+
+// Calls delete on a tree pointer ('member') if it points to a tree to be replaced ('oldAddr'),
+// then assigns 'newAddr' to that pointer ('member').  Does nothing otherwise.
 //
 bool
 Tree::deleteAndAssign(Tree *&member, Tree *oldAddr, Tree *newAddr)
@@ -526,4 +669,126 @@ Tree::deleteAndAssign(Tree *&member, Tree *oldAddr, Tree *newAddr)
         return true;
     }
     return false;
+}
+
+
+bool
+Tree::definesOnlyAMatrixOfCharsAndHasInitializer(const TypeDesc &varTypeDesc) const
+{
+    if (!varTypeDesc.isArray())
+        return false;
+
+    const TypeDesc *finalArrayTD = varTypeDesc.getFinalArrayType();
+    if (finalArrayTD->type != BYTE_TYPE)
+        return false;
+
+    const TreeSequence *seq = dynamic_cast<const TreeSequence *>(this);
+    if (seq == NULL)
+        return false;  // not supposed to happen
+
+    return seq->isTreeSequenceWithOnlyStringLiterals();
+}
+
+
+bool
+Tree::isArrayWithOnlyNumericalLiteralInitValues(const TypeDesc &varTypeDesc) const
+{
+    if (!varTypeDesc.isArray())
+        return false;
+
+    if (dynamic_cast<const StringLiteralExpr *>(this) && varTypeDesc.isArrayOfChar())
+        return true;  // passes for an array of byte integers
+
+    const TreeSequence *seq = dynamic_cast<const TreeSequence *>(this);
+    if (seq == NULL)
+        return false;
+
+    return seq->isTreeSequenceWithOnlyNumericalLiterals();
+}
+
+
+bool
+Tree::isStructWithOnlyNumericalLiteralInitValues(const TypeDesc &varTypeDesc) const
+{
+    if (!varTypeDesc.isStruct())
+        return false;
+
+    const TreeSequence *seq = dynamic_cast<const TreeSequence *>(this);
+    if (seq == NULL)
+        return false;
+
+    return seq->isTreeSequenceWithOnlyNumericalLiterals();
+}
+
+
+bool
+Tree::isStaticallyInitializable(const TypeDesc &varTypeDesc) const
+{
+    if (definesOnlyAMatrixOfCharsAndHasInitializer(varTypeDesc))
+        return true;
+    
+    if (isArrayWithOnlyNumericalLiteralInitValues(varTypeDesc))
+        return true;
+
+    uint16_t initValue = 0;
+    if (evaluateConstantExpr(initValue))
+        return true;
+    
+    if (dynamic_cast<const DWordConstantExpr *>(this))
+        return true;
+
+    if (dynamic_cast<const RealConstantExpr *>(this))
+        return true;
+
+    // Check for array or struct initializers.
+    if (const TreeSequence *seq = dynamic_cast<const TreeSequence *>(this))
+    {
+        if (varTypeDesc.type == CLASS_TYPE)  // if struct
+        {
+            const ClassDef *cl = TranslationUnit::instance().getClassDef(varTypeDesc.className);
+            assert(cl && cl->getType() == CLASS_TYPE);
+
+            size_t memberIndex = 0;
+            for (vector<Tree *>::const_iterator it = seq->begin(); it != seq->end(); ++it, ++memberIndex)
+            {
+                const ClassDef::ClassMember *member = cl->getDataMember(memberIndex);
+                if (member == NULL)
+                {
+                    // Tolerate having more expressions in 'seq' than data members.
+                    continue;
+                }
+
+                if (! (*it)->isStaticallyInitializable(*member->getTypeDesc()))
+                    return false;
+            }
+            return true;
+        }
+        if (varTypeDesc.type == ARRAY_TYPE)
+        {
+            const TypeDesc *arrayElemTypeDesc = varTypeDesc.getPointedTypeDesc();
+            for (vector<Tree *>::const_iterator it = seq->begin(); it != seq->end(); ++it)
+            {
+                if (! (*it)->isStaticallyInitializable(*arrayElemTypeDesc))
+                    return false;
+            }
+            return true;
+        }
+        return false;  // neither struct nor array
+    }
+
+    return false;  // other types of trees
+}
+
+
+void
+Tree::setYieldedValueNeeded(bool needed)
+{
+    yieldedValueNeeded = needed;
+}
+
+
+bool
+Tree::isYieldedValueNeeded() const
+{
+    return yieldedValueNeeded;
 }

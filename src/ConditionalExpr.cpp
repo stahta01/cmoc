@@ -1,4 +1,4 @@
-/*  $Id: ConditionalExpr.cpp,v 1.9 2016/06/21 04:28:52 sarrazip Exp $
+/*  $Id: ConditionalExpr.cpp,v 1.11 2022/06/09 16:44:39 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -19,6 +19,7 @@
 
 #include "ConditionalExpr.h"
 
+#include "BinaryOpExpr.h"
 #include "TranslationUnit.h"
 
 using namespace std;
@@ -43,16 +44,16 @@ ConditionalExpr::~ConditionalExpr()
 
 
 void
-ConditionalExpr::promoteIfNeeded(ASMText &out, const Tree &exprToPromote, const Tree &otherExpr)
+ConditionalExpr::promoteIfNeeded(ASMText &out, const TypeDesc &typeToPromote, const TypeDesc &targetTypeDesc)
 {
-    if (exprToPromote.getTypeDesc()->isPtrOrArray())
-        return;  // both expressions are ptr/array, so promotion needed
+    if (typeToPromote.isPtrOrArray())
+        return;
 
     const TranslationUnit &tu = TranslationUnit::instance();
-    if (tu.getTypeSize(*exprToPromote.getTypeDesc()) < tu.getTypeSize(*otherExpr.getTypeDesc()))
+    if (tu.getTypeSize(typeToPromote) < tu.getTypeSize(targetTypeDesc))
     {
-        const char *extendIns = (exprToPromote.getTypeDesc()->isSigned ? "SEX" : "CLRA");  // as in C
-        out.ins(extendIns, "", "cast from byte (conditional expression)");
+        const char *extendIns = (typeToPromote.getConvToWordIns());  // as in C
+        out.ins(extendIns, "", "promote from byte (conditional expression)");
     }
 }
 
@@ -67,29 +68,29 @@ ConditionalExpr::emitCode(ASMText &out, bool lValue) const
             << " " << trueExpr->getType()
             << " " << falseExpr->getType()
             << endl;*/
-    if (!condition->emitCode(out, false))  // condition is r-value
+
+    condition->writeLineNoComment(out, "conditional expression");
+
+    string trueLabel = TranslationUnit::genLabel('L');
+    string falseLabel = TranslationUnit::genLabel('L');
+    string endLabel = TranslationUnit::genLabel('L');
+
+    if (!BinaryOpExpr::emitBoolJumps(out, condition, trueLabel, falseLabel))
         return false;
 
-    string falseLabel = TranslationUnit::genLabel('L');
-    if (condition->getType() == BYTE_TYPE)
-        out.ins("TSTB");
-    else
-        out.emitCMPDImmediate(0);
-    out.ins("LBEQ", falseLabel, "if conditional expression is false");
-    
+    out.emitLabel(trueLabel);
     if (!trueExpr->emitCode(out, lValue))
         return false;
 
-    promoteIfNeeded(out, *trueExpr, *falseExpr);
+    promoteIfNeeded(out, *trueExpr->getTypeDesc(), *falseExpr->getTypeDesc());
 
-    string endLabel = TranslationUnit::genLabel('L');
     out.ins("LBRA", endLabel, "end of true expression of conditional");
 
     out.emitLabel(falseLabel);
     if (!falseExpr->emitCode(out, lValue))
         return false;
 
-    promoteIfNeeded(out, *falseExpr, *trueExpr);
+    promoteIfNeeded(out, *falseExpr->getTypeDesc(), *trueExpr->getTypeDesc());
 
     out.emitLabel(endLabel);
     return true;

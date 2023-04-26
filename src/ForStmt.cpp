@@ -1,4 +1,4 @@
-/*  $Id: ForStmt.cpp,v 1.8 2016/05/06 03:42:54 sarrazip Exp $
+/*  $Id: ForStmt.cpp,v 1.12 2018/02/02 02:55:59 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -49,6 +49,16 @@ ForStmt::~ForStmt()
 
 
 /*virtual*/
+void
+ForStmt::checkSemantics(Functor &)
+{
+    if (condition && condition->getType() == CLASS_TYPE && !condition->isRealOrLong())
+        condition->errormsg("invalid use of %s as condition of for statement",
+                            condition->getTypeDesc()->isUnion ? "union" : "struct");
+}
+
+
+/*virtual*/
 CodeStatus
 ForStmt::emitCode(ASMText &out, bool lValue) const
 {
@@ -75,6 +85,9 @@ ForStmt::emitCode(ASMText &out, bool lValue) const
 }
 
 
+// The code to evaluate condition is emitted after the loop body, instead of before,
+// to save one branch instruction per iteration.
+//
 CodeStatus
 ForStmt::emitInScope(ASMText &out,
                      const string &bodyLabel, const string &conditionLabel,

@@ -1,4 +1,4 @@
-/*  $Id: VariableExpr.cpp,v 1.12 2016/07/24 23:03:07 sarrazip Exp $
+/*  $Id: VariableExpr.cpp,v 1.21 2022/06/05 04:06:08 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -103,10 +103,7 @@ VariableExpr::checkSemantics(Functor &f)
     SemanticsChecker &sem = dynamic_cast<SemanticsChecker &>(f);
     TranslationUnit &tu = TranslationUnit::instance();
     const FunctionDef *curFD = sem.getCurrentFunctionDef();
-    if (!curFD)
-        curFD = tu.getFunctionDef("main");
-    assert(curFD);
-    tu.registerFunctionCall(curFD->getId(), id);
+    tu.registerFunctionCall(curFD ? curFD->getId() : "main", id);
 }
 
 
@@ -133,6 +130,7 @@ VariableExpr::emitCode(ASMText &out, bool lValue) const
             errormsg("reference to unknown function %s()", id.c_str());
             return true;
         }
+
         out.ins("LEAX", fd->getLabel() + ",PCR", "address of " + id + "(), defined at " + fd->getLineNo());
         if (!lValue)
             out.ins("TFR", "X,D", "as r-value");
@@ -149,14 +147,14 @@ VariableExpr::emitCode(ASMText &out, bool lValue) const
             return true;
         }
 
-        out.ins("LEAX", getFrameDisplacementArg(), "address of array " + getId());
+        out.ins("LEAX", getFrameDisplacementArg(), "address of array `" + getId() + "`");
         out.ins("TFR", "X,D", "as r-value");
         return true;
     }
-    else if (getType() == CLASS_TYPE && !lValue)
+    if (getType() == CLASS_TYPE && !lValue)
     {
-        errormsg("cannot use variable `%s', of type struct `%s', as an r-value",
-                getId().c_str(), getTypeDesc()->className.c_str());
+        errormsg("cannot use variable `%s', of type `%s', as an r-value",
+                 getId().c_str(), getTypeDesc()->toString().c_str());
         return true;
     }
 
@@ -164,7 +162,7 @@ VariableExpr::emitCode(ASMText &out, bool lValue) const
     out.ins(
             (lValue ? "LEAX" : getLoadInstruction(getType())),
             getFrameDisplacementArg(),
-            "variable " + getId() + ", declared at " + declaration->getLineNo());
+            "variable `" + getId() + "', declared at " + declaration->getLineNo());
 
     return true;
 }

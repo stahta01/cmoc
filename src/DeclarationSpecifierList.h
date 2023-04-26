@@ -1,4 +1,4 @@
-/*  $Id: DeclarationSpecifierList.h,v 1.9 2016/07/24 23:03:06 sarrazip Exp $
+/*  $Id: DeclarationSpecifierList.h,v 1.13 2019/06/22 03:35:44 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -31,9 +31,13 @@ public:
     {
         TYPEDEF_SPEC,
         INTERRUPT_SPEC,
+        FUNC_RECEIVES_FIRST_PARAM_IN_REG_SPEC,
         ASSEMBLY_ONLY_SPEC,
         EXTERN_SPEC,
         STATIC_SPEC,
+        NO_RETURN_INSTRUCTION,
+        CONST_QUALIFIER,
+        VOLATILE_QUALIFIER,
     };
 
     DeclarationSpecifierList();
@@ -48,13 +52,19 @@ public:
 
     bool isInterruptServiceFunction() const;
 
+    bool isFunctionReceivingFirstParamInReg() const;
+
     bool isAssemblyOnly() const;
+
+    bool hasNoReturnInstruction() const;
 
     bool isTypeDefinition() const;
 
     bool isExternDeclaration() const;
 
     bool isStaticDeclaration() const;
+
+    bool isConstant() const;
 
     const std::string &getEnumTypeName() const;
 
@@ -74,9 +84,13 @@ private:
     const TypeDesc *typeDesc;  // not owned by this class
     bool isTypeDef;
     bool isISR;
+    bool receivesFirstParamInReg;
     bool asmOnly;
+    bool noReturnInstruction;  // when true, no RTS/RTI emitted at end of asm-only function
     bool isExtern;
     bool isStatic;
+    bool isConst;
+    bool isVolatile;
     std::string enumTypeName;  // empty if type is not a named enum
     std::vector<Enumerator *> *enumeratorList;
 
