@@ -31,7 +31,9 @@
 #include <stdio.h>
 #include <errno.h>
 #include <sys/types.h>
+#if !defined(__MINGW32__)
 #include <sys/wait.h>
+#endif
 #include <sys/stat.h>
 #include <string.h>
 
