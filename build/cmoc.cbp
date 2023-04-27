@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<CodeBlocks_project_file>
+	<FileVersion major="1" minor="6" />
+	<Project>
+		<Option title="cmoc" />
+		<Option pch_mode="2" />
+		<Option compiler="gcc" />
+		<Build>
+			<Target title="Debug">
+				<Option output="bin/Debug/cmoc" prefix_auto="1" extension_auto="1" />
+				<Option object_output="obj/Debug/" />
+				<Option type="1" />
+				<Option compiler="gcc" />
+				<Compiler>
+					<Add option="-g" />
+				</Compiler>
+			</Target>
+			<Target title="Release">
+				<Option output="bin/Release/cmoc" prefix_auto="1" extension_auto="1" />
+				<Option object_output="obj/Release/" />
+				<Option type="1" />
+				<Option compiler="gcc" />
+				<Compiler>
+					<Add option="-O2" />
+				</Compiler>
+				<Linker>
+					<Add option="-s" />
+				</Linker>
+			</Target>
+		</Build>
+		<Compiler>
+			<Add option="-Wall" />
+			<Add option="-fexceptions" />
+			<Add directory="../src" />
+		</Compiler>
+		<Unit filename="../src/ASMText.cpp" />
+		<Unit filename="../src/AncestorFunctor.cpp" />
+		<Unit filename="../src/AssemblerStmt.cpp" />
+		<Unit filename="../src/BinaryOpExpr.cpp" />
+		<Unit filename="../src/CastExpr.cpp" />
+		<Unit filename="../src/ClassDef.cpp" />
+		<Unit filename="../src/CodeStatus.cpp" />
+		<Unit filename="../src/CommaExpr.cpp" />
+		<Unit filename="../src/ConditionalExpr.cpp" />
+		<Unit filename="../src/DWordConstantExpr.cpp" />
+		<Unit filename="../src/Declaration.cpp" />
+		<Unit filename="../src/DeclarationSequence.cpp" />
+		<Unit filename="../src/DeclarationSpecifierList.cpp" />
+		<Unit filename="../src/Declarator.cpp" />
+		<Unit filename="../src/ExpressionTypeSetter.cpp" />
+		<Unit filename="../src/ForStmt.cpp" />
+		<Unit filename="../src/FormalParamList.cpp" />
+		<Unit filename="../src/FormalParameter.cpp" />
+		<Unit filename="../src/FunctionCallExpr.cpp" />
+		<Unit filename="../src/FunctionDef.cpp" />
+		<Unit filename="../src/IdentifierExpr.cpp" />
+		<Unit filename="../src/IfStmt.cpp" />
+		<Unit filename="../src/InitializerCodeEmitter.cpp" />
+		<Unit filename="../src/JumpStmt.cpp" />
+		<Unit filename="../src/LabeledStmt.cpp" />
+		<Unit filename="../src/ObjectMemberExpr.cpp" />
+		<Unit filename="../src/Pragma.cpp" />
+		<Unit filename="../src/RealConstantExpr.cpp" />
+		<Unit filename="../src/Scope.cpp" />
+		<Unit filename="../src/ScopeCreator.cpp" />
+		<Unit filename="../src/SemanticsChecker.cpp" />
+		<Unit filename="../src/StringLiteralExpr.cpp" />
+		<Unit filename="../src/SwitchStmt.cpp" />
+		<Unit filename="../src/TranslationUnit.cpp" />
+		<Unit filename="../src/Tree.cpp" />
+		<Unit filename="../src/TreeSequence.cpp" />
+		<Unit filename="../src/TypeDesc.cpp" />
+		<Unit filename="../src/TypeManager.cpp" />
+		<Unit filename="../src/UnaryOpExpr.cpp" />
+		<Unit filename="../src/VariableExpr.cpp" />
+		<Unit filename="../src/WhileStmt.cpp" />
+		<Unit filename="../src/WordConstantExpr.cpp" />
+		<Unit filename="../src/lexer.cc" />
+		<Unit filename="../src/main.cpp" />
+		<Unit filename="../src/parser.cc" />
+		<Unit filename="../src/util.cpp" />
+		<Unit filename="../src/util.h" />
+		<Unit filename="../src/wincompat.h" />
+		<Extensions />
+	</Project>
+</CodeBlocks_project_file>
