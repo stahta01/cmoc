@@ -38,6 +38,7 @@
 #include <string.h>
 
 #if defined(__MINGW32__)
+#include "wincompat.h"
 #define WIFEXITED(x)   ((unsigned) (x) < 259)
 #define WEXITSTATUS(x) ((x) & 0xff)
 #endif
@@ -1823,7 +1824,7 @@ main(int argc, char *argv[])
     */
     {
         const char *p = getenv("PKGDATADIR"), *l = getenv("CMOCFLOATLIBDIR");
-        params.pkgdatadir = (p != NULL ? p : PKGDATADIR);
+        params.pkgdatadir = (p != NULL ? p : "share/cmoc");
         params.cmocfloatlibdir = (l != NULL ? l : params.pkgdatadir + "/lib");
     }
 

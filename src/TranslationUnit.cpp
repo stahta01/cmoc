@@ -41,6 +41,10 @@
 #include <errno.h>
 #include <fstream>
 
+#if defined(__MINGW32__)
+#include "wincompat.h"
+#endif
+
 using namespace std;
 
 
