@@ -3435,6 +3435,75 @@ expected => [
 },
 
 
+{
+title => q{for() loop with byte control variable and word limit},
+options => "-Wfor-condition-sizes",
+program => q!
+    int main()
+    {
+        unsigned limit = 256;
+        for (unsigned char b = 0; b < limit; ++b)  // suspicious: different sizes
+            ;
+        for (unsigned char b = 0; b < 42; ++b)  // ok: 42 is an int (2 bytes) but 42 actually fits a byte
+            ;
+        for (unsigned w = 0; w < limit; ++w)  // ok: same sizes
+            ;
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:5: __warning__: for loop condition compares expressions of different sizes (`unsigned char' vs `unsigned int')!,
+    ]
+},
+
+
+{
+title => q{No warning if -Wfor-condition-sizes not passed},
+program => q!
+    int main()
+    {
+        unsigned limit = 256;
+        for (unsigned char b = 0; b < limit; ++b)  // suspicious: different sizes
+            ;
+        for (unsigned w = 0; w < limit; ++w)  // ok: same sizes
+            ;
+        return 0;
+    }
+    !,
+expected => [
+    ]
+},
+
+
+{
+title => q{Parenthesised function name keeps function call from matching macro with same same},
+program => q!
+    #define foo() 99
+    #define bar(n) ((n) + 1)
+    #define baz() 88
+    #define quux(...) 77
+    int main()
+    {
+        (foo)();
+        (bar)(42);
+        (baz)(1, 2, 3);
+        (quux)(1, 2, 3);
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:8: __error__: undeclared identifier `foo'!,
+    qq!,check-prog.c:9: __error__: undeclared identifier `bar'!,
+    qq!,check-prog.c:10: __error__: undeclared identifier `baz'!,
+    qq!,check-prog.c:11: __error__: undeclared identifier `quux'!,
+    qq!,check-prog.c:8: __error__: calling undeclared function foo()!,
+    qq!,check-prog.c:9: __error__: calling undeclared function bar()!,
+    qq!,check-prog.c:10: __error__: calling undeclared function baz()!,
+    qq!,check-prog.c:11: __error__: calling undeclared function quux()!,
+    ]
+},
+
+
 #{
 #title => q{Sample test},
 #program => q!

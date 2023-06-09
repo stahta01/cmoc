@@ -1,4 +1,4 @@
-/*  $Id: Tree.h,v 1.36 2022/06/09 16:44:40 sarrazip Exp $
+/*  $Id: Tree.h,v 1.37 2023/03/23 03:16:24 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
@@ -177,8 +177,10 @@ public:
     // Determines if this tree represents an expression or sequence of expressions
     // that can be initialized statically, i.e., without running any code.
     // varTypeDesc: Type of the l-value to be initialized.
+    // allowStringLiterals: By default, a StringLiteralExpr in this tree causes this method to return false.
+    //                      Passing true for this parameter makes this method accept a StringLiteralExpr.
     //
-    bool isStaticallyInitializable(const TypeDesc &varTypeDesc) const;
+    bool isStaticallyInitializable(const TypeDesc &varTypeDesc, bool allowStringLiterals = false) const;
 
     // Indicates that the final value of the expression represented by this tree does not need
     // to be left in the B or D register.

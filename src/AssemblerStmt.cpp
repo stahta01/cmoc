@@ -1,4 +1,4 @@
-/*  $Id: AssemblerStmt.cpp,v 1.28 2022/07/13 03:27:19 sarrazip Exp $
+/*  $Id: AssemblerStmt.cpp,v 1.30 2023/03/26 01:45:53 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -581,9 +581,8 @@ AssemblerStmt::resolveVariableReferences(const string &text,
                 else if (escapeCharUsed && !variableDecl)
                 {
                     if (errorMessageTree)
-                        errorMessageTree->errormsg(
-                                "undeclared identifier `%s' in assembly language statement",
-                                unescapedVarRef.c_str());
+                        errorMessageTree->errormsg("undeclared identifier `%s' in assembly language statement",
+                                                    unescapedVarRef.c_str());
                 }
                 else  // no match: keep text as is
                 {
@@ -733,11 +732,12 @@ AssemblerStmt::emitCode(ASMText &out, bool lValue) const
                         argument.c_str());
     }
 
-    string comment = getLineNo() + ": " + inlineASMTag;
+    string text = "\t" + instruction + "\t"
+                       + (variableDecl ? variableDecl->getFrameDisplacementArg() : argument)
+                       + "\t" + getLineNo();
+    if (variableDecl)
+        text += " (re: variable " + argument + ")";
+    out.emitInlineAssembly(text);
 
-    if (variableDecl != NULL)
-        out.ins(instruction, variableDecl->getFrameDisplacementArg(), comment + " re: variable " + argument);
-    else
-        out.ins(instruction, argument, comment);
     return true;
 }

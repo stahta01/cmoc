@@ -1,4 +1,4 @@
-# $Id: Makefile.am,v 1.100 2022/09/16 02:32:08 sarrazip Exp $
+# $Id: Makefile.am,v 1.105 2023/04/09 05:59:04 sarrazip Exp $
 
 # The dot forces CMOC to be compiled before processing the stdlib and float
 # subdirectories, whose processing requires CMOC itself.
@@ -105,6 +105,8 @@ cmoc_SOURCES = \
 	ScopeCreator.h \
 	Pragma.cpp \
 	Pragma.h \
+	Parameters.cpp \
+	Parameters.h \
 	main.cpp
 
 AM_YFLAGS = -d -Wno-conflicts-sr
@@ -145,7 +147,11 @@ RMDIR = rmdir
 
 check-base:
 	./cmoc --version >/dev/null
+	./cmoc --version | $(GREP) -q "cmoc 0"
 	./cmoc --help >/dev/null
+	./cmoc --help | $(PERL) -ne '/GNU General Public License/ and $$ok=1; END { exit !$$ok }'
+	./cmoc --help | $(PERL) -ne '/default: [0-9A-F]{4}/ and $$ok=1; END { exit !$$ok }'  # check default code address
+	./cmoc --help | $(PERL) -ne '/Compiler data directory: .*?\/cmoc/ and $$ok=1; END { exit !$$ok }'
 	rm -f ,check-prog.c ,check-prog.s ,check-prog.asm ,check-prog.i ,check-prog.lst ,check-prog.hex ,check-prog.bin
 	$(PERLEXEC) 'print "char g; int main() { return 0; }\n"' >,check-prog.c
 	$(LOCAL_CMOC) -o ,check-prog.xyz ,check-prog.c
@@ -404,27 +410,36 @@ check-local-var-hiding:
 
 check-misc: check-base check-srec check-raw check-org check-long check-float check-os9 check-flex \
 				check-deps check-only-deps-arg check-vectrex check-stack-space check-linking check-nbsp \
-				check-local-var-hiding check-void-target check-call-graph check-func-import check-no-hole
+				check-local-var-hiding check-void-target check-call-graph check-func-import check-no-hole \
+				check-no-hidden-bool-for-global
 	rm -f ,check-prog.*
 
 check-self-tests:
 	$(PERL) -cw $(srcdir)/test-program-output.pl
 	$(PERL) -cw $(srcdir)/test-bad-programs.pl
+	$(PERL) $(srcdir)/test-program-output.pl --opt=0 $(STOPONFAIL) $(srcdir)
 	$(PERL) $(srcdir)/test-program-output.pl $(STOPONFAIL) $(srcdir)
+	$(PERL) $(srcdir)/test-program-output.pl --opt=0 --omit-frame-pointer $(STOPONFAIL) $(srcdir)
+	$(PERL) $(srcdir)/test-program-output.pl --omit-frame-pointer $(STOPONFAIL) $(srcdir)
 	$(PERL) $(srcdir)/test-bad-programs.pl $(STOPONFAIL) $(srcdir)
 
 # Stack space must be specified when compiling the .c file that defines main().
+# If the stack space is made larger than the default 1k (with --stack-space or #pragma stack_space),
+# then sbrkmax() is expected to report a smaller quantity of allocatable memory.
+# --org=1 is used because as of CMOC 0.1.82, USim refuses to execute code
+# at address 0, to help catch stray code.
+#
 check-stack-space:
 	$(PERLEXEC) 'print qq[#include <cmoc.h>\nint main() { printf("\%u\\n", sbrkmax()); return 0; }\n]' >,check-prog.c
 	$(LOCAL_CMOC) --usim -c -I $(srcdir)/stdlib ,check-prog.c
-	$(LOCAL_CMOC) --usim --org=0 ,check-prog.o
+	$(LOCAL_CMOC) --usim --org=1 ,check-prog.o
 	test `$(USIM) ,check-prog.srec` -ge 60000
 	$(LOCAL_CMOC) --usim -c -I $(srcdir)/stdlib --stack-space=30000 ,check-prog.c
-	$(LOCAL_CMOC) --usim --org=0 ,check-prog.o
+	$(LOCAL_CMOC) --usim --org=1 ,check-prog.o
 	test `$(USIM) ,check-prog.srec` -lt 34000
 	$(PERLEXEC) 'print qq[#pragma stack_space 15000\n#include <cmoc.h>\nint main() { printf("\%u\\n", sbrkmax()); return 0; }\n]' >,check-prog.c
 	$(LOCAL_CMOC) --usim -c -I $(srcdir)/stdlib ,check-prog.c
-	$(LOCAL_CMOC) --usim --org=0 ,check-prog.o
+	$(LOCAL_CMOC) --usim --org=1 ,check-prog.o
 	test `$(USIM) ,check-prog.srec` -ge 48000
 	test `$(USIM) ,check-prog.srec` -lt 49000
 	rm -f ,check-prog.c ,check-prog.o ,check-prog.srec
@@ -491,6 +506,18 @@ check-no-hole:
 	$(LOCAL_CMOC) --coco ,check-prog.c
 	$(PERL) -e '$$/ = undef; $$bin = <>; ($$z, $$blkLen) = unpack("Cn", $$bin); die unless $$blkLen == length($$bin) - 10' ,check-prog.bin
 	rm -f ,check-prog.*
+
+
+# Check that no ".initialized" hidden boolean is emitted for a global variable.
+# Such a boolean is only emitted for some local static variables.
+#
+check-no-hidden-bool-for-global:
+	echo "const char *str = \"foo\";" > ,check-prog.c
+	rm -f ,check-prog.s ,check-prog.o ,check-prog.lst
+	$(LOCAL_CMOC) -c -i ,check-prog.c
+	test `$(GREP) -c _str.initialized ,check-prog.s` = 0
+	rm -f ,check-prog.*
+
 
 check: check-writecocofile check-misc check-self-tests
 

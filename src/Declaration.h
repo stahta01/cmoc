@@ -1,4 +1,4 @@
-/*  $Id: Declaration.h,v 1.36 2022/06/22 02:01:24 sarrazip Exp $
+/*  $Id: Declaration.h,v 1.37 2023/03/23 03:16:24 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -81,6 +81,8 @@ public:
     bool isGlobal() const;
     bool isStatic() const;  // may be global or local
     bool isLocalStatic() const { return !isGlobal() && isStatic(); }
+    bool isDynamicInitializerForced() const { return dynamicInitializerForced; }
+    void forceDynamicInitializer() { dynamicInitializerForced = true; }
     bool isExternal() const;
     bool isArray() const;
     void setReadOnly(bool ro);  // only used to place global variable in separate section
@@ -152,6 +154,7 @@ public:
     bool hasStaticKeyword;               // if true, the 'static' keyword was used on this declaration
     bool isExtern;
     bool needsFinish;    // true means init to be completed by DeclarationFinisher after parsing done
+    bool dynamicInitializerForced;  // used for local static vars that must be init dynamically b/c of string literals
     std::vector<Tree *> arraySizeExprList;  // used by DeclarationFinisher; Tree objects owned by this Declaration
 
 private:

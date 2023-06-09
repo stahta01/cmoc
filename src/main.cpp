@@ -1,7 +1,7 @@
-/*  $Id: main.cpp,v 1.162 2023/01/18 03:23:08 sarrazip Exp $
+/*  $Id: main.cpp,v 1.176 2023/04/09 21:19:30 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2020 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2023 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -18,22 +18,15 @@
 */
 
 #include "TranslationUnit.h"
-
-#include "SwitchStmt.h"
 #include "FunctionDef.h"
+#include "Parameters.h"
 
-#include <string>
-#include <iostream>
 #include <iomanip>
-#include <fstream>
-#include <list>
 #include <stdlib.h>
-#include <stdio.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
-#include <string.h>
 
 #if defined(__MINGW32__)
 #define WIFEXITED(x)   ((unsigned) (x) < 259)
@@ -43,299 +36,10 @@
 using namespace std;
 
 
-int yyparse(void);
-
-extern FILE *yyin;
 extern int numErrors;
-extern int numWarnings;
 
 
-#ifndef PROGRAM  // Allow the compilation to define the program name as a macro.
-static const char *PROGRAM = "cmoc";
-#endif
-
-
-class Parameters
-{
-public:
-
-    // Argument for the ORG directive.
-    // The default is 512 bytes past the default start of a Basic program
-    // on a Disk Basic CoCo ($2600).
-    //
-    uint16_t codeAddress;
-    uint16_t dataAddress;  // by default, data section follows code section
-    bool codeAddressSetBySwitch;  // true if --org or --dos used
-    bool dataAddressSetBySwitch;  // true if --data used
-
-    uint16_t stackSpace;  // applies to --check-stack and sbrk(); not for OS-9
-    uint16_t extraStackSpace;  // OS-9 only
-
-    uint32_t functionStackSpace;  // uint32_t(-1) means not set by command-line argument
-
-    string pkgdatadir;  // directory where CMOC support files (header files, etc.) are installed
-    string cmocfloatlibdir;  // directory where CMOC floating-point library files and object files are installed
-
-    string lwasmPath;
-    string lwlinkPath;
-
-    bool intermediateFilesKept;
-    string intermediateDir;  // files where intermediate files (e.g., .lst, .i) are created;
-                             // if empty, use user-specified directory
-
-    bool generatePrerequisitesFile;      // --deps option
-    bool generatePrerequisitesFileOnly;  // --deps-only option
-    string prerequisiteFilename;  // if not empty, used instead of forming .d from .o
-
-    bool preprocOnly;
-    bool genAsmOnly;
-    bool compileOnly;
-    bool asmCmd;  // write asm command in a .cmd file
-    bool verbose;
-    bool treatWarningsAsErrors;
-    bool nullPointerCheckingEnabled;
-    bool stackOverflowCheckingEnabled;
-    TargetPlatform targetPlatform;
-    bool assumeTrack34;  // true = CoCo DECB Track 34 (relevant only with COCO_BASIC)
-    string forcedLWLinkFormat;  // if not empty, passed to --format option of lwlink
-    bool callToUndefinedFunctionAllowed;
-    bool warnSignCompare;
-    bool warnPassingConstForFuncPtr;
-    bool isConstIncorrectWarningEnabled;
-    bool isBinaryOpGivingByteWarningEnabled;
-    bool isLocalVariableHidingAnotherWarningEnabled;
-    bool isNonLiteralPrintfFormatWarningEnabled;
-    bool isUncalledStaticFunctionWarningEnabled;
-    bool isMissingFieldInitializersWarningEnabled;
-    bool inlineAsmArrayIndexesWarningEnabled;
-
-    bool wholeFunctionOptimization;
-    bool forceJumpMode;
-    SwitchStmt::JumpMode forcedJumpMode;
-    size_t optimizationLevel;
-    bool stackSpaceSpecifiedByCommandLine;
-    uint16_t limitAddress;  // see --limit; 0xFFFF means not applicable
-    bool limitAddressSetBySwitch;  // true if --limit used
-    string outputFilename;
-    vector<string> libDirs;  // list of directories to pass to lwlink via -L options
-    bool useDefaultLibraries;
-    bool useNativeFloatLibrary;
-    bool relocatabilitySupported;
-
-    list<string> includeDirList;
-    bool searchDefaultIncludeDirs;
-
-    list<string> defines;
-
-    static uint32_t getVersionInteger();
-
-public:
-    Parameters()
-    :   codeAddress(0x2800),  // DECB Basic program starts at 0x2601 by default
-        dataAddress(0xFFFF),
-        codeAddressSetBySwitch(false),
-        dataAddressSetBySwitch(false),
-        stackSpace(1024),
-        extraStackSpace(0),
-        functionStackSpace(uint32_t(-1)),
-        pkgdatadir(),
-        cmocfloatlibdir(),
-        lwasmPath("lwasm"),
-        lwlinkPath("lwlink"),
-        intermediateFilesKept(false),
-        intermediateDir(),
-        generatePrerequisitesFile(false),
-        generatePrerequisitesFileOnly(false),
-        prerequisiteFilename(),
-        preprocOnly(false),
-        genAsmOnly(false),
-        compileOnly(false),
-        asmCmd(false),  // write asm command in a .cmd file
-        verbose(false),
-        treatWarningsAsErrors(false),
-        nullPointerCheckingEnabled(false),
-        stackOverflowCheckingEnabled(false),
-        targetPlatform(COCO_BASIC),
-        assumeTrack34(false),
-        forcedLWLinkFormat(),
-        callToUndefinedFunctionAllowed(false),
-        warnSignCompare(false),
-        warnPassingConstForFuncPtr(false),
-        isConstIncorrectWarningEnabled(true),
-        isBinaryOpGivingByteWarningEnabled(false),
-        isLocalVariableHidingAnotherWarningEnabled(false),
-        isNonLiteralPrintfFormatWarningEnabled(true),
-        isUncalledStaticFunctionWarningEnabled(true),
-        isMissingFieldInitializersWarningEnabled(true),
-        inlineAsmArrayIndexesWarningEnabled(true),
-        wholeFunctionOptimization(false),
-        forceJumpMode(false),
-        forcedJumpMode(SwitchStmt::IF_ELSE),
-        optimizationLevel(2),
-        stackSpaceSpecifiedByCommandLine(false),
-        limitAddress(0xFFFF),
-        limitAddressSetBySwitch(false),
-        outputFilename(),
-        libDirs(),
-        useDefaultLibraries(true),
-        useNativeFloatLibrary(false),
-        relocatabilitySupported(true),
-        includeDirList(),
-        searchDefaultIncludeDirs(true),
-        defines()
-    {
-    }
-
-    int compileCFile(const string &inputFilename,
-                     const string &moduleName,
-                     const string &asmFilename,
-                     const string &outputFilename,
-                     const char *targetPlatformName,
-                     const char *targetPreprocId);
-
-} params;
-
-
-static const char *fatalErrorPrefix = ": fatal error: ";
-
-
-static
-void
-displayVersionNo()
-{
-    cout << PROGRAM << " (" << PACKAGE << " " << VERSION << ")\n";
-}
-
-
-static
-void
-displayHelp()
-{
-    cout << "\n";
-
-    displayVersionNo();
-
-    cout << "\n"
-        "Copyright (C) 2003-2023 Pierre Sarrazin <http://sarrazip.com/>\n";
-    cout <<
-"This program is free software; you may redistribute it under the terms of\n"
-"the GNU General Public License, either version 3 or later.\n"
-"This program comes with absolutely no warranty.\n"
-"\n";
-
-    cout <<
-        "--help|-h            Display this help page and exit.\n"
-        "--version|-v         Display this program's version number and exit.\n"
-        "--verbose|-V         Display more informationg about the compiling process.\n"
-        "--preproc|-E         Copy preprocessor output to standard output, instead of compiling.\n"
-        "-S                   Stop after generating an assembly language file.\n"
-        "--compile|-c         Stop after generating an object file.\n"
-        "-o FILE              Place the output in FILE (default: change C file extension to .bin).\n"
-        "--deps[=F]           Create a .d file containing a makefile rule giving the dependencies\n"
-        "                     of the compiled file. If a filename (F) is given, it is used instead\n"
-        "                     of forming the dependency filename from the code output filename.\n"
-        "--deps-only[=F]      Same, but do nothing else and stop.\n"
-        "-O0|-O1|-O2          Optimization level (default is 2). Compilation is faster with -O0.\n"
-        "--org=X              Use X (in hex) as the first address at which to generate\n"
-        "                     the code; default: " << hex << params.codeAddress << dec << ".\n"
-        "--coco               Compile for the CoCo Disk Basic environment (default).\n"
-        "--decb               Synonym for --coco.\n"
-        "--dos                Compile to a CoCo Disk Basic track 34 boot loader (implies --coco).\n"
-        "                     Must be passed when compiling the .c file containing main().\n"
-        "--dragon             Compile for the Dragon environment.\n"
-        "--thommo             Compile for the Thomson MO.\n"
-        "--thomto             Compile for the Thomson TO.\n"
-        "--os9                Compile for OS-9.\n"
-        "--flex               Compile for FLEX.\n"
-        "--vectrex            Compile for the Vectrex video game console.\n"
-        "--void-target        Compile for a target that has no I/O system known to CMOC.\n"
-        "--usim               Compile for the USIM 6809 simulator.\n"
-        "--srec               Executable in Motorola SREC format.\n"
-        "--raw                Executable in raw format (passes --format=raw to lwlink)\n"
-        "--lwasm=X            Use X as the path to the LWTOOLS assembler.\n"
-        "--lwlink=X           Use X as the path to the LWTOOLS linker.\n"
-        "--limit=X            Fail if program_end exceeds address X (in hex).\n"
-        "--data=X             Use X (in hex) as the first address at which to generate the\n"
-        "                     writable global variable space; by default that space follows\n"
-        "                     the code.\n"
-        "-Idir                Add directory <dir> to the compiler's include directories\n"
-        "                     (also applies to assembler).\n"
-        "-Dxxx=yyy            Equivalent to #define xxx yyy\n"
-        "-L dir               Add a directory to the library search path.\n"
-        "-l name              Add a library to the linking phase. -lfoo expects `libfoo.a'.\n"
-        "                     This option must be specified after the source/object files.\n"
-        "-nodefaultlibs       Excludes CMOC-provided libraries from the linking phase.\n"
-        "--no-relocate        Assume that the program will only be loaded at the addresses specified\n"
-        "                     by --org and --data. Not compatible with OS-9. Default for Vectrex.\n"
-        "--check-null         Insert run-time checks for null pointers. See the manual.\n"
-        "--check-stack        Insert run-time checks for stack overflow. See the manual.\n"
-        "                     Not usable under OS-9, where stack checking is automatic.\n"
-        "--stack-space=N      Assume the stack may use as many as N bytes (in decimal).\n"
-        "                     Affects --check-stack and sbrk().\n"
-        "                     Must be used when compiling the main() function.\n"
-        "                     Not usable under OS-9, where stack checking is automatic.\n"
-        "                     Ignored when targeting Vectrex.\n"
-        "--add-os9-stack-space=N\n"
-        "                     (OS-9 only.) Allocate N more bytes (in decimal) to the stack space\n"
-        "                     that OS-9 normally reserves.\n"
-        "--function-stack=N   (OS-9 only.) Emit code at the start of each function to check that there\n"
-        "                     is at least N bytes of free stack space in addition to local variables.\n"
-        "                     0 means no stack checking. Default is 64.\n"
-        "-Wsign-compare       Warn when <, <=, >, >= used on operands of differing signedness.\n"
-        "-Wno-const           Do not warn about const-incorrect code.\n"
-        "-Wgives-byte         Warn about binary operations on bytes giving a byte.\n"
-        "-Wlocal-var-hiding   Warn when a local variable hides another one.\n"
-        "-Wno-printf          Do not warn when printf/sprintf format is not a string literal.\n"
-        "-Wno-uncalled-static Do not warn when a static function is not called.\n"
-        "-Wno-missing-field-initializers\n"
-        "                     Do no warn when a struct is initialized with fewer values than\n"
-        "                     there are fields.\n"
-        "-Wno-inline-asm-array-indexes\n"
-        "                     Do not warn when an inline assembly statement uses an array index in\n"
-        "                     a C array variable reference. Such an index is taken as an element index,\n"
-        "                     not a byte index. (An index into a non-array is a byte index.)\n"
-        "-Werror              Treat warnings as errors.\n"
-        "--switch=MODE        Force all switch() statements to use MODE, where MODE is 'ifelse'\n"
-        "                     for an if-else sequence or 'jump' for a jump table.\n"
-        "--intermediate|-i    Keep intermediate compilation and linking files.\n"
-        "--intdir=D           Put intermediate files in directory D.\n"
-        "\n"
-        "Executable file formats:\n"
-        "  CoCo BIN for CoCo Disk Basic, Dragon, Thomson MO/TO; raw binary for Vectrex;\n"
-        "  SREC for FLEX, void-target and USIM; OS-9 for OS-9.\n"
-        "  Can be overridden by --srec or --raw, except for OS-9.\n"
-        "\n"
-        "Preprocessor identifer _CMOC_VERSION_ is defined as: " << Parameters::getVersionInteger() << "\n"
-        "\n";
-
-    cout << "Compiler data directory: " << params.pkgdatadir << "\n\n";
-    cout << "Compiler floating-point library directory: " << params.cmocfloatlibdir << "\n\n";
-
-    cout << "For details, see the manual on the CMOC home page.\n\n";
-}
-
-
-class PipeCloser
-{
-public:
-    PipeCloser(FILE *_file) : file(_file) {}
-    ~PipeCloser() { close(); }
-    int close()
-    {
-        if (file == NULL)
-            return 0;  // success: nothing to do
-        int status = pclose(file);
-        file = NULL;
-        return status;
-    }
-private:
-    // Forbidden:
-    PipeCloser(const PipeCloser &);
-    PipeCloser &operator = (const PipeCloser &);
-
-private:
-    FILE *file;
-};
+const char *fatalErrorPrefix = ": fatal error: ";
 
 
 // If the line has the form "Symbol: SYMBOLNAME (OBJECTFILENAME) = HEXADDR",
@@ -395,66 +99,15 @@ getDefaultOutputExtension(TargetPlatform p, const string &forcedLWLinkFormat)
 }
 
 
-// Returns 's' if no intermediate directory has been specified or
-// if 's' already contains a directory specification.
-// Otherwise, returns the basename of 's' preceded by the specified intermediate directory.
-//
-static string
-useIntDir(const string &s)
-{
-    if (params.intermediateDir.empty() || s.find('/') != string::npos)
-        return s;
-    string res = replaceDir(s, params.intermediateDir);
-    return res;
-}
-
-
-static int
-invokeAssembler(const string &inputFilename,
-                const string &objectFilename,
-                const string &lstFilename,
-                const string &targetPreprocId,
-                bool verbose)
-{
-    // Assemble the asm to a .o object file.
-
-    string lwasmCmdLine = params.lwasmPath
-                          + " -fobj --pragma=forwardrefmax"
-                          + " -D" + targetPreprocId
-                          + " --output='" + objectFilename + "'"
-                          + (params.intermediateFilesKept ? " --list='" + lstFilename + "'" : "")
-                          + " '" + inputFilename + "'";
-    if (verbose)
-        cout << "Assembler command: " << lwasmCmdLine << endl;
-
-    int status = system(lwasmCmdLine.c_str());
-    if (status == -1)
-    {
-        int e = errno;
-        cout << PACKAGE << fatalErrorPrefix << "could not start assembler: "
-                                            << strerror(e) << endl;
-        return EXIT_FAILURE;
-    }
-
-    if (verbose)
-        cout << "Exit code from assembler command: " << WEXITSTATUS(status) << "\n";
-
-    if (!WIFEXITED(status))
-        return EXIT_FAILURE;
-    status = WEXITSTATUS(status);
-    if (status != 0)
-        return status;
-
-    return EXIT_SUCCESS;
-}
-
-
 // Create a link script to tell lwlink in which order to write out the sections to the executable file.
 // The first section is "start": it contains only the program_start routine.
 // We want the start of the binary to be the entry point.
 //
 static bool
-createLinkScript(const string &linkScriptFilename)
+createLinkScript(const string &linkScriptFilename,
+                 TargetPlatform targetPlatform,
+                 uint16_t codeAddress,
+                 uint16_t dataAddress)
 {
     ofstream linkScript(linkScriptFilename.c_str(), ios::trunc);
     if (!linkScript)
@@ -486,7 +139,7 @@ createLinkScript(const string &linkScriptFilename)
     linkScript << "define basesympat s_%s\n"
                   "define lensympat l_%s\n";
 
-    linkScript << "section start load " << hex << params.codeAddress << "\n"
+    linkScript << "section start load " << hex << codeAddress << "\n"
                   "section code\n";  // main code section
 
     linkScript << constructorSections << destructorSections << initGLSections;
@@ -504,10 +157,10 @@ createLinkScript(const string &linkScriptFilename)
     //
     linkScript << "section rwdata";
 
-    if (params.targetPlatform == OS9)
+    if (targetPlatform == OS9)
         linkScript << " load 1";  // do not allocate data to offset 0, to distinguish (void *) 0 as invalid pointer
-    else if (params.dataAddress != 0xFFFF)
-        linkScript << " load " << params.dataAddress;
+    else if (dataAddress != 0xFFFF)
+        linkScript << " load " << dataAddress;
 
     linkScript << "\n";
 
@@ -663,9 +316,6 @@ removeFile(const string &path)
 static void
 removeIntermediateCompilationFiles(const vector<string> &intermediateCompilationFiles)
 {
-    if (params.intermediateFilesKept)
-        return;
-
     for (vector<string>::const_iterator it = intermediateCompilationFiles.begin();
                                        it != intermediateCompilationFiles.end(); ++it)
         removeFile(*it);
@@ -677,9 +327,6 @@ removeIntermediateLinkingFiles(const string &linkScriptFilename,
                                const string &mapFilename,
                                const vector<string> &intermediateObjectFiles)
 {
-    if (params.intermediateFilesKept)
-        return;
-
     removeFile(linkScriptFilename);
     removeFile(mapFilename);
 
@@ -690,22 +337,16 @@ removeIntermediateLinkingFiles(const string &linkScriptFilename,
 
 
 static int
-invokeLinker(const vector<string> &objectFilenames,
+invokeLinker(const Parameters &params,
+             const vector<string> &objectFilenames,
              const vector<string> &libraryFilenames,  // allowed to contain -l<name> elements
-             bool useDefaultLibraries,
-             bool useNativeFloatLibrary,
              const string &linkScriptFilename,
              const string &mapFilename,
-             const string &outputFilename,
-             TargetPlatform targetPlatform,
-             const vector<string> &libDirs,
-             uint16_t limitAddress,
-             const string &forcedLWLinkFormat,
-             bool verbose)
+             const string &outputFilename)
 {
     assert(!outputFilename.empty());
 
-    if (!createLinkScript(linkScriptFilename))
+    if (!createLinkScript(linkScriptFilename, params.targetPlatform, params.codeAddress, params.dataAddress))
         return EXIT_FAILURE;
 
     // targetKW is the name that appears in the '*' position in the libcmoc-crt-*.a filename.
@@ -713,7 +354,7 @@ invokeLinker(const vector<string> &objectFilenames,
     //
     const char *targetKW = NULL;
     string lwlinkFormat;
-    switch (targetPlatform)
+    switch (params.targetPlatform)
     {
     case COCO_BASIC:  targetKW = "ecb";  lwlinkFormat = "decb";  break;
     case OS9:         targetKW = "os9";  lwlinkFormat = "os9";  break;
@@ -725,27 +366,27 @@ invokeLinker(const vector<string> &objectFilenames,
     case THOMTO:      targetKW = "tht";  lwlinkFormat = "decb"; break;
     case FLEX:        targetKW = "flex"; lwlinkFormat = "srec";  break;
     }
-    if (!forcedLWLinkFormat.empty())
-        lwlinkFormat = forcedLWLinkFormat;
+    if (!params.forcedLWLinkFormat.empty())
+        lwlinkFormat = params.forcedLWLinkFormat;
 
     string lwlinkCmdLine = params.lwlinkPath
                            + " --format=" + lwlinkFormat
                            + " --output='" + outputFilename
                            + "' --script='" + linkScriptFilename
                            + "' --map='" + mapFilename + "'";
-    for (vector<string>::const_iterator it = libDirs.begin(); it != libDirs.end(); ++it)
+    for (vector<string>::const_iterator it = params.libDirs.begin(); it != params.libDirs.end(); ++it)
         lwlinkCmdLine += " -L'" + *it + "'";
 
     lwlinkCmdLine += " -L" + params.cmocfloatlibdir;
     lwlinkCmdLine += " -lcmoc-crt-" + string(targetKW);
-    if (useDefaultLibraries)
+    if (params.useDefaultLibraries)
     {
         lwlinkCmdLine += " -lcmoc-std-" + string(targetKW);
 
         const char *floatKW = NULL;
-        if ((targetPlatform == COCO_BASIC || targetPlatform == DRAGON) && !useNativeFloatLibrary)
+        if ((params.targetPlatform == COCO_BASIC || params.targetPlatform == DRAGON) && !params.useNativeFloatLibrary)
             floatKW = targetKW;  // use a library that calls ECB or Dragon Basic float routines
-        else if (useNativeFloatLibrary)  // if --native-float explicitly given
+        else if (params.useNativeFloatLibrary)  // if --native-float explicitly given
             floatKW = "native";  // use a library that calls the Floatable library
 
         if (floatKW != NULL)
@@ -754,13 +395,13 @@ invokeLinker(const vector<string> &objectFilenames,
 
     for (vector<string>::const_iterator it = objectFilenames.begin();
                                        it != objectFilenames.end(); ++it)
-        lwlinkCmdLine += " '" + useIntDir(*it) + ".o'";
+        lwlinkCmdLine += " '" + params.useIntDir(*it) + ".o'";
 
     for (vector<string>::const_iterator it = libraryFilenames.begin();
                                        it != libraryFilenames.end(); ++it)
         lwlinkCmdLine += " '" + *it + "'";
 
-    if (verbose)
+    if (params.verbose)
         cout << "Linker command: " << lwlinkCmdLine << endl;
 
     // Start the linker through a pipe and redirect the linker's stderr to that pipe.
@@ -795,7 +436,7 @@ invokeLinker(const vector<string> &objectFilenames,
 
     int status = closer.close();
 
-    if (verbose)
+    if (params.verbose)
     {
         cout << "Exit code from linker command: " << WEXITSTATUS(status) << "\n";
         cout << "Number of error messages from linker: " << numLinkerErrors << "\n";
@@ -809,7 +450,7 @@ invokeLinker(const vector<string> &objectFilenames,
     if (numErrors > 0)
         return EXIT_FAILURE;
 
-    return checkLinkingMap(limitAddress, mapFilename);
+    return checkLinkingMap(params.limitAddress, mapFilename);
 }
 
 
@@ -970,361 +611,8 @@ convertBinToDragonFormat(const string &executableFilename,
 }
 
 
-class TranslationUnitDestroyer
-{
-public:
-    TranslationUnitDestroyer(bool _destroyTU) : destroyTU(_destroyTU) {}
-    ~TranslationUnitDestroyer()
-    {
-        if (destroyTU)
-            TranslationUnit::destroyInstance();
-    }
-private:
-    bool destroyTU;
-};
-
-
-// If VERSION is x.y.z, then returns x * 100000 + y * 1000 + z.
-// Assumes that y <= 99 and z <= 999.
-//
-uint32_t
-Parameters::getVersionInteger()
-{
-    char *endptr = NULL;
-    unsigned long major = strtoul(VERSION, &endptr, 10);
-    unsigned long minor = strtoul(endptr + 1, &endptr, 10);
-    unsigned long micro = strtoul(endptr + 1, &endptr, 10);
-    return uint32_t(major * 100000UL + minor * 1000UL + micro);
-}
-
-
-// Checks if the line matches the pattern of an include marker as
-// generated by the C preprocessor: ^\#\ [0-9]+\ \".*\"[ 0-9]*$
-// i.e., a pound sign followed by a line number, followed by a
-// double-quoted file path.
-// If 'line' matches, this file path is stored in 'filename' and
-// true is returned.
-// Otherwise, false is returned.
-//
-static bool
-parseIncludeMarker(const char *line, string &filename)
-{
-    if (!line)
-        return false;
-    if (*line++ != '#')
-        return false;
-    if (*line++ != ' ')
-        return false;
-    const char *p = line;
-    while (isdigit(*p))  // pass line number
-        ++p;
-    if (p == line)
-        return false;  // no line number
-    if (*p++ != ' ')
-        return false;
-    if (*p++ != '\"')
-        return false;
-    const char *f = p;
-    while (*p != '\"' && *p != '\0')  // reach end of quoted string
-        ++p;
-    if (*p != '\"')
-        return false;
-    filename.assign(f, size_t(p - f));
-    return true;
-}
-
-
-// Generates the assembly file and invokes the assembler on that file.
-//
-// Returns EXIT_SUCCESS or EXIT_FAILURE.
-//
-int
-Parameters::compileCFile(const string &inputFilename,
-                         const string &moduleName,
-                         const string &asmFilename,
-                         const string &compilationOutputFilename,
-                         const char *targetPlatformName,
-                         const char *targetPreprocId)
-{
-    assert(!compilationOutputFilename.empty());
-
-    if (verbose)
-    {
-        cout << "Target platform: " << targetPlatformName << endl;
-        cout << "Preprocessing: " << inputFilename << endl;
-    }
-
-    // Call the C preprocessor on the source file and prepare to read its output:
-    //
-    stringstream cppCommand;
-    cppCommand << "cpp -xc++ -U__cplusplus";  // -xc++ makes sure cpp accepts C++-style comments
-    for (list<string>::const_iterator it = includeDirList.begin(); it != includeDirList.end(); ++it)
-        cppCommand << " -I'" << *it << "'";
-    cppCommand << " -D_CMOC_VERSION_=" << getVersionInteger();
-    cppCommand << " -D" << targetPreprocId << "=1";
-    if (!relocatabilitySupported)
-        cppCommand << " -D_CMOC_NO_RELOCATE_=1";
-    if (useNativeFloatLibrary)
-        cppCommand << " -D_CMOC_NATIVE_FLOAT_=1";
-    cppCommand << " -U__GNUC__ -nostdinc -undef";
-
-    for (list<string>::const_iterator it = defines.begin(); it != defines.end(); ++it)
-        cppCommand << " -D'" << *it << "'";
-
-    cppCommand << " " << inputFilename;  // must be last argument, for portability
-
-    if (verbose)
-        cout << "Preprocessor command: " << cppCommand.str() << endl;
-
-    yyin = popen(cppCommand.str().c_str(), "r");
-    if (yyin == NULL)
-    {
-        int e = errno;
-        cout << PACKAGE << fatalErrorPrefix << "could not start C preprocessor (through pipe):"
-                                            << " " << strerror(e) << endl;
-        return EXIT_FAILURE;
-    }
-
-    PipeCloser preprocFileCloser(yyin);
-
-
-    if (preprocOnly || params.generatePrerequisitesFileOnly)
-    {
-        TranslationUnit::createInstance(targetPlatform,
-                                        callToUndefinedFunctionAllowed,
-                                        warnSignCompare,
-                                        warnPassingConstForFuncPtr,
-                                        isConstIncorrectWarningEnabled,
-                                        isBinaryOpGivingByteWarningEnabled,
-                                        isLocalVariableHidingAnotherWarningEnabled,
-                                        isNonLiteralPrintfFormatWarningEnabled,
-                                        isUncalledStaticFunctionWarningEnabled,
-                                        isMissingFieldInitializersWarningEnabled,
-                                        inlineAsmArrayIndexesWarningEnabled,
-                                        relocatabilitySupported,
-                                        params.useDefaultLibraries,
-                                        params.useNativeFloatLibrary);
-        char buffer[8192];
-        while (fgets(buffer, sizeof(buffer), yyin) != NULL)  // while a line can be read
-        {
-            if (preprocOnly)
-            {
-                cout << buffer;
-                if (!cout)
-                {
-                    int e = errno;
-                    cout << PACKAGE << fatalErrorPrefix
-                         << "failed to copy C preprocessor output to standard output:"
-                         << " " << strerror(e) << endl;
-                    TranslationUnit::destroyInstance();
-                    return EXIT_FAILURE;
-                }
-            }
-            else  // extract an #included file path, if applicable:
-            {
-                string filename;
-                if (parseIncludeMarker(buffer, filename))
-                    TranslationUnit::instance().addPrerequisiteFilename(filename.c_str());
-            }
-        }
-        if (preprocOnly)
-        {
-            TranslationUnit::destroyInstance();
-            return EXIT_SUCCESS;
-        }
-    }
-
-
-    TranslationUnitDestroyer tud(true);  // destroy TU at end of this function
-
-
-    if (numErrors == 0 && !params.generatePrerequisitesFileOnly)
-    {
-        TranslationUnit::createInstance(targetPlatform,
-                                            callToUndefinedFunctionAllowed,
-                                            warnSignCompare,
-                                            warnPassingConstForFuncPtr,
-                                            isConstIncorrectWarningEnabled,
-                                            isBinaryOpGivingByteWarningEnabled,
-                                            isLocalVariableHidingAnotherWarningEnabled,
-                                            isNonLiteralPrintfFormatWarningEnabled,
-                                            isUncalledStaticFunctionWarningEnabled,
-                                            isMissingFieldInitializersWarningEnabled,
-                                            inlineAsmArrayIndexesWarningEnabled,
-                                            relocatabilitySupported,
-                                            params.useDefaultLibraries,
-                                            params.useNativeFloatLibrary);
-        TranslationUnit &tu = TranslationUnit::instance();
-
-        if (verbose)
-            cout << "Compiling..." << endl;
-        assert(yyin != NULL);
-        yyparse();  // invoke parser.yy
-
-
-        uint16_t pragmaStackSpace = 0;
-
-        tu.processPragmas(params.codeAddress, params.codeAddressSetBySwitch,
-                          limitAddress, limitAddressSetBySwitch,
-                          params.dataAddress, params.dataAddressSetBySwitch,
-                          pragmaStackSpace, compileOnly);
-
-        /*  Apply #pragma stack_space only if --stack-space not used.
-        */
-        if (pragmaStackSpace != 0 && !stackSpaceSpecifiedByCommandLine)
-            params.stackSpace = pragmaStackSpace;
-
-        /*  On the Vectrex, the writable globals must be mapped at $C880
-            while the code and read-only globals are mapped at the start of memory.
-        */
-        if (targetPlatform == VECTREX)
-            params.dataAddress = 0xC880;  // equivalent to --data=C880
-
-
-        tu.enableNullPointerChecking(nullPointerCheckingEnabled);
-
-        tu.enableStackOverflowChecking(stackOverflowCheckingEnabled);
-
-        if (verbose && targetPlatform != OS9)
-        {
-            cout << "Code address: $" << hex << params.codeAddress << dec << " (" << params.codeAddress << ")\n";
-            cout << "Data address: ";
-            if (params.dataAddress == 0xFFFF)
-                cout << "after the code";
-            else
-                cout << "$" << hex << params.dataAddress << dec << " (" << params.dataAddress << ")";
-            cout << "\n";
-        }
-
-        int pipeCmdStatus = preprocFileCloser.close();
-        if (!WIFEXITED(pipeCmdStatus))
-        {
-            cout << PACKAGE << fatalErrorPrefix << "preprocessor terminated abnormally." << endl;
-            return EXIT_FAILURE;
-        }
-        if (WEXITSTATUS(pipeCmdStatus) != 0)
-        {
-            cout << PACKAGE << fatalErrorPrefix << "preprocessor failed." << endl;
-            return EXIT_FAILURE;
-        }
-
-        if (numErrors == 0)
-        {
-            tu.checkSemantics();  // this is when Scope objects get created in FunctionDefs
-
-            tu.allocateLocalVariables();  // in all FunctionDef objects
-        }
-
-        if (targetPlatform == VECTREX)
-        {
-            // The Vectrex is limited in RAM space and shares the stack with freely available memory.
-            // $C880 - $CBEA is user RAM (874 bytes)
-            // $CBEA is Vec_Default_Stk Default top-of-stack
-            //
-            params.stackSpace = 256;
-        }
-
-        ASMText asmText;
-
-        if (numErrors == 0)
-        {
-            tu.emitAssembler(asmText, params.dataAddress, params.stackSpace, params.extraStackSpace, assumeTrack34);
-
-            if (optimizationLevel > 0)
-                asmText.peepholeOptimize(optimizationLevel == 2);
-            if (wholeFunctionOptimization)
-                asmText.optimizeWholeFunctions();
-        }
-
-
-        /*  Now that yyparse() and emitAssembler() have been called, free the memory,
-            to keep valgrind from reporting a leak.
-        */
-        extern string sourceFilename;
-        sourceFilename.clear();
-
-
-        /*  Create an asm file that will receive the assembly language code:
-        */
-        if (numErrors == 0)
-        {
-            if (verbose)
-            {
-                cout << "Assembly language filename: " << asmFilename << "\n";
-                cout << flush;
-            }
-            ofstream asmFile(asmFilename.c_str(), ios::out);
-            if (!asmFile)
-            {
-                int e = errno;
-                cout << PACKAGE << fatalErrorPrefix << "failed to create assembler file " << asmFilename
-                     << ": " << strerror(e) << endl;
-                return EXIT_FAILURE;
-            }
-            if (!asmText.writeFile(asmFile))
-            {
-                cout << PACKAGE << fatalErrorPrefix << "failed to write output assembly file " << asmFilename << endl;
-                return EXIT_FAILURE;
-            }
-            asmFile.close();
-            if (!asmFile)
-            {
-                cout << PACKAGE << fatalErrorPrefix << "failed to close output assembly file " << asmFilename << endl;
-                return EXIT_FAILURE;
-            }
-        }
-
-        if (verbose)
-            cout << numErrors << " error(s)"
-                    << ", " << numWarnings << " warning(s)." << endl;
-
-        if (numErrors > 0)
-            return EXIT_FAILURE;
-
-        if (numWarnings > 0 && treatWarningsAsErrors)
-            return EXIT_FAILURE;
-    }
-
-    if (params.generatePrerequisitesFile)
-    {
-        string dependenciesFilename = params.prerequisiteFilename.empty()
-                                        ? replaceExtension(compilationOutputFilename, ".d")
-                                        : params.prerequisiteFilename;
-        ofstream dependenciesFile(dependenciesFilename.c_str(), ios::out);
-        if (dependenciesFile.good())
-            TranslationUnit::instance().writePrerequisites(dependenciesFile, dependenciesFilename, compilationOutputFilename, params.pkgdatadir);
-        else
-        {
-            int e = errno;
-            cout << PACKAGE << fatalErrorPrefix << "failed to create dependencies file "
-                    << dependenciesFilename  << ": " << strerror(e) << endl;
-        }
-        if (params.generatePrerequisitesFileOnly)
-            return EXIT_SUCCESS;
-    }
-
-    if (!genAsmOnly)
-    {
-        string lstFilename = useIntDir(moduleName + ".lst");
-        int status = invokeAssembler(asmFilename, compilationOutputFilename, lstFilename, targetPreprocId, verbose);
-        if (compileOnly || status != EXIT_SUCCESS)
-            return status;
-    }
-
-    return EXIT_SUCCESS;
-}
-
-
-static int
-declareInvalidOption(const string &opt)
-{
-    cout << PACKAGE << ": Invalid option: " << opt << "\n";
-    displayHelp();
-    return 1;
-}
-
-
-// argi receives the index of the first non-option argument in argv[].
+// Changes 'params' according to the command-line options specified by argc and argv[1..].
+// argi receives the index of the first non-option argument in argv[1..].
 //
 // Returns:
 //   0 to ask the caller to quit with EXIT_SUCCESS;
@@ -1332,7 +620,7 @@ declareInvalidOption(const string &opt)
 //  -1 to ask the caller to continue.
 //
 static int
-interpretCommandLineOptions(int argc, char *argv[], int &argi)
+interpretCommandLineOptions(Parameters &params, int argc, char *argv[], int &argi)
 {
     size_t numPlatformsSpecified = 0;
 
@@ -1342,12 +630,12 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
 
         if (curopt == "--version" || curopt == "-v")
         {
-            displayVersionNo();
+            params.displayVersionNo();
             return 0;
         }
         if (curopt == "--help" || curopt == "-h")
         {
-            displayHelp();
+            params.displayHelp();
             return 0;
         }
         if (curopt == "--preproc" || curopt == "-E")
@@ -1398,7 +686,7 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
             if (n > 0xFFFF || errno == ERANGE)
             {
                 cout << PACKAGE << ": Invalid code address: " << address << "\n";
-                displayHelp();
+                params.displayHelp();
                 return 1;
             }
             params.codeAddress = (uint16_t) n;
@@ -1412,7 +700,7 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
             if (n > 0xFFFF || errno == ERANGE)
             {
                 cout << PACKAGE << ": Invalid limit address: " << address << "\n";
-                displayHelp();
+                params.displayHelp();
                 return 1;
             }
             params.limitAddress = (uint16_t) n;
@@ -1426,7 +714,7 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
             if (n > 0xFFFF || errno == ERANGE)
             {
                 cout << PACKAGE << ": Invalid data address: " << address << "\n";
-                displayHelp();
+                params.displayHelp();
                 return 1;
             }
             params.dataAddress = (uint16_t) n;
@@ -1529,7 +817,7 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
         if (curopt == "--frankasm")
         {
             cout << PACKAGE << ": --frankasm: obsolete option (must use lwasm).\n";
-            displayHelp();
+            params.displayHelp();
             return 1;
         }
         if (strncmp(curopt.c_str(), "-I", 2) == 0)
@@ -1628,7 +916,7 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
             if (n > 0xFFFF || errno == ERANGE)
             {
                 cout << PACKAGE << ": Invalid argument for --stack-space: " << arg << "\n";
-                displayHelp();
+                params.displayHelp();
                 return 1;
             }
             params.stackSpace = (uint16_t) n;
@@ -1642,7 +930,7 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
             if (n > 0xFFFF || errno == ERANGE)
             {
                 cout << PACKAGE << ": Invalid argument for --add-os9-stack-space: " << arg << "\n";
-                displayHelp();
+                params.displayHelp();
                 return 1;
             }
             params.extraStackSpace = (uint16_t) n;
@@ -1655,7 +943,7 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
             if (n > 0xFFFF || errno == ERANGE)
             {
                 cout << PACKAGE << ": Invalid argument for --function-stack: " << arg << "\n";
-                displayHelp();
+                params.displayHelp();
                 return 1;
             }
             params.functionStackSpace = (uint16_t) n;
@@ -1706,6 +994,11 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
             params.inlineAsmArrayIndexesWarningEnabled = false;
             continue;
         }
+        if (curopt == "-Wfor-condition-sizes")
+        {
+            params.forConditionComparesDifferentSizesWarningEnabled = true;
+            continue;
+        }
         if (curopt == "-Wpass-const-for-func-pointer")  // not documented b/c may be annoying
         {
             params.warnPassingConstForFuncPtr = true;
@@ -1717,10 +1010,15 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
             if (level.length() != 1 || level[0] < '0' || level[0] > '2')
             {
                 cout << PACKAGE << ": Invalid optimization option: " << curopt << "\n";
-                displayHelp();
+                params.displayHelp();
                 return 1;
             }
             params.optimizationLevel = level[0] - '0';
+            continue;
+        }
+        if (curopt == "-fomit-frame-pointer")
+        {
+            params.omitFramePointer = true;
             continue;
         }
         if (curopt == "--no-peephole")
@@ -1745,7 +1043,7 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
                 if (curopt[8] == '=')
                     params.intermediateDir = string(curopt, 9);
                 else
-                    return declareInvalidOption(curopt);
+                    return params.declareInvalidOption(curopt);
             }
             else if (argi + 1 < argc)  // if argument follows
             {
@@ -1799,7 +1097,7 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
         }
 
         if (curopt.empty() || curopt[0] == '-')
-            return declareInvalidOption(curopt);
+            return params.declareInvalidOption(curopt);
 
         break;  // end of options; argi now designates 1st non-option argument
     }
@@ -1817,6 +1115,8 @@ interpretCommandLineOptions(int argc, char *argv[], int &argi)
 int
 main(int argc, char *argv[])
 {
+    Parameters params;
+
     /*  Allow an environment variable to override the system #include directory.
     */
     {
@@ -1826,7 +1126,7 @@ main(int argc, char *argv[])
     }
 
     int argi = 1;
-    int code = interpretCommandLineOptions(argc, argv, argi);
+    int code = interpretCommandLineOptions(params, argc, argv, argi);
     if (code != -1)
         return code == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 
@@ -2006,13 +1306,13 @@ main(int argc, char *argv[])
                 if (!params.outputFilename.empty())
                     compilationOutputFilename = params.outputFilename;
                 else
-                    compilationOutputFilename = useIntDir(moduleName + ".o");
+                    compilationOutputFilename = params.useIntDir(moduleName + ".o");
             }
             else
             {
                 // In compile-and-link mode, outputFilename (if any) is the executable filename,
                 // so it cannot be used for compilationOutputFilename.
-                compilationOutputFilename = useIntDir(moduleName + ".o");
+                compilationOutputFilename = params.useIntDir(moduleName + ".o");
             }
         }
 
@@ -2023,7 +1323,7 @@ main(int argc, char *argv[])
         //
         if (extension == ".c")
         {
-            asmFilename = useIntDir(moduleName + ".s");
+            asmFilename = params.useIntDir(moduleName + ".s");
 
             int s = params.compileCFile(inputFilename,
                                         moduleName,
@@ -2048,8 +1348,8 @@ main(int argc, char *argv[])
         }
         else if (extension == ".s" || extension == ".asm")
         {
-            string lstFilename = useIntDir(moduleName + ".lst");
-            int s = invokeAssembler(inputFilename, compilationOutputFilename, lstFilename, targetPreprocId, params.verbose);
+            string lstFilename = params.useIntDir(moduleName + ".lst");
+            int s = params.invokeAssembler(inputFilename, compilationOutputFilename, lstFilename, targetPreprocId);
 
             if (s != EXIT_SUCCESS)
             {
@@ -2109,7 +1409,8 @@ main(int argc, char *argv[])
 
     }   // for
 
-    removeIntermediateCompilationFiles(intermediateCompilationFiles);
+    if (!params.intermediateFilesKept)
+        removeIntermediateCompilationFiles(intermediateCompilationFiles);
 
     if (status != EXIT_SUCCESS)
         return status;
@@ -2122,15 +1423,14 @@ main(int argc, char *argv[])
     //
     if (params.compileOnly)
         return EXIT_SUCCESS;
-    string linkScriptFilename = useIntDir(replaceExtension(executableFilename, ".link"));
-    string mapFilename = useIntDir(replaceExtension(executableFilename, ".map"));
-    status = invokeLinker(objectFilenames, libraryFilenames, params.useDefaultLibraries,
-                            params.useNativeFloatLibrary,
-                            linkScriptFilename, mapFilename,
-                            executableFilename,
-                            params.targetPlatform, params.libDirs,
-                            params.limitAddress, params.forcedLWLinkFormat, params.verbose);
-    removeIntermediateLinkingFiles(linkScriptFilename, mapFilename, intermediateObjectFiles);
+    string linkScriptFilename = params.useIntDir(replaceExtension(executableFilename, ".link"));
+    string mapFilename = params.useIntDir(replaceExtension(executableFilename, ".map"));
+    status = invokeLinker(params,
+                          objectFilenames, libraryFilenames,
+                          linkScriptFilename, mapFilename,
+                          executableFilename);
+    if (!params.intermediateFilesKept)
+        removeIntermediateLinkingFiles(linkScriptFilename, mapFilename, intermediateObjectFiles);
 
     if (status == EXIT_SUCCESS && params.targetPlatform == DRAGON && params.forcedLWLinkFormat.empty())
         status = convertBinToDragonFormat(executableFilename, params.verbose);

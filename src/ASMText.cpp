@@ -1,7 +1,7 @@
-/*  $Id: ASMText.cpp,v 1.170 2022/08/10 02:43:12 sarrazip Exp $
+/*  $Id: ASMText.cpp,v 1.173 2023/03/26 01:45:52 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2023 Pierre Sarrazin <http://sarrazip.com/>
     Copyright (C) 2016 Jamie Cho <https://github.com/jamieleecho>
 
     This program is free software: you can redistribute it and/or modify
@@ -115,6 +115,7 @@ const ASMText::OptimizingMethod ASMText::level2OptimFuncs[] =
     &ASMText::replaceBranchToUncondBranch,
     &ASMText::ldbBranchLdbCompare,
     &ASMText::removePushBFromLdbPushLdbCmp,
+    &ASMText::removeLDDAfterPushingD,
 };
 
 
@@ -523,50 +524,62 @@ ASMText::findBlockIndex(size_t elementIndex) const
 // in early 2016.
 //
 void
-ASMText::peepholeOptimize(bool useStage2Optims)
+ASMText::peepholeOptimize(size_t optimizationLevel, bool omitFramePointer)
 {
-    const size_t maxIters = 300;  // limit iterations in case of a bug in an optim method
-
-    size_t numIters;
-    for (numIters = 0; numIters < maxIters; ++numIters)
+    if (optimizationLevel >= 1)
     {
-        bool modified = false;
+        const size_t maxIters = 300;  // limit iterations in case of a bug in an optim method
 
-        if (removeUselessLabels())
-            modified = true;
-
-        for (size_t i = 0; i < elements.size(); ++i)
+        size_t numIters;
+        for (numIters = 0; numIters < maxIters; ++numIters)
         {
-            // Advance to the next instuction.
-            size_t instrIndex = findNextInstrBeforeLabel(i);
-            if (instrIndex != size_t(-1))
-                i = instrIndex;
+            bool modified = false;
 
-            for (auto method : level1OptimFuncs)
-                if ((this->*method)(i))
-                {
-                    modified = true;
-                    break;
-                }
+            if (removeUselessLabels())
+                modified = true;
 
-            if (useStage2Optims)
-                for (auto method : level2OptimFuncs)
+            for (size_t i = 0; i < elements.size(); ++i)
+            {
+                // Advance to the next instuction.
+                size_t instrIndex = findNextInstrBeforeLabel(i);
+                if (instrIndex != size_t(-1))
+                    i = instrIndex;
+
+                for (auto method : level1OptimFuncs)
                     if ((this->*method)(i))
                     {
                         modified = true;
                         break;
                     }
+
+                if (optimizationLevel >= 2)
+                    for (auto method : level2OptimFuncs)
+                        if ((this->*method)(i))
+                        {
+                            modified = true;
+                            break;
+                        }
+            }
+
+            if (!modified)
+                break;
         }
 
-        if (!modified)
-            break;
+        if (numIters >= maxIters)  // if too many iterations
+        {
+            cerr << "cmoc: ERROR: Too many iterations (" << numIters << ") in the peephole optimizer\n";
+            exit(1);
+        }
     }
 
-    if (numIters >= maxIters)  // if too many iterations
-    {
-        cerr << "cmoc: ERROR: Too many iterations (" << numIters << ") in the peephole optimizer\n";
-        exit(1);
-    }
+    // This phase must be done last because earlier optimization phases do not expect
+    // local variables and function arguments to be referred to through the S register.
+    // Also, this phase does not need to be run more than once.
+    //
+    if (omitFramePointer)
+        for (size_t i = 0; i < elements.size(); ++i)
+            if (elements[i].type == FUNCTION_START)
+                removeFramePointer(i);  // advances 'i'
 }
 
 
@@ -4632,6 +4645,220 @@ ASMText::removePushBFromLdbPushLdbCmp(size_t index)
 }
 
 
+// Look for: PSHS B,A; LDD ,S.
+// Remove the LDD instruction.
+//
+bool
+ASMText::removeLDDAfterPushingD(size_t index)
+{
+    if (!isInstr(index, "PSHS", "B,A"))
+        return false;
+    size_t lddIndex = findNextInstrBeforeLabel(index + 1);
+    if (!isInstr(lddIndex, "LDD", ",S"))
+        return false;
+
+    commentOut(lddIndex, "optim: removeLDDAfterPushingD");
+    return true;
+}
+
+
+// Tries to remove the use of a register for the frame pointer from the functions
+// that starts at 'index'.
+// Returns true if it succeeds, false if it could not be done.
+//
+bool
+ASMText::removeFramePointer(size_t &index)
+{
+    if (index + 1 >= elements.size() || elements[index].type != FUNCTION_START)
+        return false;
+    ++index;
+    if (elements[index].type != LABEL)
+        return false;
+    ++index;
+    while (index < elements.size() && elements[index].type == COMMENT)
+        ++index;
+    if (!isInstr(index, "PSHS", "U"))
+        return false;
+    ++index;
+    if (!isInstr(index, "LEAU", ",S"))
+        return false;
+
+    vector<size_t> toBeCommentedOut;
+    toBeCommentedOut.push_back(index - 1);  // remove PSHS U
+    toBeCommentedOut.push_back(index);  // remove LEAU ,S
+
+    ++index;
+
+    int16_t localVarSpace = 0;  // in bytes
+    if (isInstrAnyArg(index, "LEAS"))  // extract the number subtracted from S, if any
+    {
+        const string &arg = elements[index].fields[1];  // expect "-nnn,S", where nnn is a positive integer
+        if (!startsWith(arg, "-") || !endsWith(arg, ",S"))
+            return false;   // unexpected
+        localVarSpace = atoi(arg.c_str() + 1);
+
+        ++index;
+    }
+
+    // Iterate over the instructions of the current function.
+    // List the changes to be made to remove the frame pointer (U),
+    // but only apply them if no contraindication is seen.
+    //
+    // References to U are replaced with references to S.
+    // Example: Assume we have this initially:
+    //      PSHS U; LEAU ,S; LEAS -10,S; LDA -3,U
+    //   This creates this stack frame:
+    //      LLLLLLLLLLFFRR
+    //      ^         ^
+    //      S      a  U
+    //   where LLLLLLLLLL is the local variable space (10 bytes),
+    //   FF is the value of U that got pushed,
+    //   RR is the return address,
+    //   'a' is the address of the byte that LDA loads.
+    //   The stack frame will become this, because U will not be pushed anymore:
+    //      LLLLLLLLLLRR
+    //      ^
+    //      S      a
+    //   The sequence will become this:
+    //      LEAS -10,S; LDA -3+10,S
+    //
+    //   Now consider the case where we access a function argument, i.e., LDD 4,U:
+    //      LLLLLLLLLLFFRRPP
+    //      ^         ^   ^
+    //      S         U   U+4
+    //   With tne new stack frame, we have this:
+    //      LLLLLLLLLLRRPP
+    //      ^         ^ ^
+    //      S           S+10+2
+    //   Thus, we now have LDD 4-2+10,S.
+    //
+    //   Also, each instruction that changes S causes an additional adjustment to the displacement on S.
+    //
+    struct DisplacementChange
+    {
+        size_t index;
+        int16_t displacementFromS;
+        DisplacementChange(size_t idx, int16_t displ) : index(idx), displacementFromS(displ) {}
+    };
+    vector<DisplacementChange> displacementChanges;
+    int16_t adjustment = 0;  // in bytes; tracks changes to S
+    size_t rtsIndex = size_t(-1);  // index of the PSHS U,PC to be replaced with RTS
+    size_t destroyLocalVarSpaceIndex = size_t(-1);  // index of the LEAS ,U instruction
+
+    for ( ; index < elements.size() && elements[index].type != FUNCTION_END; ++index)
+    {
+        const Element &el = elements[index];
+        if (el.type == INLINE_ASM)
+            return false;
+        if (el.type != INSTR)
+            continue;
+        const string &ins = el.fields[0];
+        const string &arg = el.fields[1];
+        if (ins == "LEAS")
+        {
+            if (arg == ",U")  // undo stack frame
+                destroyLocalVarSpaceIndex = index;
+            else if (endsWith(arg, ",S"))
+                adjustment -= (int16_t) atoi(arg.c_str());
+        }
+        else if (endsWith(arg, ",S+"))
+            adjustment -= 1;
+        else if (endsWith(arg, ",S++"))
+            adjustment -= 2;
+        else if (endsWith(arg, ",-S"))
+            adjustment += 1;
+        else if (endsWith(arg, ",--S"))
+            adjustment += 2;
+        else if (ins == "PULS" && arg == "U,PC")
+            rtsIndex = index;
+        else if (ins == "PSHS" || ins == "PULS")
+        {
+            uint8_t argRegs = parsePushPullArg(arg);
+            static const uint8_t byteRegs[] = { A, B, CC };
+            static const uint8_t wordRegs[] = { X, Y, U };
+            int16_t bytesMoved = 0;
+            for (uint8_t r : byteRegs)
+                if (argRegs & r)
+                    bytesMoved += 1;
+            for (uint8_t r : wordRegs)
+                if (argRegs & r)
+                    bytesMoved += 2;
+            if (ins == "PSHS")
+                adjustment += bytesMoved;
+            else
+                adjustment -= bytesMoved;
+        }
+        else if (endsWith(arg, ",U") || endsWith(arg, ",U]"))  // if reference to local var or func arg
+        {
+            int16_t displacementFromU = (int16_t) atoi(arg.c_str() + int(arg[0] == '['));  // negative means local var, positive means func arg
+            int16_t displacementFromS = displacementFromU + localVarSpace + (displacementFromU > 0 ? -2 : 0) + adjustment;
+            displacementChanges.push_back(DisplacementChange(index, displacementFromS));
+        }
+    }
+
+    if (adjustment != 0)
+    {
+        assert(!"adjustment not zero");
+        return false;  // abort: S register tracking not back to 0
+    }
+
+    if (destroyLocalVarSpaceIndex == size_t(-1))
+    {
+        assert(!"expected LEAS ,U not found");
+        return false;  // abort: expected LEAS ,U not found
+    }
+    if (rtsIndex == size_t(-1))
+    {
+        assert(!"expected PULS U,PC not found");
+        return false;  // abort: expected PULS U,PC not found
+    }
+
+    // Remove LEAS ,U.
+    //
+    if (localVarSpace != 0)
+    {
+        char newArg[16];
+        snprintf(newArg, sizeof(newArg), "%d,S", localVarSpace);
+        elements[destroyLocalVarSpaceIndex].fields[1] = newArg;
+        elements[destroyLocalVarSpaceIndex].fields[2] = "optim: removeFramePointer";
+    }
+    else
+        commentOut(destroyLocalVarSpaceIndex, "optim: removeFramePointer");
+
+    // Remove PULS U,PC.
+    //
+    elements[rtsIndex].fields[0] = "RTS";
+    elements[rtsIndex].fields[1].clear();
+    elements[rtsIndex].fields[2] = "optim: removeFramePointer";
+
+    // Remove or change some other instructions.
+    //
+    for (size_t i : toBeCommentedOut)
+        commentOut(i, "optim: removeFramePointer");
+    for (const DisplacementChange &dc : displacementChanges)
+    {
+        string &arg = elements[dc.index].fields[1];
+        char newArg[16];
+        if (dc.displacementFromS == 0)
+            strcpy(newArg, ",S");
+        else
+            snprintf(newArg, sizeof(newArg), "%d,S", dc.displacementFromS);
+        if (arg[0] == '[')
+        {
+            arg.reserve(1 + strlen(newArg) + 1);  // make sure only 1 allocation
+            arg = '[';
+            arg.append(newArg);
+            arg.append("]");
+        }
+        else
+            arg = newArg;
+        elements[dc.index].fields[2] += " (optim: removeFramePointer)";
+    }
+
+    return true;
+}
+
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
@@ -5209,14 +5436,11 @@ ASMText::InsEffects::InsEffects(const Element &e)
     const string &ins = e.fields[0];
     const string &arg = e.fields[1];
 
-    bool isInlineASMIns = (e.fields[2].find(inlineASMTag) != string::npos);
     bool disregardArgument = false;
 
     // Analyze opcode.
     //
-    if (isInlineASMIns)
-        read |= A | B | X | Y | U, written |= A | B | X | Y | U;  // be pessimistic
-    else if (ins == "BITA" || ins == "TSTA")
+    if (ins == "BITA" || ins == "TSTA")
         read |= A;
     else if (ins == "BITB" || ins == "TSTB")
         read |= B;
@@ -5279,9 +5503,9 @@ ASMText::InsEffects::InsEffects(const Element &e)
     else if (startsWith(ins, "LB"))  // LBRA or LBRN
         ;
     else if (ins == "PSHS")
-        read |= parsePushPullArg(arg);
+        read |= parsePushPullArg(arg) & ~CC;
     else if (ins == "PULS")
-        written |= parsePushPullArg(arg);
+        written |= parsePushPullArg(arg) & ~CC;
     else if (ins == "LEAS" || ins == "INC" || ins == "DEC" || ins == "CLR")
         ;
     else if (ins == "RTS" || ins == "RTI")
@@ -5301,7 +5525,7 @@ ASMText::InsEffects::InsEffects(const Element &e)
 
     // Analyze argument.
     //
-    if (isInlineASMIns || disregardArgument)
+    if (disregardArgument)
         ;
     else if (ins == "TFR" || ins == "EXG")
     {
@@ -5425,7 +5649,7 @@ ASMText::getRegPairNames(const string &arg, uint8_t &firstReg, uint8_t &secondRe
 // of register names in 'arg'.
 //
 uint8_t
-ASMText::InsEffects::parsePushPullArg(const string &arg)
+ASMText::parsePushPullArg(const string &arg)
 {
     uint8_t regs = 0;
     for (size_t len = arg.length(), i = 0; i < len; ++i)
@@ -5439,7 +5663,7 @@ ASMText::InsEffects::parsePushPullArg(const string &arg)
         case 'X': regs |= X; break;
         case 'B': regs |= B; break;
         case 'A': regs |= A; break;
-        case 'C': ++i; break;  // don't care about CC
+        case 'C': regs |= CC; ++i; break;
         case 'D':
             if (i + 1 < len && toupper(arg[i + 1]) == 'P')
                 ;  // don't care about DP

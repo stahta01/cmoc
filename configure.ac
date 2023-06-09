@@ -1,8 +1,8 @@
-# $Id: configure.ac,v 1.164 2023/02/04 03:47:18 sarrazip Exp $
+# $Id: configure.ac,v 1.166 2023/04/29 23:30:48 sarrazip Exp $
 
 AC_PREREQ(2.54)
 
-AC_INIT(cmoc, 0.1.81)
+AC_INIT(cmoc, 0.1.82)
 AC_CONFIG_SRCDIR(src/lexer.ll)
 AM_INIT_AUTOMAKE
 
@@ -13,7 +13,12 @@ AC_SUBST(PACKAGE_FULL_NAME)
 AC_SUBST(PACKAGE_SUMMARY_EN)
 AC_SUBST(PACKAGE_SUMMARY_FR)
 
-MANUAL_DATE_EN="February 3rd, 2023"; AC_SUBST(MANUAL_DATE_EN)
+MANUAL_DATE_EN="April 29th, 2023"; AC_SUBST(MANUAL_DATE_EN)
+
+dnl  Adds an --enable-debug option to configure.
+dnl  Must be invoked before AC_PROG_CXX.
+dnl
+AX_CHECK_ENABLE_DEBUG()
 
 AC_PROG_CXX
 AC_LANG_CPLUSPLUS
@@ -22,7 +27,7 @@ dnl  The CMOC source code relies the C++11 standard.
 dnl  It also uses some POSIX functions that are not declared by default on all platforms.
 dnl  We pass [ext] to AX_CXX_COMPILE_STDCXX to use -std=gnu++11 if available,
 dnl  instead of -std=c++11.
-dnl  The latter does not necessarilky define strdup(), fileno() and popen() on Cygwin as of Jan. 2023.
+dnl  The latter does not necessarily define strdup(), fileno() and popen() on Cygwin as of Jan. 2023.
 dnl
 AX_CXX_COMPILE_STDCXX([11], [ext], [mandatory])
 
@@ -36,6 +41,8 @@ AC_CHECK_PROG(TAIL, tail, tail)
 AC_CHECK_PROG(HEXDUMP, hexdump, hexdump)
 AC_CHECK_PROG(STRINGS, strings, strings)
 
+# The test suites are Perl scripts.
+#
 AC_PROG_PERL_MODULES(strict)
 
 

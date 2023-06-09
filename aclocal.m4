@@ -1088,4 +1088,5 @@ AC_SUBST([am__untar])
 
 m4_include([macros/ac_compile_warnings.m4])
 m4_include([macros/ac_prog_perl_modules.m4])
+m4_include([macros/ax_check_enable_debug.m4])
 m4_include([macros/ax_cxx_compile_stdcxx.m4])

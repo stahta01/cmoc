@@ -1,4 +1,4 @@
-/*  $Id: util.h,v 1.52 2023/01/22 03:30:09 sarrazip Exp $
+/*  $Id: util.h,v 1.55 2023/04/09 21:19:30 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -23,16 +23,13 @@
 #include "TypeDesc.h"
 
 #include <typeinfo>
-#include <vector>
 #include <list>
 #include <set>
 #include <map>
 #include <algorithm>
-#include <iostream>
 #include <fstream>
 #include <sstream>
 #include <stdio.h>
-#include <string.h>
 #include <stdarg.h>
 #include <memory>
 
@@ -165,12 +162,6 @@ findInVectorOfPairsByKey(std::vector< std::pair<Key, Value> > &v, const Key &key
             return it;
     return v.end();
 }
-
-
-// Tag used in comments for asm(INS, ARG) statements.
-// Also used by ASMText.
-//
-extern const std::string inlineASMTag;
 
 
 const char *getLoadInstruction(BasicType t);
@@ -383,6 +374,29 @@ std::ostream &operator << (std::ostream &out, const VectorToString<T> &vts)
     out << vts.closing;
     return out;
 }
+
+
+class PipeCloser
+{
+public:
+    PipeCloser(FILE *_file) : file(_file) {}
+    ~PipeCloser() { close(); }
+    int close()
+    {
+        if (file == NULL)
+            return 0;  // success: nothing to do
+        int status = pclose(file);
+        file = NULL;
+        return status;
+    }
+private:
+    // Forbidden:
+    PipeCloser(const PipeCloser &);
+    PipeCloser &operator = (const PipeCloser &);
+
+private:
+    FILE *file;
+};
 
 
 // Array that makes no dynamic allocations and imposes a maximum compile-time capacity.

@@ -38,14 +38,15 @@ typedef unsigned long uint32_t;
 typedef signed long   int32_t;
 
 
+// initCoCoSupport() must have been called for these variables to be valid.
+//
+extern byte isCoCo3;  // non-zero iff the machine is a CoCo 3
 extern byte textScreenWidth;
 extern byte textScreenHeight;
 
 
-extern byte isCoCo3;
-
-
 // May be called more than once.
+// Sets isCoCo3, textScreenWidth, textScreenHeight.
 //
 void initCoCoSupport();
 

@@ -1,7 +1,7 @@
-/*  $Id: ForStmt.h,v 1.9 2018/02/02 02:55:59 sarrazip Exp $
+/*  $Id: ForStmt.h,v 1.10 2023/03/04 01:56:25 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2023 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -63,6 +63,7 @@ private:
     CodeStatus emitInScope(ASMText &out,
                            const std::string &bodyLabel, const std::string &conditionLabel,
                            const std::string &incrementLabel, const std::string &endLabel) const;
+    void warnIfForConditionComparesDifferentSizes() const;
 
     // Forbidden:
     ForStmt(const ForStmt &);

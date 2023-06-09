@@ -1,4 +1,4 @@
-/*  $Id: Tree.cpp,v 1.44 2022/06/09 03:23:43 sarrazip Exp $
+/*  $Id: Tree.cpp,v 1.45 2023/03/23 03:16:24 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
@@ -722,7 +722,7 @@ Tree::isStructWithOnlyNumericalLiteralInitValues(const TypeDesc &varTypeDesc) co
 
 
 bool
-Tree::isStaticallyInitializable(const TypeDesc &varTypeDesc) const
+Tree::isStaticallyInitializable(const TypeDesc &varTypeDesc, bool allowStringLiterals) const
 {
     if (definesOnlyAMatrixOfCharsAndHasInitializer(varTypeDesc))
         return true;
@@ -758,7 +758,7 @@ Tree::isStaticallyInitializable(const TypeDesc &varTypeDesc) const
                     continue;
                 }
 
-                if (! (*it)->isStaticallyInitializable(*member->getTypeDesc()))
+                if (! (*it)->isStaticallyInitializable(*member->getTypeDesc(), allowStringLiterals))
                     return false;
             }
             return true;
@@ -768,13 +768,16 @@ Tree::isStaticallyInitializable(const TypeDesc &varTypeDesc) const
             const TypeDesc *arrayElemTypeDesc = varTypeDesc.getPointedTypeDesc();
             for (vector<Tree *>::const_iterator it = seq->begin(); it != seq->end(); ++it)
             {
-                if (! (*it)->isStaticallyInitializable(*arrayElemTypeDesc))
+                if (! (*it)->isStaticallyInitializable(*arrayElemTypeDesc, allowStringLiterals))
                     return false;
             }
             return true;
         }
         return false;  // neither struct nor array
     }
+
+    if (allowStringLiterals && dynamic_cast<const StringLiteralExpr *>(this))
+        return true;
 
     return false;  // other types of trees
 }

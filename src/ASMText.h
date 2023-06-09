@@ -1,7 +1,7 @@
-/*  $Id: ASMText.h,v 1.87 2022/08/10 02:43:12 sarrazip Exp $
+/*  $Id: ASMText.h,v 1.90 2023/03/26 01:45:52 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2023 Pierre Sarrazin <http://sarrazip.com/>
     Copyright (C) 2016 Jamie Cho <https://github.com/jamieleecho>
 
     This program is free software: you can redistribute it and/or modify
@@ -52,7 +52,7 @@ public:
     void emitEnd();
 
     void optimizeWholeFunctions();
-    void peepholeOptimize(bool useStage2Optims);
+    void peepholeOptimize(size_t optimizationLevel, bool omitFramePointer);
 
     // Writes assembly text into 'out'.
     // Does not close 'out'.
@@ -72,6 +72,8 @@ public:
     // Condition or uncondition branch.
     //
     bool isBranchAtIndex(size_t index) const;
+
+    static uint8_t parsePushPullArg(const std::string &arg);
 
     enum Type { INSTR, LABEL, INLINE_ASM, COMMENT, SEPARATOR, INCLUDE,
                 FUNCTION_START, FUNCTION_END, SECTION_START, SECTION_END, EXPORT, IMPORT, END };
@@ -100,7 +102,6 @@ public:
         InsEffects(const Element &e);
         std::string toString() const;
     private:
-        static uint8_t parsePushPullArg(const std::string &arg);
         static bool onlyDecimalDigits(const std::string &s);
         static bool onlyHexDigits(const std::string &s, size_t offset);
     };
@@ -206,12 +207,15 @@ private:
     bool replaceBranchToUncondBranch(size_t index);
     bool ldbBranchLdbCompare(size_t index);
     bool removePushBFromLdbPushLdbCmp(size_t index);
+    bool removeLDDAfterPushingD(size_t index);
 
     // Whole-function optimizer:
     bool isBasicBlockEndingInstruction(const Element &e) const;
     void createBasicBlock(size_t startIndex, size_t endIndex);
     void processBasicBlocks(const std::string &functionId);
     size_t findBlockIndex(size_t elementIndex) const;
+
+    bool removeFramePointer(size_t &index);
 
     // Utilities:
     bool removeUselessLabels();

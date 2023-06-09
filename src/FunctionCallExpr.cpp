@@ -1,4 +1,4 @@
-/*  $Id: FunctionCallExpr.cpp,v 1.101 2023/01/20 03:03:52 sarrazip Exp $
+/*  $Id: FunctionCallExpr.cpp,v 1.102 2023/04/09 01:06:28 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -1002,16 +1002,8 @@ FunctionCallExpr::emitCode(ASMText &out, bool lValue) const
     {
         assert(functionId.empty());
 
-        // Prepare a temporary VariableExpr with the function pointer variable declaration,
-        // and have it emit code that loads that function pointer in D.
-        //
-        VariableExpr ve(ie->getId());
-        ve.setTypeDesc(TranslationUnit::getTypeManager().getIntType(WORD_TYPE, false));
-        ve.setDeclaration(funcPtrVarDecl);
-        if (!ve.emitCode(out, false))
-            return false;
-        out.ins("TFR", "D,X");
-        out.ins("JSR", ",X");
+        out.ins("JSR", "[" + funcPtrVarDecl->getFrameDisplacementArg() + "]",
+                       "indirect call through variable `" + ie->getId() + "'");
     }
     else  // called address is (*pf)() or object.member().
     {

@@ -1,4 +1,4 @@
-/*  $Id: SwitchStmt.h,v 1.11 2019/01/18 02:42:20 sarrazip Exp $
+/*  $Id: SwitchStmt.h,v 1.12 2023/04/09 05:59:04 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2017 Pierre Sarrazin <http://sarrazip.com/>
@@ -20,7 +20,6 @@
 #ifndef _H_SwitchStmt
 #define _H_SwitchStmt
 
-#include "Tree.h"
 #include "TreeSequence.h"
 
 

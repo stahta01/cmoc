@@ -1,4 +1,4 @@
-/*  $Id: util.cpp,v 1.44 2023/01/22 03:30:09 sarrazip Exp $
+/*  $Id: util.cpp,v 1.45 2023/03/26 01:45:53 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2020 Pierre Sarrazin <http://sarrazip.com/>
@@ -32,9 +32,6 @@
 #include <iomanip>
 
 using namespace std;
-
-
-const std::string inlineASMTag = "[inline asm]";
 
 
 int16_t

@@ -1,5 +1,5 @@
 %{
-/*  $Id: parser.yy,v 1.94 2023/01/22 03:30:09 sarrazip Exp $
+/*  $Id: parser.yy,v 1.95 2023/04/06 19:20:05 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -629,6 +629,19 @@ direct_declarator:
                 $$->setAsArrayOfFunctionPointers($7, $4);  // takes ownership of FormalParamList ($7), deletes $4
                 free($3);
                 TranslationUnit::checkForEllipsisWithoutNamedArgument($7);
+            }
+    | '(' ID ')' '(' VOID ')'  /* Supports calling function using parenthesized function name: (f)() */
+            {
+                $$ = new Declarator($2, 0, sourceFilename, lineno);
+                free($2);
+                $$->setFormalParamList(new FormalParamList());
+            }
+    | '(' ID ')' '(' parameter_type_list_opt ')'  /* Same, with args: (f)(42) */
+            {
+                $$ = new Declarator($2, 0, sourceFilename, lineno);
+                $$->setAsFunctionPointer($5);  // takes ownership of FormalParamList
+                free($2);
+                TranslationUnit::checkForEllipsisWithoutNamedArgument($5);
             }
     ;
 

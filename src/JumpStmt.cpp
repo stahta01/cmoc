@@ -1,4 +1,4 @@
-/*  $Id: JumpStmt.cpp,v 1.29 2022/10/25 16:35:39 sarrazip Exp $
+/*  $Id: JumpStmt.cpp,v 1.30 2023/02/18 02:26:49 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -24,6 +24,7 @@
 #include "SemanticsChecker.h"
 #include "WordConstantExpr.h"
 #include "CastExpr.h"
+#include "CommaExpr.h"
 #include "Declaration.h"
 
 #include <assert.h>
@@ -72,6 +73,17 @@ JumpStmt::getArgument() const
 }
 
 
+static bool
+isCommaExprAndLastSubExprIs8BitConstant(const Tree &expr)
+{
+    const CommaExpr *commaExpr = dynamic_cast<const CommaExpr *>(&expr);
+    if (!commaExpr || commaExpr->size() == 0)
+        return false;
+    const Tree *lastSubExpr = *commaExpr->rbegin();
+    return lastSubExpr->is8BitConstant();
+}
+
+
 void
 JumpStmt::checkSemantics(Functor &f)
 {
@@ -99,9 +111,11 @@ JumpStmt::checkSemantics(Functor &f)
                 ;  // returning a byte from a word function: fine, regardless of signedness
             else if (funcRetType == BYTE_TYPE && argType == WORD_TYPE && argument->is8BitConstant())
                 ;  // returning a word constant that fits in a byte: fine
-            else if (funcRetType == WORD_TYPE &&argType == WORD_TYPE)
+            else if (funcRetType == BYTE_TYPE && argType == WORD_TYPE && isCommaExprAndLastSubExprIs8BitConstant(*argument))
+                ;  // returning a word constant that is the last expr in a comma expr and that fits in a byte: fine; e.g., return (f(), g(), 42);
+            else if (funcRetType == WORD_TYPE && argType == WORD_TYPE)
                 ;  // returning a word from a word function: fine, regardless of signedness
-            else if (funcRetType == BYTE_TYPE &&argType == BYTE_TYPE)
+            else if (funcRetType == BYTE_TYPE && argType == BYTE_TYPE)
                 ;  // returning a byte from a byte function: fine, regardless of signedness
             else if (funcRetType == POINTER_TYPE && (argType == BYTE_TYPE || argType == WORD_TYPE)
                     && argument->evaluateConstantExpr(value) && value == 0)

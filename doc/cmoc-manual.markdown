@@ -5,8 +5,8 @@
 pre { margin-left: 2em }
 </style>
 </head>
-<!-- To use a specific font for this document, insert "font-family: Times New Roman; "
-     inside the style attribute of the <body> element.
+<!-- To use a specific font for this document, insert "font-family: Times New Roman; ",
+     for example, inside the style attribute of the <body> element.
 -->
 <body style="margin-left: 50px; margin-right: 50px; margin-top: 30px; margin-bottom: 30px;">
 
@@ -15,7 +15,7 @@ The CMOC C-like 6809-targeting cross-compiler
 
 **By Pierre Sarrazin (sarrazip@sarrazip.com)**
 
-Date of this manual: 2023-02-03
+Date of this manual: 2023-04-29
 
 Copyright &copy; 2003-2023
 
@@ -25,7 +25,7 @@ Distributed under the
 **[GNU General Public License](http://www.gnu.org/licenses/gpl-3.0.en.html)**,
 **version 3 or later** (see the License section).
 
-Version of CMOC covered by this manual: **0.1.81**
+Version of CMOC covered by this manual: **0.1.82**
 
 
 Introduction
@@ -264,6 +264,8 @@ to a 35-track Disk Basic diskette image file. For example:
 > writecocofile testing.dsk foo.bin
 
 Pass `--help` to writecocofile for the available options.
+The `-r` option reads a file from the image and the `-d` option lists
+the files in the image.
 
 For more information on running a CoCo emulator on a GNU/Linux system, see
 <http://sarrazip.com/emul-coco.html>.
@@ -873,21 +875,35 @@ The .srec file can be executed by passing its path to
 
 ### The standard library
 
-CMOC's standard library is small. The program must `#include <cmoc.h>`
-to use functions like printf(). See that file for a list of implemented C functions.
+CMOC's standard library is small.
+The program must `#include <cmoc.h>` to use functions like printf().
+See that file for a list of implemented C functions.
 Many are C functions while others are CMOC extensions.
 ("Standard" here means that those functions come with CMOC, not that
 CMOC aims to provide a complete [C standard library]( https://en.wikipedia.org/wiki/C_standard_library).)
 
-readline() acts like Basic's LINE INPUT command and returns the address of
-the (NUL-terminated) string entered.
-This address is a global buffer.
-The next call to readline() will overwrite that buffer.
+#### Provided header files
+
+The following header files are provided with CMOC.
+They should be used by a directive of the form `#include <_____.h>`.
+
+* `<assert.h>`: Defines assert(), a macro that aborts the program if the assertion it is given is false.
+* `<cmoc.h>`: Declares printf() and several other functions from C.
+* `<coco.h>`: Declares several CoCo-specific functions, including initCoCoSupport(),
+              which should be called first by a program that targets the CoCo.
+* `<dskcon-standalone.h>`: Declares dskcon\_init(), dskcon\_processSector(), etc. to read and write
+                           Disk Extended Color Basic floppy sectors without the presence of DECB.
+* `<setjmp.h>`: Declares C functions setjmp() and longjmp(), which can be used to perform
+                a nonlocal goto.
+* `<stdarg.h>`: Declares C macros va\_start(), va\_arg() and va\_end(), which facilitate
+                the implementation of functions that take a variable argument list, like printf().
+* `<vectrex.h>`, `<vectrex/bios.h>`, `<vectrex/stdlib.h>`: Various definitions for the Vectrex console.
 
 #### printf()
 
-CMOC's printf() function supports %u, %d, %x, %X, %p, %s,
-%c, %f and %%. Specifying a field width is allowed, except for %f.
+CMOC's [printf()](https://en.wikipedia.org/wiki/Printf_format_string)
+function supports %u, %d, %x, %X, %p, %s, %c, %f and %%.
+Specifying a field width is allowed, except for %f.
 A left justification is only supported for strings, e.g.,
 `%-15s` will work, but `%-6u` will not.
 Zero padding for an integer is supported (e.g., `%04x`).
@@ -980,6 +996,13 @@ passing the length of the destination buffer. But checking for
 this limit would have a performance hit that is not necessarily
 acceptable on a CoCo. If such a function is needed, it can be
 implemented using the technique described in the previous section.
+
+#### readline()
+
+readline(), declared by `#include <cmoc.h>`, acts like Basic's LINE INPUT
+command and returns the address of the (NUL-terminated) string entered.
+This address is a global buffer.
+The next call to readline() will overwrite that buffer.
 
 #### Redefining a standard library function
 
@@ -1422,11 +1445,8 @@ and the read-only global variables at the typical CoCo cartridge ROM
 address of $C000, while mapping the writable global variables
 at a RAM address like $3800.
 
-This is achieved by using the four `#pragma` directives that
-appear in this example:
-
-    #pragma org $C000
-    #pragma data $3800
+This is achieved by using the `--org` and `--data` command-line options.
+If the following program is in prog.c:
 
     int f() { return 42; }
 
@@ -1442,13 +1462,26 @@ appear in this example:
         return 0;
     }
 
-`g` is read-only because it is of a constant type.
-`byteArray` and `text` are read-only because they are arrays whose
-elements are of a constant type.
+Then it can be compiled for a cartridge with this command, which
+specifies hexadecimal addresses:
+
+    cmoc --raw --org=C000 --data=3800 prog.c
+
+The `--raw` option tells CMOC to generate only the machine code,
+without any of the headers that appears in the .bin format.
+The execute will be named `prog.raw`.
+
+When developing a program made of multiple C files, `--org` and
+`--data` should only be passed to the compiler invocation that links
+the executable from the object files.
+
+In the code above, variable `g` is read-only because it is of a
+constant type.  `byteArray` and `text` are read-only because they are
+arrays whose elements are of a constant type.
 
 These three variables are thus automatically put in the read-only
 section, next to the code. This means they will be part of the
-cartridge ROM, instead of using up RAM space.
+cartridge ROM.
 
 In the case of `text`, the use of the empty brackets is necessary for
 that variable to be seen as read-only.
@@ -1456,27 +1489,26 @@ Declaring this variable as `const char *text` would lead the compiler
 to see it as writable: the `text` pointer itself can be modified,
 although the characters it points to cannot.
 
-Using `sbrk()` can be dangerous when the writable data section is not
-in the default position.
+In the case of a cartridge program, no writable global variable can have
+an initializer.  That is because the ROM file format has no support for
+mapping a value into RAM, like the .bin format has.
 
-After compiling the program, the .bin file normally contains
-a single contiguous block of code. This block must be extracted from
-the .bin file and, for a test with the XRoar emulator, it must then be
-padded at the end with enough bytes so that the total file length is
-a multiple of 256. The following Perl script does this:
+After compiling the program, it can be tested with the XRoar emulator,
+but first it must be padded at the end with enough bytes so that the
+total file length is a multiple of 256. The following Perl script
+does this:
 
     #!/usr/bin/perl
-    sysread(STDIN, $h, 5) == 5 or die;
     sysread(STDIN, $rom, 0xFFFF) > 0 or die;
-    my $romLen = length($rom) - 5;
+    my $romLen = length($rom);
     binmode STDOUT or die;
-    print substr($rom, 0, $romLen);
+    print $rom;
     my $extra = $romLen % 256;
     print chr(0) x (256 - $extra) if $extra;
 
-The script, in a file called bin2cart.pl, can be used this way:
+This script, in a file called bin2cart.pl, can be used this way:
 
-    perl bin2cart.pl < foo.bin > foo.rom
+    perl bin2cart.pl < foo.raw > foo.rom
 
 This ROM image can be tested in the XRoar emulator this way:
 
@@ -1484,10 +1516,9 @@ This ROM image can be tested in the XRoar emulator this way:
 
 Note that XRoar requires the image file to have the .rom extension.
 
-In a cartridge-based program written as above, the CoCo's 60 Hz IRQ interrupt is
-not enabled, so Basic's TIMER counter (at $0112) does not get
-incremented. To enable the IRQ in such a program,
-put this at the beginning of the `main()` function:
+In a cartridge-based program written as above, the CoCo's 60 Hz IRQ
+interrupt is not enabled.  To enable the IRQ in such a program, put
+this at the beginning of the `main()` function:
 
     asm
     {
@@ -1502,10 +1533,8 @@ put this at the beginning of the `main()` function:
         andcc   #$AF
     }
 
-Finally, it is preferable to use the command-line options `--org` and `--data`,
-instead of `#pragma org` and `#pragma data`, when developing a program made of
-multiple C files. The two command-line options should only be passed to the
-compiler invocation that links the executable from the object files.
+Function `sbrk()`, which allocates memory dynamically, should be avoided
+because it expects to run in the default Disk Basic environment.
 
 
 ### Enumerations (enum)
@@ -1699,7 +1728,7 @@ When a struct passed by value, it is pushed exactly as it is, without
 any padding, except if its size is 1: then an additional dummy byte
 is pushed afterwards. (The same thing is done when a byte-sized argument
 is promoted to 16 bits. This is for the benefit of va_arg(), defined
-in &lt;stdarg.h>).
+in `<stdarg.h>`).
 
 The return value must be left in B if it is byte-sized or
 in D if it is 16 bits.

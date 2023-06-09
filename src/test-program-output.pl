@@ -10,6 +10,7 @@ my $generateCoCoBinary = 0;
 my $testCCompilability = 0;
 my $hexLoadOffset = 0;  # passed to usim
 my $optimLevel = 2;
+my $omitFramePointer = 0;
 
 
 my @testCaseList =
@@ -7955,7 +7956,7 @@ expected => ""
 
 
 {
-title => q{Static keyword ignored, declaration still processed},
+title => q{Static global variable},
 program => q`
     static int g;
     
@@ -10132,7 +10133,7 @@ program => q`
     } 
     _CMOC_fpir_ int firstParamInReg(int a, int b)
     {
-        assert(&a <= &b - 2);  // a is spilled below return address, so at least two "ints" of difference
+        assert((byte *) &a < (byte *) &b - 2);  // a is spilled below return address, so at least 2 bytes of difference
         return a + b;
     }
     typedef _CMOC_fpir_ int (*FuncPtrType_firstParamInReg)(int a, int b);
@@ -10157,7 +10158,7 @@ program => q`
     }
     _CMOC_fpir_ byte takesByte(byte a, int b)
     {
-        assert(&a <= &b - 2);  // a is spilled below return address, so at least two "ints" of difference
+        assert((byte *) &a < (byte *) &b - 2);  // a is spilled below return address, so at least 3 bytes of difference
         return (byte) (~a + b);
     }
     int main()
@@ -11808,6 +11809,45 @@ expected => ""
 
 
 {
+title => q{Initializer for a local static variable containing a string literal},
+program => q`
+    const char *f(int i)
+    {
+        static const char *a[] = { "foo", "bar" };
+        return a[i];
+    }
+    const char *g(void)
+    {
+        static const char *b = "baz";
+        return b;
+    }
+    struct S
+    {
+        int n;
+        const char *s;
+    };
+    const char *h(int *dest)
+    {
+        static const struct S object = { 1000, "quux" };
+        *dest = object.n;
+        return object.s;
+    }
+    int main()
+    {
+        assert_eq(strcmp(f(0), "foo"), 0);
+        assert_eq(strcmp(f(1), "bar"), 0);
+        assert_eq(strcmp(g(), "baz"), 0);
+        int k = 0;
+        assert_eq(strcmp(h(&k), "quux"), 0);
+        assert_eq(k, 1000);
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
 title => q{Static function that is only called through a pointer},
 program => q`
     static int f(void) { return 1234; }
@@ -12591,6 +12631,287 @@ expected => ""
 },
 
 
+{
+title => q{Adds and shifts test},
+program => q`
+    int main()  // Stolen from a CoCo Discord forum on 2023-01-28.
+    {
+        for (unsigned i = 0; i <= 255; ++i)
+        {
+            unsigned char yy = (unsigned char) i, a, b;
+            asm { nop }  // optimizer barrier
+            a = yy+128;   
+            a = a>>1;
+            a = a+48;
+            asm { nop }  // optimizer barrier
+            b = ((unsigned char)((unsigned char)(yy+128))>>1)+48;
+            assert_eq(a, b);
+        }
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{Return a comma expression from a function that must return a byte},
+program => q`
+    enum { K = 42 };
+    int no;
+    unsigned char f()
+    {
+        return (no = 1234, K);  // type of parenthesis is type of last sub-expression, i.e., K, i.e., unsigned char
+    }
+    int main()
+    {
+        unsigned char retval = f();
+        assert_eq(no, 1234);
+        assert_eq(retval, 42);
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{setjmp(), longjmp()},
+program => q`
+    #include <setjmp.h>
+    jmp_buf env;
+    byte numFCalls = 0, numGCalls = 0;
+    void f(void)
+    {
+        ++numFCalls;
+        longjmp(env, 9999);
+    }
+    void g(void)
+    {
+        ++numGCalls;
+        f();
+    }
+    void checkEnv(void)
+    {
+        // Check that 'env' filled with non-zero register values.
+        const void *savedPC = (void *) ((word *) env)[0];
+        const void *savedS  = (void *) ((word *) env)[1];
+        const void *savedU  = (void *) ((word *) env)[2];
+        //printf("env: PC=%p, S=%p, U=%p\n", savedPC, savedS, savedU);
+        assert_ne(savedPC, 0);
+        assert_ne(savedS,  0);
+        assert_ne(savedU,  0);
+        assert(savedPC < savedS);
+    }
+    int main()
+    {
+        memset(env, '\0', sizeof(env));
+        int value = setjmp(env);
+        checkEnv();
+        if (value == 0)
+        {
+            // 'env' set up for future longjmp().
+            assert_eq(numGCalls, 0);
+            assert_eq(numFCalls, 0);
+            g();  // calls longjmp()
+            assert(0);  // not supposed to get here
+        }
+        else
+        {
+            // Destination of longjmp().
+            assert_eq(numGCalls, 1);
+            assert_eq(numFCalls, 1);
+            assert_eq(value, 9999);
+        }
+        printf("end\n");
+        return 0;
+    }
+    `,
+expected => "end\n"
+},
+
+
+{
+title => q{Passing 0 to longjmp() gives 1},
+program => q`
+    #include <setjmp.h>
+    jmp_buf env;
+    byte numZeroReturnValues = 0;
+    void f(void)
+    {
+        longjmp(env, 0);
+    }
+    int main()
+    {
+        int value = setjmp(env);
+        if (value == 0)
+        {
+            ++numZeroReturnValues;  // count number of times passing thru here, to detect infinite loop
+            assert_eq(numZeroReturnValues, 1);
+            if (numZeroReturnValues != 1)  // if longjmp() mishandled the 0 it got as its 2nd arg
+                return 1;  // quit, to avoid infinite loop (a failed assert does not quit)
+            f();
+            assert(0);  // not supposed to get here
+        }
+        else
+            assert_eq(value, 1);
+        printf("end\n");
+        return 0;
+    }
+    `,
+expected => "end\n"
+},
+
+
+{
+title => q{-fomit-frame-pointer does not apply to functions that use inline assembly},
+compilerOptions => "-fomit-frame-pointer",
+program => q`
+    asm int asmOnly(int n)
+    {
+        asm
+        {
+            ldd     2,s
+            addd    #1
+        }
+    }
+    int asmAndC(int n)
+    {
+        int arg = 0;
+        asm
+        {
+            ldd     :n
+            std     :arg
+        }
+        return arg + 2;
+    }
+    int noAsm(int n)
+    {
+        return n + 3;
+    }
+
+    #define DECLARE_LABEL(VARIABLE, ADDRESS_LABEL) byte *VARIABLE; asm { leax ADDRESS_LABEL,pcr } asm { stx :VARIABLE } //printf("Variable %s\n", #VARIABLE);
+
+    void checkFramePointer(const byte *funcStart, const byte *funcEnd, byte framePtrExpected)
+    {
+        //printf("checkFramePointer(%p, %p, %u): size=%u\n", funcStart, funcEnd, framePtrExpected, funcEnd - funcStart);
+        //printf("checkFramePointer: First bytes: $%02x $%02x $%02x $%02x\n", funcStart[0], funcStart[1], funcStart[2], funcStart[3]);
+        if (framePtrExpected)
+        {
+            size_t funcSize = funcEnd - funcStart;
+            assert(funcSize >= 4 + 4);
+
+            // Look for PSHS U ($34 $40) and LEAU ,S ($33 $E4) as the first two instructions.
+            assert_eq(funcStart[0], 0x34);
+            assert_eq(funcStart[1], 0x40);
+            assert_eq(funcStart[2], 0x33);
+            assert_eq(funcStart[3], 0xE4);
+
+            // Look for LEAS ,U ($32 $C4) and PULS U,PC ($35 $C0) at the end of the function.
+            assert_eq(funcEnd[-4], 0x32);
+            assert_eq(funcEnd[-3], 0xC4);
+            assert_eq(funcEnd[-2], 0x35);
+            assert_eq(funcEnd[-1], 0xC0);
+        }
+        else
+        {
+            assert(   funcStart[0] != 0x34
+                   || funcStart[1] != 0x40
+                   || funcStart[2] != 0x33
+                   || funcStart[3] != 0xE4);
+        }
+    }
+    int main()
+    {
+        // main() has a frame pointer, before -fomit-frame-pointer is attempted, because DECLARE_LABEL() declares a local variable.
+
+        DECLARE_LABEL(asmOnly_start, _asmOnly)
+        DECLARE_LABEL(asmOnly_end, funcend_asmOnly)
+        checkFramePointer(asmOnly_start, asmOnly_end, 0);  // asm-only function does not have a CMOC-provided frame pointer anyway
+
+        DECLARE_LABEL(asmAndC_start, _asmAndC)
+        DECLARE_LABEL(asmAndC_end, funcend_asmAndC)
+        checkFramePointer(asmAndC_start, asmAndC_end, 1);  // -fomit-frame-pointer does not apply b/c inline asm in asmAndC()
+
+        DECLARE_LABEL(noAsm_start, _noAsm)
+        DECLARE_LABEL(noAsm_end, funcend_noAsm)
+        checkFramePointer(noAsm_start, noAsm_end, 0);  // -fomit-frame-pointer applies
+
+        DECLARE_LABEL(checkFramePointer_start, _checkFramePointer)
+        DECLARE_LABEL(checkFramePointer_end, funcend_checkFramePointer)
+        checkFramePointer(checkFramePointer_start, checkFramePointer_end, 0);  // -fomit-frame-pointer applies
+
+        DECLARE_LABEL(main_start, _main)
+        DECLARE_LABEL(main_end, funcend_main)
+        checkFramePointer(main_start, main_end, 1);  // -fomit-frame-pointer does not apply b/c inline asm in DECLARE_LABEL
+
+        assert_eq(asmOnly(1000), 1001);
+        assert_eq(asmAndC(1000), 1002);
+        assert_eq(noAsm(1000),   1003);
+
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{Call to function via parenthesized name to avoid macro with same name},
+program => q`
+    int foo(void) { return 42; }
+    #define foo() 99
+    int main()
+    {
+        assert_eq(foo(), 99);  // uses macro
+        assert_eq((foo)(), 42);  // uses function
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{Using a parenthesized function name to call a function that has the same name as a macro},
+program => q`
+    #define foo() 99
+    int (foo)(void);  // cpp does not replace foo b/c paren prevents macro invocation
+    int (foo)(void) { return 42; }  // test both prototype and body: different rules in parser.yy
+    #define bar(n) ((n) + 1)
+    int (bar)(int n);  // now with argument(s): different rule in parser.yy
+    int (bar)(int n) { return n + 2; }
+    #define baz() 88
+    int (baz)();  // implicit ellipsis
+    int (baz)() { return 77; }
+    #define quux(...) 66
+    unsigned (quux)(int n, ...);  // explicit ellipsis
+    unsigned (quux)(int n, ...)
+    {
+        va_list ap;  // <stdarg.h> is included by <cmoc.h>, which is included by each unit test
+        va_start(ap, n);
+        unsigned u = va_arg(ap, unsigned);
+        char c = va_arg(ap, char);
+        va_end(ap);
+        return (unsigned) n + u + (unsigned) c;
+    }
+    int main()
+    {
+        assert_eq(foo(), 99);  // uses macro
+        assert_eq((foo)(), 42);  // uses function
+        assert_eq(bar(10), 11);  // uses macro
+        assert_eq((bar)(20), 22);  // uses function
+        assert_eq(baz(), 88);
+        assert_eq((baz)(), 77);
+        assert_eq(quux(), 66);
+        assert_eq((quux)(1000, 200u, 'A'), 1265);
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
 #{
 #title => q{Sample test},
 #program => q`
@@ -12614,19 +12935,20 @@ sub usage
 Usage: $0 [options] SRCDIR
 
 Options:
---nocleanup       Do not delete the intermediate files after running.
---only=NUM        Only run test #NUM, with no clean up. Implies --nocleanup.
---last            Only run the last test. Implies --nocleanup.
---start=NUM       Start at test #NUM. The first test has number zero.
---stop-on-fail    Stop right after a test has failed instead of continuing
-                  to the end of the test list. Implies --nocleanup.
---titles[=STRING] Dump test titles (with numbers) to standard output.
-                  If STRING specified, only dumps titles that contain STRING.
---coco            Generate test####.bin files and suite###.bin files to be run
-                  on a CoCo.
---compile-as-c    Check that each program is accepted by the local C compiler.
---load-offset=D   Tell 6809 simulator to load program with specified HEX offset.
---optims=L        Compile with level L optimizations (default is $optimLevel).
+--nocleanup           Do not delete the intermediate files after running.
+--only=NUM            Only run test #NUM, with no clean up. Implies --nocleanup.
+--last                Only run the last test. Implies --nocleanup.
+--start=NUM           Start at test #NUM. The first test has number zero.
+--stop-on-fail        Stop right after a test has failed instead of continuing
+                      to the end of the test list. Implies --nocleanup.
+--titles[=STRING]     Dump test titles (with numbers) to standard output.
+                      If STRING specified, only dumps titles that contain STRING.
+--coco                Generate test####.bin files and suite###.bin files to be run
+                      on a CoCo.
+--compile-as-c        Check that each program is accepted by the local C compiler.
+--load-offset=D       Tell 6809 simulator to load program with specified HEX offset.
+--optims=L            Compile with level L optimizations (default is $optimLevel).
+--omit-frame-pointer  Pass -fomit-frame-pointer to the compiler (default is not to).
 
 __EOF__
 
@@ -12655,6 +12977,7 @@ if (!GetOptions(
         "load-offset=s" => \$loadOffsetArg,
         "titles:s" => \$titleDumpWanted,  # the ':' means argument is optional
         "optims=i" => \$optimLevel,
+        "omit-frame-pointer" => \$omitFramePointer,
         ))
 {
     usage(1);
@@ -12844,7 +13167,9 @@ sub testProgram($$$$$$)
         return undef;
     }
 
-    my $compCmd = "./cmoc --usim --verbose -nostdinc -O$optimLevel --org=$org --intermediate";
+    my $compCmd = "./cmoc --usim --verbose -nostdinc -O$optimLevel "
+                  . ($omitFramePointer ? "-fomit-frame-pointer" : "")
+                  . " --org=$org --intermediate";
     
     $compCmd .= " -Lstdlib/ -L float";
 
@@ -12971,6 +13296,7 @@ sub runTestNumber($)
     my $preamble = <<__EOF__;
 #ifdef __GNUC__
 #include <stdio.h>
+#include <stdarg.h>
 #else
 #include <cmoc.h>
 #endif
@@ -12979,25 +13305,24 @@ typedef unsigned char byte;
 typedef signed char sbyte;
 typedef unsigned int word;
 typedef signed int sword;
-#define NO_OPTIM asm("nop")  /* Make sure no optimization interferes with an assert. */
-#define assert(cond) do { NO_OPTIM; if (!(cond)) printf("ERROR: assert failed: line %d\\n", __LINE__); } while (0)
+#define assert(cond) do { if (!(cond)) printf("ERROR: assert failed: line %d\\n", __LINE__); } while (0)
 #define assert_eq(actual, expected) \\
-do { NO_OPTIM; if ((actual) != (expected)) \\
+do { if ((actual) != (expected)) \\
          printf("ERROR: assert_eq failed: line %d: should be equal: got %u (\$%x), expected %u (\$%x)\\n", \\
                 __LINE__, (word) (actual), (word) (actual), (word) (expected), (word) (expected)); \\
    } while (0)
 #define assert_eq_signed(actual, expected) \\
-do { NO_OPTIM; if ((actual) != (expected)) \\
+do { if ((actual) != (expected)) \\
          printf("ERROR: assert_eq_signed failed: line %d: should be equal: got %d expected %d\\n", \\
                 __LINE__, (actual), (expected)); \\
    } while (0)
 #define assert_ne(actual, expected) \\
-do { NO_OPTIM;if ((actual) == (expected)) \\
+do { if ((actual) == (expected)) \\
          printf("ERROR: assert_ne failed: line %d: should be different: got %u (\$%x), expected %u (\$%x)\\n", \\
                 __LINE__, (word) (actual), (word) (actual), (word) (expected), (word) (expected)); \\
    } while (0)
 #define assert_range(actual, expectedMin, expectedMax) \\
-do { NO_OPTIM;if ((actual) < (expectedMin) && (actual) > (expectedMax)) \\
+do { if ((actual) < (expectedMin) && (actual) > (expectedMax)) \\
          printf("ERROR: assert_range failed: line %d: out of range: got %u (\$%x), expected %u..%u (\$%x..\$%x)\\n", \\
                 __LINE__, (word) (actual), (word) (actual), (word) (expectedMin), (word) (expectedMax), (word) (expectedMin), (word) (expectedMax)); \\
    } while (0)

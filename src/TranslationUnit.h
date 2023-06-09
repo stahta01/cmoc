@@ -1,7 +1,7 @@
-/*  $Id: TranslationUnit.h,v 1.83 2022/08/22 03:02:54 sarrazip Exp $
+/*  $Id: TranslationUnit.h,v 1.89 2023/04/10 04:48:52 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2023 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -31,6 +31,7 @@ class ClassDef;
 class DeclarationSequence;
 class DeclarationSpecifierList;
 class Declarator;
+class Parameters;
 
 
 class TranslationUnit
@@ -45,20 +46,7 @@ public:
 
     static TypeManager &getTypeManager() { return instance().typeManager; }
 
-    static void createInstance(TargetPlatform targetPlatform,
-                               bool callToUndefinedFunctionAllowed,
-                               bool warnSignCompare,
-                               bool warnPassingConstForFuncPtr,
-                               bool isConstIncorrectWarningEnabled,
-                               bool isBinaryOpGivingByteWarningEnabled,
-                               bool isLocalVariableHidingAnotherWarningEnabled,
-                               bool isNonLiteralPrintfFormatWarningEnabled,
-                               bool isUncalledStaticFunctionWarningEnabled,
-                               bool isMissingFieldInitializersWarningEnabled,
-                               bool inlineAsmArrayIndexesWarningEnabled,
-                               bool relocatabilitySupported,
-                               bool useDefaultLibraries,
-                               bool useNativeFloatLibrary);
+    static void createInstance(const Parameters &params);
 
     static void destroyInstance();
 
@@ -97,8 +85,6 @@ public:
 
     void checkSemantics();
 
-    void setTargetPlatform(TargetPlatform platform);
-
     TargetPlatform getTargetPlatform() const;
 
     // Indicates if the platform the compiler is generating code for uses the Y register,
@@ -122,7 +108,6 @@ public:
     void allocateLocalVariables();
 
     // allocateLocalVariables() must have been called.
-    // setTargetPlatform() must have been called before calling this method.
     // Stops short if an error is detected.
     // dataAddress: 0xFFFF is the data section is NOT separate from the code/read-only section.
     // stackSpace: Ignored when targetting OS-9.
@@ -186,17 +171,9 @@ public:
                         uint16_t &stackSpace,
                         bool compileOnly);
 
-    /** Determines if accesses to pointers will include a run-time null pointer check.
-    */
-    void enableNullPointerChecking(bool enable);
-
     /** Indicates if accesses to pointers must include a run-time null pointer check.
     */
     bool isNullPointerCheckingEnabled() const;
-
-    /** Determines if stack overflows are checked for at the beginning of a function.
-    */
-    void enableStackOverflowChecking(bool enable);
 
     /** Indicates if stack overflows are checked for at the beginning of a function.
     */
@@ -206,8 +183,6 @@ public:
                                                    std::vector<Declarator *> *declarators);
 
     static void checkForEllipsisWithoutNamedArgument(const FormalParamList *formalParamList);
-
-    bool isCallToUndefinedFunctionAllowed() const;
 
     bool isWarningOnSignCompareEnabled() const;
 
@@ -235,6 +210,8 @@ public:
 
     void warnAboutVolatile();
 
+    bool warnIfForConditionComparesDifferentSizes();
+
     // Adds the given filename to the list of filenames that the current
     // translation unit depends on.
     //
@@ -255,20 +232,7 @@ public:
 
 private:
 
-    TranslationUnit(TargetPlatform targetPlatform,
-                    bool _callToUndefinedFunctionAllowed,
-                    bool _warnSignCompare,
-                    bool _warnPassingConstForFuncPtr,
-                    bool _isConstIncorrectWarningEnabled,
-                    bool _isBinaryOpGivingByteWarningEnabled,
-                    bool _isLocalVariableHidingAnotherWarningEnabled,
-                    bool _isNonLiteralPrintfFormatWarningEnabled,
-                    bool _isUncalledStaticFunctionWarningEnabled,
-                    bool _isMissingFieldInitializersWarningEnabled,
-                    bool _inlineAsmArrayIndexesWarningEnabled,
-                    bool _relocatabilitySupported,
-                    bool _useDefaultLibraries,
-                    bool _useNativeFloatLibrary);
+    TranslationUnit(const Parameters &params);
 
     void detectCalledFunctions();
     static std::string resolveVectrexMusicAddress(const std::string &symbol);
@@ -298,6 +262,7 @@ private:
 
     static TranslationUnit *theInstance;
 
+    const Parameters &params;
     TypeManager typeManager;
     Scope *globalScope;  // Scope tree must be destroyed after the TreeSequences in definitionList
     TreeSequence *definitionList;  // owns the object, which must have been allocated with 'new'
@@ -325,25 +290,9 @@ private:
                         // key = dword representation, value = asm label
 
     std::map<std::string, std::string> builtInFunctionDescs;
-    bool relocatabilitySupported;
-    bool nullPointerCheckingEnabled;
-    bool stackOverflowCheckingEnabled;
-    bool callToUndefinedFunctionAllowed;
-    bool warnSignCompare;  // warn if <, <=, >, >= used on operands of differing signedness
-    bool warnPassingConstForFuncPtr;
     bool warnedAboutUnsupportedFloats;
-    bool isConstIncorrectWarningEnabled;
-    bool isBinaryOpGivingByteWarningEnabled;
-    bool isLocalVariableHidingAnotherWarningEnabled;
-    bool isNonLiteralPrintfFormatWarningEnabled;
-    bool isUncalledStaticFunctionWarningEnabled;
-    bool isMissingFieldInitializersWarningEnabled;
-    bool inlineAsmArrayIndexesWarningEnabled;
     bool warnedAboutVolatile;
-    bool useDefaultLibraries;  // if false, only libcmoc-crt-*.a is used
-    bool useNativeFloatLibrary;
     std::set<std::string> neededUtilitySubRoutines;
-    TargetPlatform targetPlatform;
 
     // Vectrex fields:
     std::string vxTitle;    
@@ -359,6 +308,20 @@ private:
     // Forbidden operations:
     TranslationUnit(const TranslationUnit &);
     TranslationUnit & operator = (const TranslationUnit &);
+};
+
+
+class TranslationUnitDestroyer
+{
+public:
+    TranslationUnitDestroyer(bool _destroyTU) : destroyTU(_destroyTU) {}
+    ~TranslationUnitDestroyer()
+    {
+        if (destroyTU)
+            TranslationUnit::destroyInstance();
+    }
+private:
+    bool destroyTU;
 };
 
 

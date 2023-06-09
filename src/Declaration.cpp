@@ -1,4 +1,4 @@
-/*  $Id: Declaration.cpp,v 1.130 2022/07/22 02:44:23 sarrazip Exp $
+/*  $Id: Declaration.cpp,v 1.131 2023/03/23 03:16:24 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
@@ -55,6 +55,7 @@ Declaration::Declaration(const string &id, const TypeDesc *td,
     hasStaticKeyword(_isStatic),
     isExtern(_isExtern),
     needsFinish(false),
+    dynamicInitializerForced(false),
     arraySizeExprList()
 {
     if (isExtern)
@@ -76,6 +77,7 @@ Declaration::Declaration(const string &id, const TypeDesc *varTypeDesc,
     hasStaticKeyword(_isStatic),
     isExtern(_isExtern),
     needsFinish(true),
+    dynamicInitializerForced(false),
     arraySizeExprList(_arraySizeExprList)
 {
     if (isExtern)
@@ -348,13 +350,19 @@ Declaration::emitGlobalVariables(ASMText &out, bool readOnlySection, bool withSt
     else  // !withStaticInitializer
     {
         // We do not emit an FCB or FDB because these globals are initialized
-        // at run-time by INITGL, so that they are re-initialized every time
+        // at run-time by INITGL (or in the case of a local static, at the first execution
+        // of the containing function), so that they are re-initialized every time
         // the program is run.
-        // This re-initialization does not happen for constant integer arrays,
+        // This re-initialization does not happen for constant global integer arrays,
         // for space saving purposes.
         //
+        if (isLocalStatic() && isDynamicInitializerForced())  // see also Declaration::emitCode()
+        {
+            out.emitLabel(getLabel() + ".initialized");
+            out.ins("RMB", "1");
+        }
         out.emitLabel(getLabel());
-        out.ins("RMB", wordToString(size), getVariableId());
+        out.ins("RMB", wordToString(size), getVariableId());  // init to false because in BSS section
     }
 
     return true;  // success
@@ -1416,12 +1424,38 @@ Declaration::emitCode(ASMText &out, bool /*lValue*/) const
     if (isExternal())
         out.emitImport(getLabel());
 
-    if (initializationExpr == NULL || isLocalStatic())
+    if (initializationExpr == NULL)
         return true;  // nothing to do
+
+    if (isLocalStatic() && !isDynamicInitializerForced())
+        return true;  // nothing to do
+
+    string initLabel, postInitLabel;
+    if (isLocalStatic())
+    {
+        // This is a local static variable that whose initialization is being forced to be dynamic.
+        // This is because it contains string literals, whose address is only known as run-time,
+        // because the OS or the LOADM command may have loaded the program at an address that is
+        // only determined at run-time.
+        // In such a case, the initializer of the variable is run only the first time that execution
+        // passes through that variable's declaration.
+        // A global hidden boolean is used to remember if the variable has already been initialized.
+        //
+        initLabel = getLabel() + ".initialized";
+        postInitLabel = TranslationUnit::instance().generateLabel('L');
+        out.ins("TST", initLabel, "has `" + variableId + "' been initialized?");
+        out.ins("BNE", postInitLabel, "if yes, skip init code");
+    }
 
     writeLineNoComment(out, "init of variable " + variableId);
 
     emitInitializationExprCode(out);
+
+    if (isLocalStatic())
+    {
+        out.ins("INC", initLabel, "mark `" + variableId + "' as initialized");
+        out.emitLabel(postInitLabel);
+    }
 
     return true;
 }

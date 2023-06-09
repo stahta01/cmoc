@@ -1,4 +1,4 @@
-# $Id: Makefile.am,v 1.76 2023/01/09 04:27:44 sarrazip Exp $
+# $Id: Makefile.am,v 1.78 2023/04/09 01:06:29 sarrazip Exp $
 
 # N.B.: CMOC must already have been compiled before this directory can be processed.
 
@@ -6,7 +6,10 @@
 #          while references to code or read-only data must be specified with uppercase ",PCR".
 #          This is for the benefit of OS-9, where ",pcr" gets converted to ",Y".
 
-# The eader files go in /usr/share/cmoc/include.
+# Flags to be passed to all invocations of lwasm.
+LWASMFLAGS =
+
+# The header files typically go in /usr/share/cmoc/include.
 #
 cmocincdir = $(pkgdatadir)/include
 cmocinc_HEADERS = \
@@ -15,9 +18,10 @@ cmocinc_HEADERS = \
 	coco.h \
 	disk.h \
 	stdarg.h \
+	setjmp.h \
 	vectrex.h \
 	dskcon-standalone.h \
-    cmoc-stdlib-private.h
+	cmoc-stdlib-private.h
 
 vectrexincdir = $(cmocincdir)/vectrex
 vectrexinc_HEADERS = \
@@ -208,6 +212,7 @@ C_COMMON = \
 	ltoa.c \
 	_FinishIntegerToASCII.c \
 	stdarg.c \
+        setjmp.c \
 	sqrt16.c \
 	sqrt32.c \
 	divmod16.c \
@@ -344,27 +349,27 @@ libcmoc-std-tht.a: $(STD_THT_OBJ)
 	$(LWAR) -c $@ $(STD_THT_OBJ)
 
 %.ecb_o: %.asm std.inc ../float/float.inc
-	$(LWASM) -fobj -D_COCO_BASIC_ -D_COCO_OR_DRAGON_BASIC_ --output=$@ $<
+	$(LWASM) $(LWASMFLAGS) -fobj -D_COCO_BASIC_ -D_COCO_OR_DRAGON_BASIC_ --output=$@ $<
 %.usim_o: %.asm std.inc ../float/float.inc
-	$(LWASM) -fobj -DUSIM --output=$@ $<
+	$(LWASM) $(LWASMFLAGS) -fobj -DUSIM --output=$@ $<
 OS9TEMP = $(notdir $<.os9asm)
 %.os9_o: %.asm std.inc ../float/float.inc
 	$(PERL) $(srcdir)/os9fixup.pl < $< > $(OS9TEMP)
-	$(LWASM) -fobj -DOS9 -I$(srcdir) --pragma=dollarnotlocal --output=$@ $(OS9TEMP)
+	$(LWASM) $(LWASMFLAGS) -fobj -DOS9 -I$(srcdir) --pragma=dollarnotlocal --output=$@ $(OS9TEMP)
 	rm $(OS9TEMP)
 # OS9: dollarnotlocal is necessary to avoid errors on identifiers like "F$Exit".
 %.flex_o: %.asm std.inc ../float/float.inc
-	$(LWASM) -fobj -DFLEX --output=$@ $<
+	$(LWASM) $(LWASMFLAGS) -fobj -DFLEX --output=$@ $<
 %.vec_o: %.asm std.inc ../float/float.inc
-	$(LWASM) -fobj -DVECTREX --output=$@ $<
+	$(LWASM) $(LWASMFLAGS) -fobj -DVECTREX --output=$@ $<
 %.dgn_o: %.asm std.inc ../float/float.inc
-	$(LWASM) -fobj -DDRAGON -D_COCO_OR_DRAGON_BASIC_ --output=$@ $<
+	$(LWASM) $(LWASMFLAGS) -fobj -DDRAGON -D_COCO_OR_DRAGON_BASIC_ --output=$@ $<
 %.void_o: %.asm std.inc ../float/float.inc
-	$(LWASM) -fobj -D_CMOC_VOID_TARGET_ --output=$@ $<
+	$(LWASM) $(LWASMFLAGS) -fobj -D_CMOC_VOID_TARGET_ --output=$@ $<
 %.thm_o: %.asm std.inc ../float/float.inc
-	$(LWASM) -fobj -DTHOMMO --output=$@ $<
+	$(LWASM) $(LWASMFLAGS) -fobj -DTHOMMO --output=$@ $<
 %.tht_o: %.asm std.inc ../float/float.inc
-	$(LWASM) -fobj -DTHOMTO --output=$@ $<
+	$(LWASM) $(LWASMFLAGS) -fobj -DTHOMTO --output=$@ $<
 
 INTERMEDIATE = #--intermediate
 CMOC_LIB_FLAGS = -O2 -DNDEBUG -nostdinc -I $(srcdir) $(INTERMEDIATE) -Werror -Wno-inline-asm-array-indexes

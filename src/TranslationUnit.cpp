@@ -1,7 +1,7 @@
-/*  $Id: TranslationUnit.cpp,v 1.205 2022/12/28 20:47:52 sarrazip Exp $
+/*  $Id: TranslationUnit.cpp,v 1.212 2023/04/10 04:48:49 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2023 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -19,6 +19,7 @@
 
 #include "TranslationUnit.h"
 
+#include "Parameters.h"
 #include "TreeSequence.h"
 #include "DeclarationSequence.h"
 #include "FunctionDef.h"
@@ -37,9 +38,7 @@
 #include "LabeledStmt.h"
 #include "ExpressionTypeSetter.h"
 
-#include <assert.h>
 #include <errno.h>
-#include <fstream>
 
 using namespace std;
 
@@ -48,36 +47,10 @@ using namespace std;
 
 
 void
-TranslationUnit::createInstance(TargetPlatform targetPlatform,
-                                bool callToUndefinedFunctionAllowed,
-                                bool warnSignCompare,
-                                bool warnPassingConstForFuncPtr,
-                                bool isConstIncorrectWarningEnabled,
-                                bool isBinaryOpGivingByteWarningEnabled,
-                                bool isLocalVariableHidingAnotherWarningEnabled,
-                                bool isNonLiteralPrintfFormatWarningEnabled,
-                                bool isUncalledStaticFunctionWarningEnabled,
-                                bool isMissingFieldInitializersWarningEnabled,
-                                bool inlineAsmArrayIndexesWarningEnabled,
-                                bool relocatabilitySupported,
-                                bool useDefaultLibraries,
-                                bool useNativeFloatLibrary)
+TranslationUnit::createInstance(const Parameters &params)
 {
     assert(theInstance == NULL);
-    new TranslationUnit(targetPlatform,
-                        callToUndefinedFunctionAllowed,
-                        warnSignCompare,
-                        warnPassingConstForFuncPtr,
-                        isConstIncorrectWarningEnabled,
-                        isBinaryOpGivingByteWarningEnabled,
-                        isLocalVariableHidingAnotherWarningEnabled,
-                        isNonLiteralPrintfFormatWarningEnabled,
-                        isUncalledStaticFunctionWarningEnabled,
-                        isMissingFieldInitializersWarningEnabled,
-                        inlineAsmArrayIndexesWarningEnabled,
-                        relocatabilitySupported,
-                        useDefaultLibraries,
-                        useNativeFloatLibrary);
+    new TranslationUnit(params);
     assert(theInstance);
 }
 
@@ -91,21 +64,9 @@ TranslationUnit::destroyInstance()
 }
 
 
-TranslationUnit::TranslationUnit(TargetPlatform _targetPlatform,
-                                 bool _callToUndefinedFunctionAllowed,
-                                 bool _warnSignCompare,
-                                 bool _warnPassingConstForFuncPtr,
-                                 bool _isConstIncorrectWarningEnabled,
-                                 bool _isBinaryOpGivingByteWarningEnabled,
-                                 bool _isLocalVariableHidingAnotherWarningEnabled,
-                                 bool _isNonLiteralPrintfFormatWarningEnabled,
-                                 bool _isUncalledStaticFunctionWarningEnabled,
-                                 bool _isMissingFieldInitializersWarningEnabled,
-                                 bool _inlineAsmArrayIndexesWarningEnabled,
-                                 bool _relocatabilitySupported,
-                                 bool _useDefaultLibraries,
-                                 bool _useNativeFloatLibrary)
-  : typeManager(),
+TranslationUnit::TranslationUnit(const Parameters &_params)
+  : params(_params),
+    typeManager(),
     globalScope(NULL),
     definitionList(NULL),
     functionDefs(),
@@ -122,25 +83,9 @@ TranslationUnit::TranslationUnit(TargetPlatform _targetPlatform,
     dwordConstantLabelToValue(),
     dwordConstantValueToLabel(),
     builtInFunctionDescs(),
-    relocatabilitySupported(_relocatabilitySupported),
-    nullPointerCheckingEnabled(false),
-    stackOverflowCheckingEnabled(false),
-    callToUndefinedFunctionAllowed(_callToUndefinedFunctionAllowed),
-    warnSignCompare(_warnSignCompare),
-    warnPassingConstForFuncPtr(_warnPassingConstForFuncPtr),
     warnedAboutUnsupportedFloats(false),
-    isConstIncorrectWarningEnabled(_isConstIncorrectWarningEnabled),
-    isBinaryOpGivingByteWarningEnabled(_isBinaryOpGivingByteWarningEnabled),
-    isLocalVariableHidingAnotherWarningEnabled(_isLocalVariableHidingAnotherWarningEnabled),
-    isNonLiteralPrintfFormatWarningEnabled(_isNonLiteralPrintfFormatWarningEnabled),
-    isUncalledStaticFunctionWarningEnabled(_isUncalledStaticFunctionWarningEnabled),
-    isMissingFieldInitializersWarningEnabled(_isMissingFieldInitializersWarningEnabled),
-    inlineAsmArrayIndexesWarningEnabled(_inlineAsmArrayIndexesWarningEnabled),
     warnedAboutVolatile(false),
-    useDefaultLibraries(_useDefaultLibraries),
-    useNativeFloatLibrary(_useNativeFloatLibrary),
     neededUtilitySubRoutines(),
-    targetPlatform(_targetPlatform),
     vxTitle("CMOC"),
     vxMusic("vx_music_1"),
     vxTitleSizeWidth(80),
@@ -153,7 +98,7 @@ TranslationUnit::TranslationUnit(TargetPlatform _targetPlatform,
     theInstance = this;  // instance() needed by Scope constructor
     typeManager.createBasicTypes();
     globalScope = new Scope(NULL, string());  // requires 'void', i.e., must come after createBasicTypes()
-    typeManager.createInternalStructs(*globalScope, targetPlatform);  // global scope must be created; receives internal structs
+    typeManager.createInternalStructs(*globalScope, params.targetPlatform);  // global scope must be created; receives internal structs
 
     //typeManager.dumpTypes(cout); // dumps all predefined types in C notation
 }
@@ -246,7 +191,7 @@ TranslationUnit::registerFunction(FunctionDef *fd)
             fd->warnmsg("return type of main() must be int");
         if (fd->getNumFormalParams() != 0)
         {
-            if (targetPlatform == OS9 || targetPlatform == FLEX)
+            if (params.targetPlatform == OS9 || params.targetPlatform == FLEX)
             {
                 // Check that main() receives the expected parameters.
                 bool ok = true;
@@ -770,7 +715,7 @@ TranslationUnit::declareFunctions()
 }
 
 
-// Functions that have a body must be received their Scope object.
+// Functions that have a body must have received their Scope object.
 //
 void
 TranslationUnit::declareFunctionLocalStaticVariables()
@@ -787,7 +732,12 @@ TranslationUnit::declareFunctionLocalStaticVariables()
             {
                 if (decl.initializationExpr != NULL
                         && ! decl.initializationExpr->isStaticallyInitializable(*decl.getTypeDesc()))
-                    decl.errormsg("initializer for local static variable `%s' is not constant", decl.getVariableId().c_str());
+                {
+                    if (decl.initializationExpr->isStaticallyInitializable(*decl.getTypeDesc(), true))
+                        decl.forceDynamicInitializer();  // string literals require run-time init; see Declaration::emitCode()
+                    else
+                        decl.errormsg("initializer for local static variable `%s' is not constant", decl.getVariableId().c_str());
+                }
                 
                 decl.setLocalStaticLabel(currentFunctionId);
             }
@@ -924,7 +874,7 @@ TranslationUnit::checkSemantics()
     // over the function bodies, so that function calls that use a function pointer
     // can be differentiated from standard calls.
     //
-    FunctionChecker ufc(*this, callToUndefinedFunctionAllowed);
+    FunctionChecker ufc(*this, params.callToUndefinedFunctionAllowed);
     definitionList->iterate(ufc);
     ufc.reportErrors();
 
@@ -941,7 +891,7 @@ TranslationUnit::determineIfGlobalIsReadOnly(Declaration &decl) const
     // in the case of a cartridge program.
     // This must be done after the SemanticsChecker pass, i.e., after the ExpressionTypeSetter.
     //
-    bool typeCanGoInRO = decl.getTypeDesc()->canGoInReadOnlySection(relocatabilitySupported);
+    bool typeCanGoInRO = decl.getTypeDesc()->canGoInReadOnlySection(isRelocatabilitySupported());
     bool initializerAllowsRO = (decl.isExtern || decl.hasOnlyNumericalLiteralInitValues()) && decl.isConst();
     decl.setReadOnly(typeCanGoInRO && initializerAllowsRO);
 
@@ -966,17 +916,10 @@ TranslationUnit::checkConstDataDeclarationInitializer(const Declaration &decl) c
 }
 
 
-void
-TranslationUnit::setTargetPlatform(TargetPlatform platform)
-{
-    targetPlatform = platform;
-}
-
-
 TargetPlatform
 TranslationUnit::getTargetPlatform() const
 {
-    return targetPlatform;
+    return params.targetPlatform;
 }
 
 
@@ -1103,7 +1046,7 @@ TranslationUnit::emitAssembler(ASMText &out, uint16_t dataAddress,
         out.startSection("start");
     }
 
-    if (targetPlatform == VECTREX && needStartSection)
+    if (params.targetPlatform == VECTREX && needStartSection)
     {
         out.emitComment("Vectrex header, positioned at address 0.");
 
@@ -1132,7 +1075,7 @@ TranslationUnit::emitAssembler(ASMText &out, uint16_t dataAddress,
         out.emitImport("_exit");
         out.emitLabel("program_start");
 
-        if (targetPlatform == COCO_BASIC && emitBootLoaderMarker)
+        if (params.targetPlatform == COCO_BASIC && emitBootLoaderMarker)
             out.ins("FCC", "\"OS\"", "marker for CoCo DECB DOS command");
     }
 
@@ -1141,7 +1084,7 @@ TranslationUnit::emitAssembler(ASMText &out, uint16_t dataAddress,
         // Start the program by initializing the global variables, then
         // jumping to the main() function's label.
 
-        if (targetPlatform == OS9)
+        if (params.targetPlatform == OS9)
         {
             // OS-9 launches a process by passing it the start and end addresses of
             // its data segment in U and Y respectively. The OS9PREP transfers U (the start)
@@ -1168,11 +1111,11 @@ TranslationUnit::emitAssembler(ASMText &out, uint16_t dataAddress,
         {
             out.ins("LBSR", mainFunctionDef->getLabel(), "call main()");
 
-            if (targetPlatform == OS9)
+            if (params.targetPlatform == OS9)
                 out.ins("LEAS", "4,S", "discard argc, argv");
         }
 
-        if (targetPlatform != VECTREX)
+        if (params.targetPlatform != VECTREX)
         {
             if (mainFunctionDef == NULL)
             {
@@ -1189,7 +1132,7 @@ TranslationUnit::emitAssembler(ASMText &out, uint16_t dataAddress,
         out.endSection();
     }
 
-    if (mainFunctionDef != NULL && targetPlatform == OS9 && extraStackSpace != 0)
+    if (mainFunctionDef != NULL && params.targetPlatform == OS9 && extraStackSpace != 0)
     {
         out.startSection("__os9");
         out.emitInlineAssembly("stack\tEQU\t" + wordToString(extraStackSpace) + "\t""extra stack space");
@@ -1271,7 +1214,7 @@ TranslationUnit::emitAssembler(ASMText &out, uint16_t dataAddress,
     for (kt = functionDefs.begin(); kt != functionDefs.end(); kt++)
     {
         const FunctionDef *fd = kt->second;
-        if (isUncalledStaticFunctionWarningEnabled && fd->getBody() && !fd->isCalled() && fd->hasInternalLinkage())
+        if (params.isUncalledStaticFunctionWarningEnabled && fd->getBody() && !fd->isCalled() && fd->hasInternalLinkage())
             fd->warnmsg("static function %s() is not called", fd->getId().c_str());
     }
 
@@ -1816,7 +1759,7 @@ TranslationUnit::getNeededUtilitySubRoutines() const
 bool
 TranslationUnit::isRelocatabilitySupported() const
 {
-    return relocatabilitySupported;
+    return params.relocatabilitySupported;
 }
 
 
@@ -1845,7 +1788,7 @@ TranslationUnit::processPragmas(uint16_t &codeAddress, bool codeAddressSetBySwit
         {
             if (pragma->isCodeOrg(codeAddress))  // if #pragma org ADDRESS
             {
-                if (targetPlatform == VECTREX)
+                if (params.targetPlatform == VECTREX)
                     pragma->errormsg("#pragma org is not permitted for Vectrex");
                 else if (compileOnly)
                     pragma->errormsg("#pragma org is not permitted with -c (use --org)");
@@ -1861,7 +1804,7 @@ TranslationUnit::processPragmas(uint16_t &codeAddress, bool codeAddressSetBySwit
             }
             else if (pragma->isDataOrg(dataAddress))  // if #pragma data ADDRESS
             {
-                if (targetPlatform == VECTREX)
+                if (params.targetPlatform == VECTREX)
                     pragma->errormsg("#pragma data is not permitted for Vectrex");
                 else if (compileOnly)
                     pragma->errormsg("#pragma data is not permitted with -c (use --data)");
@@ -1885,7 +1828,7 @@ TranslationUnit::processPragmas(uint16_t &codeAddress, bool codeAddressSetBySwit
             }
             else if (pragma->isStackSpace(stackSpace))
             {
-                if (targetPlatform == VECTREX)
+                if (params.targetPlatform == VECTREX)
                     pragma->errormsg("#pragma stack_space is not permitted for Vectrex");
             }
             else
@@ -1894,31 +1837,17 @@ TranslationUnit::processPragmas(uint16_t &codeAddress, bool codeAddressSetBySwit
 }
 
 
-void
-TranslationUnit::enableNullPointerChecking(bool enable)
-{
-    nullPointerCheckingEnabled = enable;
-}
-
-
 bool
 TranslationUnit::isNullPointerCheckingEnabled() const
 {
-    return nullPointerCheckingEnabled;
-}
-
-
-void
-TranslationUnit::enableStackOverflowChecking(bool enable)
-{
-    stackOverflowCheckingEnabled = enable;
+    return params.nullPointerCheckingEnabled;
 }
 
 
 bool
 TranslationUnit::isStackOverflowCheckingEnabled() const
 {
-    return stackOverflowCheckingEnabled;
+    return params.stackOverflowCheckingEnabled;
 }
 
 
@@ -1964,7 +1893,7 @@ TranslationUnit::createDeclarationSequence(DeclarationSpecifierList *dsl,
         //
         ds = new DeclarationSequence(td, enumeratorList);
     }
-    else if (!callToUndefinedFunctionAllowed && dsl->isExternDeclaration())
+    else if (!params.callToUndefinedFunctionAllowed && dsl->isExternDeclaration())
     {
         // Ignore the declarators in an 'extern' declaration because
         // separate compilation is not supported.
@@ -2015,24 +1944,18 @@ TranslationUnit::checkForEllipsisWithoutNamedArgument(const FormalParamList *for
         errormsg("named argument is required before `...'");  // as in GCC
 }
 
-bool
-TranslationUnit::isCallToUndefinedFunctionAllowed() const
-{
-    return callToUndefinedFunctionAllowed;
-}
-
 
 bool
 TranslationUnit::isWarningOnSignCompareEnabled() const
 {
-    return warnSignCompare;
+    return params.warnSignCompare;
 }
 
 
 bool
 TranslationUnit::isWarningOnPassingConstForFuncPtr() const
 {
-    return warnPassingConstForFuncPtr;
+    return params.warnPassingConstForFuncPtr;
 }
 
 
@@ -2077,7 +2000,7 @@ TranslationUnit::writePrerequisites(ostream &out,
 bool
 TranslationUnit::warnOnConstIncorrect() const
 {
-    return isConstIncorrectWarningEnabled;
+    return params.isConstIncorrectWarningEnabled;
 }
 
 
@@ -2095,42 +2018,42 @@ TranslationUnit::warnIfFloatUnsupported()
 bool
 TranslationUnit::warnOnBinaryOpGivingByte() const
 {
-    return isBinaryOpGivingByteWarningEnabled;
+    return params.isBinaryOpGivingByteWarningEnabled;
 }
 
 
 bool
 TranslationUnit::warnOnLocalVariableHidingAnother() const
 {
-    return isLocalVariableHidingAnotherWarningEnabled;
+    return params.isLocalVariableHidingAnotherWarningEnabled;
 }
 
 
 bool
 TranslationUnit::warnOnNonLiteralPrintfFormat() const
 {
-    return isNonLiteralPrintfFormatWarningEnabled;
+    return params.isNonLiteralPrintfFormatWarningEnabled;
 }
 
 
 bool
 TranslationUnit::warnOnUncalledStaticFunction() const
 {
-    return isUncalledStaticFunctionWarningEnabled;
+    return params.isUncalledStaticFunctionWarningEnabled;
 }
 
 
 bool
 TranslationUnit::warnOnMissingFieldInitializers() const
 {
-    return isMissingFieldInitializersWarningEnabled;
+    return params.isMissingFieldInitializersWarningEnabled;
 }
 
 
 bool
 TranslationUnit::warnAboutInlineAsmArrayIndexes() const
 {
-    return inlineAsmArrayIndexesWarningEnabled;
+    return params.inlineAsmArrayIndexesWarningEnabled;
 }
 
 
@@ -2145,9 +2068,16 @@ TranslationUnit::warnAboutVolatile()
 
 
 bool
+TranslationUnit::warnIfForConditionComparesDifferentSizes()
+{
+    return params.forConditionComparesDifferentSizesWarningEnabled;
+}
+
+
+bool
 TranslationUnit::isFloatingPointSupported() const
 {
-    return useNativeFloatLibrary || targetPlatform == COCO_BASIC || targetPlatform == DRAGON || targetPlatform == OS9;
+    return params.useNativeFloatLibrary || params.targetPlatform == COCO_BASIC || params.targetPlatform == DRAGON || params.targetPlatform == OS9;
 }
 
 

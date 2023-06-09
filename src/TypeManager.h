@@ -1,4 +1,4 @@
-/*  $Id: TypeManager.h,v 1.38 2022/07/07 16:14:09 sarrazip Exp $
+/*  $Id: TypeManager.h,v 1.39 2023/04/09 05:59:04 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -21,9 +21,6 @@
 #define _H_TypeManager
 
 #include "util.h"
-
-#include <vector>
-#include <map>
 
 class Declarator;
 class Enumerator;
