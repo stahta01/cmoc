@@ -41,6 +41,7 @@ class Console : virtual public mc6809 {
 public:
 	Console() : delayTicks(0), binaryMode(false) {}
 	void setBinaryMode(bool m) { binaryMode = m; }
+	Word getD() const { return d; }
 
 protected:
 
@@ -412,5 +413,5 @@ int main(int argc, char *argv[])
 		sys.load_intelhex(progFilename, loadOffset);
 	sys.run();
 
-	return EXIT_SUCCESS;
+	return (int) sys.getD();  // return the value left in D by the program's CMOC-generated main()
 }

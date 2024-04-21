@@ -32,6 +32,10 @@ typedef unsigned size_t;
 
 #define SIZE_MAX 0xFFFFu
 
+typedef signed ssize_t;
+
+#define SSIZE_MAX 0x7FFF
+
 
 #ifndef VECTREX
 // Supports %u, %d, %x, %X, %p, %s, %c and %%. Specifying a field width is
@@ -86,9 +90,14 @@ char *strcpy(char *dest, _CMOC_CONST_ char *src);
 char *strcat(char *dest, _CMOC_CONST_ char *src);
 char *strncpy(char *dest, _CMOC_CONST_ char *src, size_t n);
 char *strchr(_CMOC_CONST_ char *s, int c);
+char *strrchr(_CMOC_CONST_ char *s, int c);
 char *strstr(_CMOC_CONST_ char *haystack, _CMOC_CONST_ char *needle);
 char *strlwr(char *s);
 char *strupr(char *s);
+size_t strspn(const char *s, const char *accept);
+size_t strcspn(const char *s, const char *reject);
+char *strtok(char *str, const char *delim);
+char *strpbrk(const char *s, const char *accept);
 int isspace(int c);
 int isalpha(int c);
 int isalnum(int c);
@@ -184,7 +193,7 @@ long int labs(long int j);
 
 // Returns the integer part of the square root of the given 16-bit number.
 //
-unsigned char sqrt16(unsigned n);
+unsigned char sqrt16(unsigned short n);
 
 
 // Returns the integer part of the square root of the given 32-bit number.
@@ -259,14 +268,44 @@ void subdww(unsigned *twoWords, unsigned term);
 char cmpdww(unsigned left[2], unsigned right);
 
 
-// Must be called by a program that uses --native-float, preferrably
-// at the beginning of main(), to enable some floating-point features,
-// like the use of %f in a printf() call.
+// Must be called by a program that uses --mc6839, preferrably
+// at the beginning of main(), to enable the use of %f in a
+// printf() call.
 //
-void enableCMOCFloatSupport(void);
+void enable_printf_float(void);
 
 
-#if defined(_COCO_BASIC_) || defined(DRAGON) || defined(_CMOC_NATIVE_FLOAT_)
+#if defined(_CMOC_MC6839_)
+
+
+// Set the given function pointer as the one to be invoked upon
+// a MC6839 floating point operation failure.
+// Only usable if --mc6839 is passed to CMOC.
+// The default trap function in a CMOC-generated program does nothing.
+//
+void setMC6839Trap(void (*trapFunctionPointer)(void));
+
+
+// Binary (base 2) logarithm.
+//
+float log2f(float x);  // x > 0
+
+
+#endif
+
+
+#if defined(_COCO_BASIC_) || defined(DRAGON) || defined(_CMOC_MC6839_)
+
+
+// Natural (base e) logarithm.
+//
+float logf(float x);  // x > 0
+
+
+#endif
+
+
+#if defined(_COCO_BASIC_) || defined(DRAGON) || defined(_CMOC_NATIVE_FLOAT_) || defined(_CMOC_MC6839_)
 
 // Converts an ASCII decimal floating point number to a float.
 // The string is allowed to contain a suffix (e.g., "1.2E6XYZ");
@@ -289,7 +328,7 @@ float atoff(_CMOC_CONST_ char *nptr);
 //
 char *ftoa(char out[38], float f);
 
-#endif  /* _COCO_BASIC_ or _CMOC_NATIVE_FLOAT_ */
+#endif
 
 
 // CAUTION: base is ignored, only base 10 is supported.
@@ -306,15 +345,28 @@ long atol(_CMOC_CONST_ char *nptr);
 
 int tolower(int c);
 int toupper(int c);
+
+
+// Returns to the environment that executed the current program.
+// When the program was started by the CoCo's EXEC command under Disk Basic,
+// this function should only be called if the Basic environment is still present
+// and has not been replaced or paged out.
+//
 void exit(int status);
+
 
 #define RAND_MAX 0x7FFF
 void srand(unsigned seed);
 int rand(void);
 
+
+// Changes the location of the program break by 'increment' bytes.
 // Returns (void *) -1 upon failure.
+// Calling sbrk() with an increment of 0 can be used to find the current location
+// of the program break.
 //
 void *sbrk(size_t increment);
+
 
 // Returns the maximum number of bytes still allocatable via sbrk().
 //
@@ -333,6 +385,8 @@ typedef void (*ConsoleOutHook)(void);
 
 // Redirect printf() et al. to the function at 'routine', which will
 // receive each character to be printed in register A.
+//
+// The 'routine' pointer must not be null.
 //
 // That routine MUST preserve registers B, X, Y and U.
 //

@@ -1,7 +1,5 @@
-/*  $Id: util.h,v 1.55 2023/04/09 21:19:30 sarrazip Exp $
-
-    CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+/*  CMOC - A C-like cross-compiler
+    Copyright (C) 2003-2023 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -70,6 +68,14 @@ enum TargetPlatform
 };
 
 
+enum class FloatingPointLibrary : uint8_t
+{
+    ECB_ROM,  // Extended Color Basic ROM routines (or Dragon ROM)
+    NATIVE_LIB,  // yet-to-be-released library that would ship with CMOC
+    MC6839_LIB,  // yet-to-be-supported third party library
+};
+
+
 // Names PC to CC have the values that are expected by the PSHS instruction.
 //
 enum Register
@@ -107,6 +113,16 @@ enum ConstCorrectnessCode { CONST_CORRECT, CONST_INCORRECT, INCOMPAT_TYPES };
 // Returns -2 if the types are NOT compatible.
 //
 ConstCorrectnessCode isPointerInitConstCorrect(const TypeDesc *declPointedTypeDesc, const TypeDesc *initPointedTypeDesc);
+
+
+// Returns a number of bytes, or -1 upon overflow (i.e., beyond 32767).
+// dims: Dimensions of an array. Must have at least one element.
+// dimIndex: Product starts at dims[dimIndex] and finishes at the end of dims. Must be <= dims.size().
+// finalArrayElementTypeSize: In bytes.
+//
+int16_t computeDimensionsProduct(const std::vector<uint16_t> &dims,
+                                 size_t dimIndex,
+                                 int16_t finalArrayElementTypeSize);
 
 
 // name: Must be in upper-case. Does not have to end with '\0'.
@@ -308,14 +324,25 @@ std::string replaceDir(const std::string &s, const std::string &newDir);
 std::string getBasename(const std::string &filename);
 
 
+// Multiples [begin, end) and if no overflow occurs, stores the result
+// in 'result' and returns true.
+// Returns false if an overflow occurs.
+// If [begin, end) is empty, 'result' becomes 1 and true is returned.
+//
 template <typename ForwardIterator>
-inline uint16_t
-product(ForwardIterator begin, ForwardIterator end)
+inline bool
+product(uint16_t& result, ForwardIterator begin, ForwardIterator end)
 {
-    uint16_t result = 1;
+    result = 0;  // ensure defined value
+    uint32_t longResult = 1;
     for ( ; begin != end; ++begin)
-        result *= *begin;
-    return result;
+    {
+        longResult *= *begin;
+        if (longResult > 0xFFFF)
+            return false;  // overflow
+    }
+    result = uint16_t(longResult);
+    return true;
 }
 
 
@@ -361,6 +388,16 @@ vectorToString(const std::vector<T> &_vec, const char *_delimiter = ", ", const 
 }
 
 
+// Calls delete on each pointer in an std::vector<T *>.
+//
+template <typename T>
+void deleteVectorElements(std::vector<T *> &v)
+{
+    for (T *p : v)
+        delete p;
+}
+
+
 template <typename T>
 std::ostream &operator << (std::ostream &out, const VectorToString<T> &vts)
 {
@@ -374,29 +411,6 @@ std::ostream &operator << (std::ostream &out, const VectorToString<T> &vts)
     out << vts.closing;
     return out;
 }
-
-
-class PipeCloser
-{
-public:
-    PipeCloser(FILE *_file) : file(_file) {}
-    ~PipeCloser() { close(); }
-    int close()
-    {
-        if (file == NULL)
-            return 0;  // success: nothing to do
-        int status = pclose(file);
-        file = NULL;
-        return status;
-    }
-private:
-    // Forbidden:
-    PipeCloser(const PipeCloser &);
-    PipeCloser &operator = (const PipeCloser &);
-
-private:
-    FILE *file;
-};
 
 
 // Array that makes no dynamic allocations and imposes a maximum compile-time capacity.
@@ -450,7 +464,7 @@ void errormsgEx(const std::string &explicitLineNo, const char *fmt, ...);
 void errormsgEx(const std::string &sourceFilename, int lineno, const char *fmt, ...);
 
 // diagType: "error" or "warning".
-void diagnoseVa(const char *diagType, const std::string &explicitLineNo, const char *fmt, va_list ap);
+void diagnoseVa(bool isError, const std::string &explicitLineNo, const char *fmt, va_list ap);
 
 void warnmsg(const char *fmt, ...);
 

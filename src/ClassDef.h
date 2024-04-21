@@ -1,4 +1,4 @@
-/*  $Id: ClassDef.h,v 1.15 2022/12/28 20:47:52 sarrazip Exp $
+/*  $Id: ClassDef.h,v 1.16 2023/08/27 01:41:03 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -63,7 +63,7 @@ public:
 
         const Declarator &getDeclarator() const;
 
-        virtual bool isLValue() const { return false; }
+        virtual bool isLValue() const override { return false; }
 
     private:
         Declarator *declarator;  // owned by this ClassMember
@@ -121,7 +121,7 @@ public:
 
     void clearMembers();
 
-    virtual bool isLValue() const { return false; }
+    virtual bool isLValue() const override { return false; }
 
     static std::vector<ClassMember *> *createClassMembers(DeclarationSpecifierList *dsl,
                                                           std::vector<Declarator *> *memberDeclarators);

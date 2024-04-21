@@ -6,9 +6,10 @@ mulDWordUnsignedInt     IMPORT
 negateDWord             IMPORT
 
 
-; unsigned long strtoul(char *nptr, char **endptr);
+; unsigned long strtoul(char *nptr, char **endptr, int base);
 ;
 ; A hidden first argument is passed to point to the 32-bit return value slot.
+; CAUTION: base is ignored, only base 10 is supported.
 ;
 _strtoul
 	pshs	u

@@ -1,7 +1,7 @@
-/*  $Id: BinaryOpExpr.cpp,v 1.201 2022/12/30 22:57:51 sarrazip Exp $
+/*  $Id: BinaryOpExpr.cpp,v 1.217 2024/02/25 19:58:21 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2020 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2024 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -105,21 +105,23 @@ BinaryOpExpr::checkSemantics(Functor &)
 {
     bool declareTemporary = false;
     const TypeDesc *tempTD = NULL;
-    const TypeDesc *sub0TD = subExpr0->getTypeDesc(), *sub1TD = subExpr1->getTypeDesc();
+    const TypeDesc *sub0TD = subExpr0->getTypeDesc();
 
     switch (oper)
     {
     case ADD:
     case SUB:
+        if (       (subExpr0->isPtrOrArray() && subExpr1->isLong())
+                || (subExpr1->isPtrOrArray() && subExpr0->isLong()))
+            warnmsg("array index is 32 bits (only low 16 bits used)");
+
+        /* FALLTHROUGH */
+
     case MUL:
     case DIV:
     case MOD:
         if (isRealOrLong())
             declareTemporary = true;
-        if (sub0TD->type == BYTE_TYPE && sub1TD->type == BYTE_TYPE && TranslationUnit::instance().warnOnBinaryOpGivingByte()
-                && (dynamic_cast<CastExpr *>(subExpr0) == NULL
-                    || dynamic_cast<CastExpr *>(subExpr1) == NULL))  // no warning if both operands have a cast
-            warnmsg("operator `%s' on two byte-sized arguments gives byte under CMOC, unlike under Standard C", getOperatorName(oper));
         break;
 
     case INC_ASSIGN:
@@ -158,17 +160,6 @@ BinaryOpExpr::checkSemantics(Functor &)
             errormsg("cannot assign to array name");
         else if (!subExpr0->isLValue() && subExpr0->getType() != VOID_TYPE)
             errormsg("l-value required as left operand of assignment");
-
-        {
-            // N.B. These checks might be better placed in FunctionCallExpr::paramAcceptsArg(), called by ExpressionTypeSetter::processBinOp().
-            const ObjectMemberExpr *ome0 = dynamic_cast<const ObjectMemberExpr *>(subExpr0);
-            if (ome0 && (ome0->getSubExpr()->isConst() || ome0->getSubExpr()->isPtrToOrArrayOfConst()))
-                errormsg("assigning to member `%s' of `%s' is not const-correct",
-                         ome0->getMemberName().c_str(),
-                         ome0->getSubExpr()->isPtrToOrArrayOfConst()
-                             ? ome0->getSubExpr()->getTypeDesc()->getPointedTypeDesc()->toString().c_str()
-                             : ome0->getSubExpr()->getTypeDesc()->toString().c_str());
-        }
         break;
 
     case LEFT_SHIFT:
@@ -205,7 +196,7 @@ BinaryOpExpr::checkSemantics(Functor &)
             else if (sub0TD->pointedTypeDesc)
                 numBytesPerElement = TranslationUnit::instance().getTypeSize(*sub0TD->pointedTypeDesc);
 
-            if (numBytesPerElement == 0)
+            if (numBytesPerElement <= 0)
                 errormsg("failed to determine array element size");
         }
         if (!subExpr1->getTypeDesc()->isIntegral())
@@ -260,8 +251,8 @@ BinaryOpExpr::checkSemantics(Functor &)
 
 
 // Emits the code for both sub-expressions.
-// One of them is left as a word on the stack.
-// The other is left in D.
+// One of them is left on the stack, as a byte or word depending on 'bothOperandsAreByte'.
+// The other is left in B or D.
 //
 CodeStatus
 BinaryOpExpr::emitSubExpressions(ASMText &out, bool reverseOrder, bool bothOperandsAreByte) const
@@ -295,7 +286,7 @@ BinaryOpExpr::isArrayRefAndLongSubscript(const Tree *&arrayTree,
     if (subExpr1->getTypeDesc()->isPtrOrArray() && subExpr0->isLong())
     {
         arrayTree = subExpr1;
-        subscriptTree = subExpr1;
+        subscriptTree = subExpr0;
         return true;
     }
     return false;
@@ -339,10 +330,10 @@ BinaryOpExpr::emitCode(ASMText &out, bool lValue) const
     switch (oper)
     {
         case ADD:
-            return emitAdd(out, lValue, false);
+            return emitAddOrSub(out, lValue, false);
 
         case SUB:
-            return emitAdd(out, lValue, true);
+            return emitAddOrSub(out, lValue, true);
 
         case MUL:
         case DIV:
@@ -837,13 +828,13 @@ BinaryOpExpr::emitSignedDivOrModOnLong(ASMText &out, bool isDivision) const
 
 
 CodeStatus
-BinaryOpExpr::emitAdd(ASMText &out, bool lValue, bool doSub) const
+BinaryOpExpr::emitAddOrSub(ASMText &out, bool lValue, bool doSub) const
 {
     if (lValue)
     {
         if (!getTypeDesc()->isRealOrLong())
         {
-            errormsg("internal error: unexpected l-value of type `%s' in BinaryOpExpr::emitAdd()",
+            errormsg("internal error: unexpected l-value of type `%s' in BinaryOpExpr::emitAddOrSub()",
                      getTypeDesc()->toString().c_str());
             return false;
         }
@@ -885,24 +876,42 @@ BinaryOpExpr::emitAdd(ASMText &out, bool lValue, bool doSub) const
         }
     }
 
-    const Tree *arrayTree, *subscriptTree;
+    const Tree *arrayTree = NULL, *subscriptTree = NULL;
     if (isArrayRefAndLongSubscript(arrayTree, subscriptTree))
     {
+        // We have an array reference added to a long index, which will be added
+        // to get the address of an element of that array.
+        //
+        assert(getTypeDesc()->isPtrOrArray());
         if (!subscriptTree->emitCode(out, true))  // get address of long subscript in X
             return false;
-        out.ins("LDD", "2,X", "low word of long array subscript");
-        out.ins("PSHS", "B,A", "word-sized array subscript");
+        out.ins("LDD", "2,X", "low word of long array index");
+        out.ins("PSHS", "B,A", "word-sized array index");
         if (!arrayTree->emitCode(out, false))  // get address of array in D; code below processes ptr_in_D + index_in_stack
             return false;
+
+        if (subExpr1->getTypeDesc()->isPtrOrArray())
+        {
+            // Right side is pointer or array.
+            // Swap with left side because following code expects
+            // only pointer or array on left side.
+            //
+            emitAddIntegerToPointer(out, subExpr1, doSub);
+        }
+        else
+            emitAddIntegerToPointer(out, subExpr0, doSub);
+        return true;
     }
-    else if (!emitSubExpressions(out, true))
+
+    // General case.
+    //
+    if (!emitSubExpressions(out, true, getType() == BYTE_TYPE))
         return false;
 
-    // Here, the word on the stack must be popped, multiplied if necessary, and added to D.
+    // Here, the byte/word on the stack must be popped, multiplied if necessary, and added to B or D.
 
     if (getType() == BYTE_TYPE)
     {
-        out.ins("LEAS", "1,S");
         out.ins(doSub ? "SUBB" : "ADDB", ",S+");
     }
     else
@@ -1697,8 +1706,6 @@ BinaryOpExpr::emitComparison(ASMText &out,
     else
     {
         // General case.
-        // bool canDo8BitCompare = (subExpr0->fits8Bits() && subExpr1->fits8Bits()
-        //                         && subExpr0->isSigned() == subExpr1->isSigned());
         bool canDo8BitCompare = (subExpr0->isSigned() == subExpr1->isSigned()
                                 && subExpr0->fits8BitsWithSignedness()
                                 && subExpr1->fits8BitsWithSignedness());
@@ -1999,6 +2006,18 @@ BinaryOpExpr::emitInPlace32BitLogicalShiftByBytes(ASMText &out, bool isLeftShift
     return true;  // leave with address of unsigned long in X, since we are emitting an l-value
 }
 
+
+void
+BinaryOpExpr::checkForZeroResult(bool isLeftShift, uint16_t numBits) const
+{
+    if (!TranslationUnit::instance().warnShiftAlwaysZero())
+        return;
+    int16_t valueSizeInBytes = TranslationUnit::instance().getTypeSize(*getTypeDesc());
+    if (numBits >= valueSizeInBytes * 8u && (isLeftShift || !subExpr0->isSigned()))
+        warnmsg("shift always gives zero");
+}
+
+
 // changeLeftSide: If true, the left side gets the result of the shift AND
 //                 the address of the left side is left in X.
 //                 If false, only an r-value is computed (and left in D or B).
@@ -2008,6 +2027,9 @@ BinaryOpExpr::emitShift(ASMText &out, bool isLeftShift, bool changeLeftSide, boo
 {
     uint16_t numBits = 0;
     bool constShift = subExpr1->evaluateConstantExpr(numBits);
+
+    if (constShift)
+        checkForZeroResult(isLeftShift, numBits);
 
     if (lValue && isLong())
     {
@@ -2577,16 +2599,14 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op op) const
             return true;
         }
 
-        out.ins("LDD", "#" + wordToString(structSizeInBytes), "size of struct " + getTypeDesc()->className);
-        out.ins("PSHS", "B,A", "push size to _memcpy");
-        out.ins("PSHS", "X", "source struct");
+        out.ins("PSHS", "X", "source struct address, for copyMem call");
 
         if (!subExpr0->emitCode(out, true))  // get address of left-side struct in X
             return false;
 
-        out.ins("PSHS", "X");
-        callUtility(out, "_memcpy", "copy struct (preserves X)");
-        out.ins("LEAS", "6,S");
+        out.ins("LDD", "#" + wordToString(structSizeInBytes), "size of struct " + getTypeDesc()->className);
+        callUtility(out, "copyMem", "preserves X");  // preserving X is necessary if lValue is true
+        out.ins("LEAS", "2,S", "dispose of source struct address");
 
         return true;
     }
@@ -2977,7 +2997,7 @@ BinaryOpExpr::emitAssignment(ASMText &out, bool lValue, Op op) const
                 break;
 
             default:
-                out.ins("TFR", "D,X", "transfer increment to X");
+                out.ins("LDX", assignedValueArg);
                 if (pointedTypeSize <= 255)
                 {
                     out.ins("LDB", "#" + wordToString(pointedTypeSize), "size of pointed type");
@@ -3258,6 +3278,7 @@ int16_t
 BinaryOpExpr::getNumBytesPerMultiDimArrayElement(const Tree *tree)
 {
     assert(tree);
+    assert(tree->getType() == ARRAY_TYPE || tree->getTypeDesc()->isPtrToArray());
 
     // We might have multiple indexes, as in v[i][j][k].
     // Look for the variable by traversing left subtrees, because the VariableExpr
@@ -3274,14 +3295,23 @@ BinaryOpExpr::getNumBytesPerMultiDimArrayElement(const Tree *tree)
             // Example: int v[4][3][5]. 've' designates 'v', and v[i] has 15 elements (3 * 5),
             // which means 30 bytes, because int is 2 bytes.
             //
-            const vector<uint16_t> &dims = ve->getDeclaration()->getArrayDimensions();
-            assert(dims.size() >= 1);
-            assert(dimIndex <= dims.size());
-            uint16_t rowSize = product(dims.begin() + dimIndex, dims.end());
-            assert(rowSize <= 0x7FFF);
-            uint16_t rowSizeInBytes = rowSize * ve->getFinalArrayElementTypeSize();
-            assert(rowSizeInBytes <= 0x7FFF);
-            return int16_t(rowSizeInBytes);
+            vector<uint16_t> dims = ve->getDeclaration()->getArrayDimensions();
+            
+            if (ve->getTypeDesc()->isPtrToArray() && ! ve->getDeclaration()->hasFunctionParameterFrameDisplacement())
+            {
+                // This supports pointer-to-array variables that are not a parameter of a function.
+                assert(dimIndex > 0);
+                vector<uint16_t> dimsFromVEPointedTypeDesc;
+                ve->getTypeDesc()->getPointedTypeDesc()->appendDimensions(dimsFromVEPointedTypeDesc);
+
+                dims = dimsFromVEPointedTypeDesc;
+                --dimIndex;
+            }
+
+            int16_t size = computeDimensionsProduct(dims, dimIndex, tree->getFinalArrayElementTypeSize());
+            if (size < 0)
+                return 0;
+            return size;
         }
 
         if (const ObjectMemberExpr *ome = dynamic_cast<const ObjectMemberExpr *>(tree))
@@ -3301,20 +3331,18 @@ BinaryOpExpr::getNumBytesPerMultiDimArrayElement(const Tree *tree)
 
             // Add dimensions due to type of member, e.g. A member[N] where A is a typedef for an array.
             member->getTypeDesc()->appendDimensions(dims);
-
-            assert(dims.size() >= 1);
-            assert(dimIndex <= dims.size());
-            uint16_t rowSize = product(dims.begin() + dimIndex, dims.end());
-            assert(rowSize <= 0x7FFF);
-            uint16_t rowSizeInBytes = rowSize * ome->getFinalArrayElementTypeSize();
-            assert(rowSizeInBytes <= 0x7FFF);
-            return int16_t(rowSizeInBytes);
+            if (dims.size() < 1)
+                return 0;  // error - message already issued
+            int16_t size = computeDimensionsProduct(dims, dimIndex, tree->getFinalArrayElementTypeSize());
+            if (size < 0)
+                return 0;
+            return size;
         }
 
         const BinaryOpExpr *bin = dynamic_cast<const BinaryOpExpr *>(tree);
         if (bin && bin->getOperator() == ARRAY_REF && isArrayOrPointerVariable(bin->subExpr0))
         {
-            tree = bin->subExpr0;
+            tree = bin->subExpr0;  // go down to the left sub-tree
             ++dimIndex;
             continue;
         }
@@ -3405,9 +3433,6 @@ BinaryOpExpr::emitArrayRef(ASMText &out, bool lValue) const
         assert(!"array reference on non-pointer type");
         return false;
     }
-
-    if (checkNullPtr)
-        callUtility(out, "check_null_ptr_x");
 
     if (isRightConst)  // optimization: right side is a numerical constant
     {
@@ -3528,6 +3553,8 @@ BinaryOpExpr::emitArrayRef(ASMText &out, bool lValue) const
 
     // Result address in now in X.
     //
+    if (checkNullPtr)
+        callUtility(out, "check_null_ptr_x");
     if (!lValue)
         out.ins(getLoadInstruction(getType()), ",X", "get r-value");
     return true;
@@ -3726,4 +3753,3 @@ BinaryOpExpr::replaceChild(Tree *existingChild, Tree *newChild)
         return;
     assert(!"child not found");
 }
-

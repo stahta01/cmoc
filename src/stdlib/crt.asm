@@ -8,6 +8,8 @@ INISTK                  EXPORT
 CHROUT                  EXPORT
 null_ptr_handler        EXPORT
 unpackSingleAndConvertToASCII_hook EXPORT
+singlePrecisionSize     EXPORT
+nop_handler             EXPORT
 
         IFNDEF OS9
 end_of_sbrk_mem         EXPORT
@@ -93,7 +95,7 @@ s_bss   IMPORT
 	ENDC
 
 ; Install dummy routine in hook that converts a float to decimal.
-; See enableCMOCFloatSupport.asm.
+; See enable_printf_float.asm.
         LEAX    unpackSingleAndConvertToASCII_dummy,PCR         ; PCR in caps b/c ref to code
         STX     unpackSingleAndConvertToASCII_hook,pcr          ; pcr in lower-case b/c ref to data
 
@@ -489,11 +491,15 @@ program_break	RMB	2
 CHROUT  RMB     2       Routine to write char to current device
 
 ; Pointer to a routine that does something if floating-point support is enabled,
-; or writes a placeholder string otherwise. See enableCMOCNativeFloatSupport().
+; or writes a placeholder string otherwise. See enable_printf_float().
 ; Used by CMOC's printf() implementation (see printf.asm).
-; Initialized by float-ctor.asm.
+; Initialized by float-ctor.asm in the ECB/Dragon cases.
 ;
 unpackSingleAndConvertToASCII_hook RMB 2
+
+; Size in bytes of the float type. Used by printf.asm.
+;
+singlePrecisionSize RMB 1
 
         IFDEF OS9
 
@@ -527,7 +533,7 @@ PUTCHR  EXPORT
 
 	IFDEF USIM
 
-* Code to be used with the version of usim that comes with CMOC.
+* Code to be used with the version of usim that CMOC is shipped with.
 *
 PUTCHR	STA	$FF00
 	RTS

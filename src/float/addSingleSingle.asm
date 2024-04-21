@@ -18,11 +18,11 @@ binOpSingleSingle       IMPORT
 ;
 addSingleSingle
 	pshs	u,y,x
-	leau    addNumberAtXToFPA0,PCR
+	leau    @addNumberAtXToFPA0,PCR
 	lbsr	binOpSingleSingle
 	puls	x,y,u,pc
-
-addNumberAtXToFPA0
+;
+@addNumberAtXToFPA0
 	flt_addNumberAtXToFPA0
 	rts
 

@@ -1,4 +1,4 @@
-/*  $Id: ASMText.h,v 1.90 2023/03/26 01:45:52 sarrazip Exp $
+/*  $Id: ASMText.h,v 1.97 2024/02/26 01:42:55 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2023 Pierre Sarrazin <http://sarrazip.com/>
@@ -133,6 +133,7 @@ private:
     bool pushBLoadAdd(size_t index);
     bool pushDLoadAdd(size_t index);
     bool pushLoadDLoadX(size_t index);
+    bool pushDLoadX(size_t index);
     bool pushDLoadXLoadD(size_t index);
     bool loadCmpZeroBeqOrBne(size_t index);
     bool pushWordForByteComparison(size_t index);
@@ -208,6 +209,12 @@ private:
     bool ldbBranchLdbCompare(size_t index);
     bool removePushBFromLdbPushLdbCmp(size_t index);
     bool removeLDDAfterPushingD(size_t index);
+    bool arrayIndexMul(size_t index);
+    bool removeClrAFromArrayIndexMul(size_t index);
+    bool removeRepeatedLDX(size_t index);
+    bool avoidPushingDoubledD(size_t index);
+    bool removePushBPullABeforeMul(size_t index);
+    bool removePushBBeforeSubB(size_t index);
 
     // Whole-function optimizer:
     bool isBasicBlockEndingInstruction(const Element &e) const;

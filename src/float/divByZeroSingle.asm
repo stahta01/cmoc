@@ -10,12 +10,20 @@ divByZeroSingle	EXPORT
 ;
 divByZeroSingle
         ora     #$7F            ; keep bit 7 (sign bit), set all mantissa bits
+        IFDEF _CMOC_MC6839_
+        sta     ,x
+        lda     #$FF            ; rest of packed float is $FF
+        sta     1,x
+        sta     2,x             ; fill rest of mantissa
+        sta     3,x
+        ELSE
         sta     1,x             ; store high byte (sign bit and 7 high bits of mantissa)
         lda     #$FF            ; rest of packed float is $FF
 	sta	,x              ; store exponent (127 + bias)
         sta     2,x             ; fill rest of mantissa
         sta     3,x
         sta     4,x
+        ENDC
 	rts
 
 

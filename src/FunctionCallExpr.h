@@ -1,4 +1,4 @@
-/*  $Id: FunctionCallExpr.h,v 1.27 2022/08/12 03:20:30 sarrazip Exp $
+/*  $Id: FunctionCallExpr.h,v 1.29 2023/12/30 07:05:36 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -61,13 +61,13 @@ public:
 
     bool hasFunctionPointerVariableDeclaration() const { return funcPtrVarDecl != NULL; }
 
-    virtual void checkSemantics(Functor &f);
+    virtual void checkSemantics(Functor &f) override;
 
-    virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
+    virtual CodeStatus emitCode(ASMText &out, bool lValue) const override;
 
-    virtual bool iterate(Functor &f);
+    virtual bool iterate(Functor &f) override;
 
-    virtual bool isLValue() const { return false; }
+    virtual bool isLValue() const override { return false; }
 
     enum Diagnostic
     {
@@ -75,7 +75,8 @@ public:
         ERROR_MSG,
         WARN_CONST_INCORRECT,
         WARN_NON_PTR_ARRAY_FOR_PTR,
-        WARN_PASSING_CONSTANT_FOR_PTR,
+        WARN_PASSING_CHAR_CONSTANT_FOR_PTR,
+        WARN_PASSING_NON_ZERO_CONSTANT_FOR_PTR,
         WARN_ARGUMENT_TOO_LARGE,
         WARN_REAL_FOR_INTEGRAL,
         WARN_FUNC_PTR_FOR_PTR,

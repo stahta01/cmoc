@@ -87,7 +87,7 @@ div3216_tryfit
 	cmpd	6,u
 	rts
 @fit
-	andcc	#0		return C = 0
+	andcc	#$FE		return C = 0
 	puls	b,pc
 
 * Subtracts divisor from accumulator.

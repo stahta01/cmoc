@@ -1,4 +1,4 @@
-/*  $Id: main.cpp,v 1.176 2023/04/09 21:19:30 sarrazip Exp $
+/*  $Id: main.cpp,v 1.194 2024/02/18 07:11:25 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2023 Pierre Sarrazin <http://sarrazip.com/>
@@ -40,6 +40,9 @@ extern int numErrors;
 
 
 const char *fatalErrorPrefix = ": fatal error: ";
+
+
+static bool removeFile(const string &path);
 
 
 // If the line has the form "Symbol: SYMBOLNAME (OBJECTFILENAME) = HEXADDR",
@@ -151,6 +154,15 @@ createLinkScript(const string &linkScriptFilename,
     //
     linkScript << "section rodata\n";  // for OS-9, this must be last section of ,PCR segment
 
+    if (targetPlatform == OS9)
+    {
+        // On OS-9, the end of the program is right after the code and read-only globals.
+        // Those are typically in high memory, while the rwdata and bss sections are typically
+        // in lower memory, in the data segment.
+        //
+        linkScript << "section program_end\n";
+    }
+
     // The writable data either follows, or it is positioned in a separate segment.
     // The latter is the case for OS-9 (where the writable data is in a segment designated by Y).
     // It is also the case if --data was passed.
@@ -169,10 +181,13 @@ createLinkScript(const string &linkScriptFilename,
     //
     linkScript << "section bss,bss\n";
 
-    // Emit a section that defines the program_end label.
-    // This must be the last section in the script.
-    //
-    linkScript << "section program_end\n";
+    if (targetPlatform != OS9)
+    {
+        // Emit a section that defines the program_end label.
+        // This must be the last section in the script.
+        //
+        linkScript << "section program_end\n";
+    }
 
     linkScript << "entry program_start\n" << dec;
 
@@ -194,7 +209,9 @@ createLinkScript(const string &linkScriptFilename,
 //
 static int
 checkLinkingMap(uint16_t limitAddress,
-                const string &mapFilename)
+                const string &mapFilename,
+                const string &outputFilename,
+                bool verbose)
 {
     ifstream mapFile(mapFilename.c_str());
     if (!mapFile)
@@ -203,10 +220,10 @@ checkLinkingMap(uint16_t limitAddress,
         return EXIT_FAILURE;
     }
 
-    typedef multimap<string, string> SymbolMap;  // key: symbol name; value(s): object filename
-    typedef pair<string, string> Pair;
+    typedef multimap<string, string> SymbolMap;  // key: symbol name; value(s): object filenames
 
-    SymbolMap symbolMap;
+    SymbolMap externalLinkageSymbolMap;
+    set<string> internalLinkageSymbolMap;
     bool programEndFound = false;
     int status = EXIT_SUCCESS;
 
@@ -227,14 +244,32 @@ checkLinkingMap(uint16_t limitAddress,
                 {
                     cout << PACKAGE << fatalErrorPrefix << "code limit set at $" << hex << limitAddress
                                     << " but program_end exceeds it at $" << symbolValue << dec << endl;
+                    if (verbose)
+                        cout << "Deleting output file " << outputFilename << endl;
+                    removeFile(outputFilename);
                     status = EXIT_FAILURE;
                 }
             }
 
+            // Ignore symbols that come from CMOC's standard library (.decb_o, etc.)
+            //
+            if (endsWith(objectFilename, "_o"))
+                continue;
+
             // We only care about underscore-led names because the map will mention any symbol
             // that appears in the linked modules, even if they were not exported from their module.
+            //
+            // Global static variables use a prefix does not start with an underscore, as of CMOC 0.1.83.
+            // Those variables have internal linkage, so they are not put in externalLinkageSymbolMap.
+            //
+            bool b = false;
             if (symbolName[0] == '_')
-                symbolMap.insert(make_pair(symbolName, objectFilename));
+                externalLinkageSymbolMap.insert(make_pair(symbolName, objectFilename));
+            else if ((b = startsWith(symbolName, ".global.static.variable.")) || startsWith(symbolName, ".static.function."))
+            {
+                string key = "_" + string(symbolName, b ? 24 : 17);  // keep ID that follows long prefix, prepend underscore
+                internalLinkageSymbolMap.insert(key);
+            }
         }
     }
 
@@ -244,27 +279,19 @@ checkLinkingMap(uint16_t limitAddress,
         status = EXIT_FAILURE;
     }
 
-    // Check for multiple definitions.
-    SymbolMap::const_iterator firstItSameName = symbolMap.end();
+    // Check for multiple definitions among the symbols that have external linkage.
+    //
+    SymbolMap::const_iterator firstItSameName = externalLinkageSymbolMap.end();
     vector<string> objectFilenames;
-    for (SymbolMap::const_iterator it = symbolMap.begin(); it != symbolMap.end(); ++it)
+    auto issueDiagnosticIfRepetition = [&]()  // local function
     {
-        const Pair &p = *it;
-        if (firstItSameName != symbolMap.end() && firstItSameName->first == p.first)
+        if (firstItSameName != externalLinkageSymbolMap.end() && objectFilenames.size() > 0)
         {
-            objectFilenames.push_back(firstItSameName->second);
-            objectFilenames.push_back(p.second);
-        }
-        else
-        {
-            if (firstItSameName != symbolMap.end() && objectFilenames.size() > 0)
+            const string &sym = firstItSameName->first;
+            if (internalLinkageSymbolMap.find(sym) == internalLinkageSymbolMap.end())  // ignore static symbols
             {
-                const string &sym = firstItSameName->first;
-                bool isError = (sym == "_main");  // we know main() is a function
-                if (isError)
-                    status = EXIT_FAILURE;
-                cout << PACKAGE << ": " << (isError ? "error" : "warning")
-                                << ": multiple definitions of symbol " << sym << " in modules ";
+                status = EXIT_FAILURE;
+                cout << PACKAGE << ": error: multiple definitions of symbol " << sym << " in modules ";
                 for (vector<string>::const_iterator m = objectFilenames.begin(); m != objectFilenames.end(); ++m)
                 {
                     if (m != objectFilenames.begin())
@@ -272,16 +299,36 @@ checkLinkingMap(uint16_t limitAddress,
                     cout << *m;
                 }
                 cout << endl;
-                objectFilenames.clear();
             }
+            objectFilenames.clear();
+        }
+    };
+
+    for (SymbolMap::const_iterator it = externalLinkageSymbolMap.begin(); it != externalLinkageSymbolMap.end(); ++it)
+    {
+        const string &id = it->first;
+        if (firstItSameName != externalLinkageSymbolMap.end() && firstItSameName->first == id)
+        {
+            const string &objectFilename = it->second;
+            objectFilenames.push_back(firstItSameName->second);
+            objectFilenames.push_back(objectFilename);
+        }
+        else
+        {
+            issueDiagnosticIfRepetition();
             firstItSameName = it;
         }
     }
+    issueDiagnosticIfRepetition();
 
     return status;
 }
 
 
+// Upon error, prints an error message to cout and calls exit(1).
+// A warning may be issued to cout.
+// Returns true iff no warning was issued.
+//
 static bool
 removeFile(const string &path)
 {
@@ -384,10 +431,12 @@ invokeLinker(const Parameters &params,
         lwlinkCmdLine += " -lcmoc-std-" + string(targetKW);
 
         const char *floatKW = NULL;
-        if ((params.targetPlatform == COCO_BASIC || params.targetPlatform == DRAGON) && !params.useNativeFloatLibrary)
+        if ((params.targetPlatform == COCO_BASIC || params.targetPlatform == DRAGON) && params.floatingPointLibrary == FloatingPointLibrary::ECB_ROM)
             floatKW = targetKW;  // use a library that calls ECB or Dragon Basic float routines
-        else if (params.useNativeFloatLibrary)  // if --native-float explicitly given
+        else if (params.floatingPointLibrary == FloatingPointLibrary::NATIVE_LIB)  // if --native-float explicitly given
             floatKW = "native";  // use a library that calls the Floatable library
+        else if (params.floatingPointLibrary == FloatingPointLibrary::MC6839_LIB)  // if --mc6839 explicitly given
+            floatKW = (params.targetPlatform == OS9 ? "mc6839_os9" : "mc6839");
 
         if (floatKW != NULL)
             lwlinkCmdLine += " " + params.cmocfloatlibdir + "/float-ctor." + floatKW + "_o -lcmoc-float-" + floatKW;
@@ -414,7 +463,7 @@ invokeLinker(const Parameters &params,
         return EXIT_FAILURE;
     }
 
-    PipeCloser closer(lwlinkPipe);
+    PipeCloser closer("linker", lwlinkPipe);
 
     // Print every line from the linker. Tag non-warning messages as errors.
     // Filter out some unneeded warnings.
@@ -442,15 +491,10 @@ invokeLinker(const Parameters &params,
         cout << "Number of error messages from linker: " << numLinkerErrors << "\n";
     }
 
-    if (!WIFEXITED(status))
-        return EXIT_FAILURE;
-    status = WEXITSTATUS(status);
-    if (status != 0)
-        return status;
-    if (numErrors > 0)
+    if (status != 0 || numErrors > 0)
         return EXIT_FAILURE;
 
-    return checkLinkingMap(params.limitAddress, mapFilename);
+    return checkLinkingMap(params.limitAddress, mapFilename, outputFilename, params.verbose);
 }
 
 
@@ -611,6 +655,28 @@ convertBinToDragonFormat(const string &executableFilename,
 }
 
 
+// Sets errno to ERANGE upon failure.
+//
+static uint16_t
+decimalToUInt16(const string &s)
+{
+    if (s.empty() || !isdigit(s[0]))
+    {
+        errno = ERANGE;
+        return 0;
+    }
+    errno = 0;
+    unsigned long n = strtoul(s.c_str(), NULL, 10);
+    if (n > 0xFFFF || errno == ERANGE)
+    {
+        errno = ERANGE;
+        return 0;
+    }
+    return uint16_t(n);
+}
+
+
+
 // Changes 'params' according to the command-line options specified by argc and argv[1..].
 // argi receives the index of the first non-option argument in argv[1..].
 //
@@ -669,6 +735,44 @@ interpretCommandLineOptions(Parameters &params, int argc, char *argv[], int &arg
             params.compileOnly = true;
             continue;
         }
+
+        // -MT, -MD, -MP and -MF help support the gcc3 dependency style supported by GNU Automake (as of 1.16).
+        // Option --host=coco must be passed to ./configure to have Autoconf and Automake use cmoc.
+        //
+        if (curopt == "-MT")
+        {
+            if (argi + 1 >= argc)  // if no arg follows
+            {
+                cout << PACKAGE << ": " << curopt << " expects an argument\n";
+                params.displayHelp();
+                return 1;
+            }
+            ++argi;
+            params.prerequisiteRuleTarget = argv[argi];
+            continue;
+        }
+        if (curopt == "-MD")
+        {
+            params.generatePrerequisitesFile = true;
+            continue;
+        }
+        if (curopt == "-MP")
+        {
+            continue;
+        }
+        if (curopt == "-MF")
+        {
+            if (argi + 1 >= argc)  // if no arg follows
+            {
+                cout << PACKAGE << ": " << curopt << " expects an argument\n";
+                params.displayHelp();
+                return 1;
+            }
+            ++argi;
+            params.prerequisiteFilename = argv[argi];
+            continue;
+        }
+
         if (curopt == "--asm-cmd")
         {
             params.asmCmd = true;
@@ -886,7 +990,12 @@ interpretCommandLineOptions(Parameters &params, int argc, char *argv[], int &arg
         }
         if (curopt == "--native-float")
         {
-            params.useNativeFloatLibrary = true;
+            params.floatingPointLibrary = FloatingPointLibrary::NATIVE_LIB;
+            continue;
+        }
+        if (curopt == "--mc6839")
+        {
+            params.floatingPointLibrary = FloatingPointLibrary::MC6839_LIB;
             continue;
         }
         if (curopt == "--no-relocate")
@@ -912,41 +1021,41 @@ interpretCommandLineOptions(Parameters &params, int argc, char *argv[], int &arg
         if (strncmp(curopt.c_str(), "--stack-space=", 14) == 0)
         {
             string arg(curopt, 14, string::npos);
-            unsigned long n = strtoul(arg.c_str(), NULL, 10);
-            if (n > 0xFFFF || errno == ERANGE)
+            uint16_t n = decimalToUInt16(arg);
+            if (errno == ERANGE)
             {
                 cout << PACKAGE << ": Invalid argument for --stack-space: " << arg << "\n";
                 params.displayHelp();
                 return 1;
             }
-            params.stackSpace = (uint16_t) n;
+            params.stackSpace = n;
             params.stackSpaceSpecifiedByCommandLine = true;
             continue;
         }
         if (strncmp(curopt.c_str(), "--add-os9-stack-space=", 22) == 0)
         {
             string arg(curopt, 22, string::npos);
-            unsigned long n = strtoul(arg.c_str(), NULL, 10);
-            if (n > 0xFFFF || errno == ERANGE)
+            uint16_t n = decimalToUInt16(arg);
+            if (errno == ERANGE)
             {
                 cout << PACKAGE << ": Invalid argument for --add-os9-stack-space: " << arg << "\n";
                 params.displayHelp();
                 return 1;
             }
-            params.extraStackSpace = (uint16_t) n;
+            params.extraStackSpace = n;
             continue;
         }
         if (strncmp(curopt.c_str(), "--function-stack=", 17) == 0)
         {
             string arg(curopt, 17, string::npos);
-            unsigned long n = strtoul(arg.c_str(), NULL, 10);
-            if (n > 0xFFFF || errno == ERANGE)
+            uint16_t n = decimalToUInt16(arg);
+            if (errno == ERANGE)
             {
                 cout << PACKAGE << ": Invalid argument for --function-stack: " << arg << "\n";
                 params.displayHelp();
                 return 1;
             }
-            params.functionStackSpace = (uint16_t) n;
+            params.functionStackSpace = n;
             continue;
         }
         if (curopt == "--allow-undef-func")
@@ -994,6 +1103,11 @@ interpretCommandLineOptions(Parameters &params, int argc, char *argv[], int &arg
             params.inlineAsmArrayIndexesWarningEnabled = false;
             continue;
         }
+        if (curopt == "-Wshadow")
+        {
+            params.shadowingLocalVariableWarningEnabled = true;
+            continue;
+        }
         if (curopt == "-Wfor-condition-sizes")
         {
             params.forConditionComparesDifferentSizesWarningEnabled = true;
@@ -1002,6 +1116,26 @@ interpretCommandLineOptions(Parameters &params, int argc, char *argv[], int &arg
         if (curopt == "-Wpass-const-for-func-pointer")  // not documented b/c may be annoying
         {
             params.warnPassingConstForFuncPtr = true;
+            continue;
+        }
+        if (curopt == "-Wno-unknown-first-dim")
+        {
+            params.warnArrayWithUnknownFirstDimension = false;
+            continue;
+        }
+        if (curopt == "-Wno-too-many-elements")
+        {
+            params.warnTooManyElementsInInitializer = false;
+            continue;
+        }
+        if (curopt == "-Wno-shift-always-zero")
+        {
+            params.warnShiftAlwaysZero = false;
+            continue;
+        }
+        if (curopt == "-Wno-label-on-declaration")
+        {
+            params.warnLabelOnDeclaration = false;
             continue;
         }
         if (strncmp(curopt.c_str(), "-O", 2) == 0)
@@ -1056,6 +1190,29 @@ interpretCommandLineOptions(Parameters &params, int argc, char *argv[], int &arg
                 return 1;
             }
 
+            continue;
+        }
+        if (curopt == "-x")
+        {
+            if (argi + 1 < argc)  // if next arg, use it as language name
+            {
+                const char *lang = argv[argi + 1];
+                if (strcmp(lang, "c") == 0)
+                    params.assumeCFileByDefault = true;
+                else if (strcmp(lang, "none") == 0)
+                    params.assumeCFileByDefault = false;
+                else
+                {
+                    cout << PACKAGE << fatalErrorPrefix << "-x followed by unsupported language name" << endl;
+                    return 1;
+                }
+                ++argi;
+            }
+            else
+            {
+                cout << PACKAGE << fatalErrorPrefix << "-x not followed by supported language name" << endl;
+                return 1;
+            }
             continue;
         }
         if (strncmp(curopt.c_str(), "-o", 2) == 0)
@@ -1239,8 +1396,6 @@ main(int argc, char *argv[])
     string programName;
     string asmFilename;
 
-    TranslationUnitDestroyer tud(false);
-
     int status = EXIT_SUCCESS;
 
     // Scan all non-option arguments.
@@ -1282,6 +1437,7 @@ main(int argc, char *argv[])
         //
         string moduleName = getBasename(inputFilename);
         const string extension = removeExtension(moduleName);
+        const bool isCFile = params.isCFileExtension(extension);
 
         // The first module name is the program name.
         if (programName.empty())
@@ -1299,7 +1455,7 @@ main(int argc, char *argv[])
         // Determine this module's output filename (if compilation/assembly required).
         //
         string compilationOutputFilename;
-        if (extension == ".c" || extension == ".s" || extension == ".asm")
+        if (isCFile || extension == ".s" || extension == ".asm")
         {
             if (params.compileOnly)
             {
@@ -1321,7 +1477,7 @@ main(int argc, char *argv[])
         // C files are compiled.
         // Object files are passed to the linker.
         //
-        if (extension == ".c")
+        if (isCFile)
         {
             asmFilename = params.useIntDir(moduleName + ".s");
 

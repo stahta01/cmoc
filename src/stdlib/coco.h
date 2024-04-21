@@ -10,7 +10,10 @@
 #include <cmoc.h>
 
 
+#ifndef _CMOC_HAVE_FALSE_TRUE_
 enum { FALSE, TRUE };
+#define _CMOC_HAVE_FALSE_TRUE_
+#endif
 
 #ifndef _CMOC_HAVE_BOOL_
 typedef unsigned char BOOL;
@@ -57,14 +60,15 @@ void initCoCoSupport();
 void setHighSpeed(BOOL fast);
 
 
-// Requires SECB to be present.
+// Does not require the presence of Basic.
 // isRGB: If false, the CMP palette is used.
 // Does nothing if not on a CoCo 3.
 //
 byte resetPalette(byte isRGB);
 
 
-// These functions do not require SECB to be present.
+// These functions do not require Basic to be present.
+// They do nothing if not on a CoCo 3.
 //
 void rgb(void);
 void cmp(void);
@@ -93,26 +97,41 @@ byte setBorderColor(byte color);
 
 
 // Returns true for success, false if arg is invalid.
+// Assumes that Basic is present.
 //
 byte width(byte columns);
 
 
 // Returns 32, 40 or 80.
+// Assumes that Basic is present.
 //
 byte getTextMode();
 
 
 // color: Argument that would be passed to BASIC's CLS command.
 //        Pass 255 to signify no argument.
+// Requires Color Basic to be present in memory.
 //
 void cls(byte color);
 
 
+// CoCo 3 only.
 // foreColor: 0-7.
 // backColor: 0-7.
-// blink, underline: booleans.
+// blink, underline: Booleans.
+// Requires Super Extended Color Basic to be present in memory.
 //
 byte attr(byte foreColor, byte backColor, byte blink, byte underline);
+
+
+// Only works in 32x16 mode on a CoCo that has a 6847T1 VDG chip.
+// It does not work on the original CoCo 1 and 2 models.
+// N.B.: Lower-case may go back to inverted colors lower-case mode
+//       as soon as Basic's Console Out routine ([$A002]) gets used.
+//       The RVEC3 vector at $0167 can be modified to get around that:
+//           * (char *) 0x0167 = 57;  /* write RTS instruction */
+//
+#define enable6847T1TrueLowerCase() (* (byte *) 0xFF22 |= 0x10)
 
 
 // Positions the current printing position on the text screen.
@@ -456,11 +475,12 @@ byte readDECBFile(void *dest,
 // Passing an invalid argument may display a Basic error message and
 // end the execution of the program.
 
+// logf() is declared in <cmoc.h>.
+
 float sinf(float radians);
 float cosf(float radians);
 float tanf(float radians);  // argument must not be pi/2 or 3*pi/2 or any other equivalent angle
 float atanf(float radians);  // returns value in [-pi/2, pi/2]
-float logf(float x);  // x > 0
 float expf(float x);
 float sqrtf(float x);  // x >= 0
 float fabsf(float radians);

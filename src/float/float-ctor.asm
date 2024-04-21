@@ -1,12 +1,20 @@
-unpackSingleAndConvertToASCII_hook IMPORT
-
         SECTION constructors
 
 
-        IFDEF _CMOC_MS_FLOAT_
 unpackSingleAndConvertToASCII IMPORT
-        leax    unpackSingleAndConvertToASCII,PCR               ; PCR in caps b/c ref to code
+unpackSingleAndConvertToASCII_hook IMPORT
+singlePrecisionSize IMPORT
+
+        IFDEF _CMOC_MS_FLOAT_
+        leax    unpackSingleAndConvertToASCII,PCR
         stx     unpackSingleAndConvertToASCII_hook,pcr
+        ldb     #5
+        stb     singlePrecisionSize,pcr
+        ENDC
+
+        IFDEF _CMOC_MC6839_
+        ldb     #4
+        stb     singlePrecisionSize,pcr
         ENDC
 
 

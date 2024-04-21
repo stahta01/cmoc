@@ -1,7 +1,5 @@
-/*  $Id: WordConstantExpr.cpp,v 1.16 2022/06/03 01:47:19 sarrazip Exp $
-
-    CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+/*  CMOC - A C-like cross-compiler
+    Copyright (C) 2003-2023 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -88,16 +86,8 @@ WordConstantExpr::checkSemantics(Functor &)
 
 
 CodeStatus
-WordConstantExpr::emitCode(ASMText &out, bool lValue) const
+WordConstantExpr::emitRValue(ASMText &out, bool emitByte) const
 {
-    if (lValue)
-    {
-        errormsg("cannot emit l-value for word constant expression");
-        return false;
-    }
-
-    bool emitByte = (getType() == BYTE_TYPE);
-
     uint16_t uValue = getWordValue();
     if (uValue == 0)
     {
@@ -107,13 +97,33 @@ WordConstantExpr::emitCode(ASMText &out, bool lValue) const
     }
     else
     {
-        uValue &= (emitByte ? 0x00FF : 0xFFFF);
+        if (emitByte)
+            uValue &= 0x00FF;
         out.ins(emitByte ? "LDB" : "LDD",
                 "#" + wordToString(uValue, true),
-               "decimal " + (isSigned()
+                "decimal " + (isSigned()
                                ? intToString(int16_t(uValue), false) + " signed"
                                : wordToString(uValue, false) + " unsigned"));
     }
     return true;
 }
 
+
+CodeStatus
+WordConstantExpr::emitCodeToLoadByte(ASMText &out) const
+{
+    return emitRValue(out, true);
+}
+
+
+CodeStatus
+WordConstantExpr::emitCode(ASMText &out, bool lValue) const
+{
+    if (lValue)
+    {
+        errormsg("cannot emit l-value for word constant expression");
+        return false;
+    }
+
+    return emitRValue(out, getType() == BYTE_TYPE);
+}

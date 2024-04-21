@@ -5,7 +5,7 @@ _strcmp		EXPORT
 strcmpimpl	IMPORT
 
 
-* int strcmp(char *, char *);
+* int strcmp(const char *, const char *);
 *
 _strcmp
 		leax	noTransform,PCR

@@ -15,7 +15,7 @@ subSingle_common_add    EXPORT
 subSingle_common
 	ldx	10,s		; right (single)
 	flt_unpackFromXToFPA1
-	com	FP1SGN		; invert sign of FPA1
+	flt_invertFPA1Sign
 
         flt_computeResultSign
 
@@ -24,15 +24,11 @@ subSingle_common
 ; Routine that finishes work started by other routines, e.g., subSingleSignedDWord.
 ;
 subSingle_common_add
-	lda     FP1EXP		; load exponent of FPA1
-	ldb     FP0EXP		; load exponent of FPA0
 	flt_addFPA1ToFPA0
 
 	ldx	,s		; result
 	flt_packFPA0ToX
 	puls	x,y,u,pc
-
-
 
 
 	ENDSECTION

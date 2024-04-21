@@ -15,9 +15,9 @@ The CMOC C-like 6809-targeting cross-compiler
 
 **By Pierre Sarrazin (sarrazip@sarrazip.com)**
 
-Date of this manual: 2023-04-29
+Date of this manual: 2024-03-10
 
-Copyright &copy; 2003-2023
+Copyright &copy; 2003-2024
 
 <http://sarrazip.com/dev/cmoc.html>
 
@@ -25,7 +25,7 @@ Distributed under the
 **[GNU General Public License](http://www.gnu.org/licenses/gpl-3.0.en.html)**,
 **version 3 or later** (see the License section).
 
-Version of CMOC covered by this manual: **0.1.82**
+Version of CMOC covered by this manual: **0.1.86**
 
 
 Introduction
@@ -97,18 +97,12 @@ C Language Features
 
 - The `register` keyword is accepted but ignored.
 
-- [K&R](https://en.wikipedia.org/wiki/C_%28programming_language%29#K.26R_C)
-  function definitions, e.g., f() int a; { ... }
-
 - A `continue` statement in a switch() body.
 
 - An expression of type long, float or double as an argument of a switch().
 
 - Implementing [Duff's device](https://en.wikipedia.org/wiki/Duff%27s_device)
   in a switch().
-
-- Function-local [function prototypes](https://en.wikipedia.org/wiki/Function_prototype).
-  All prototypes must be declared at global scope.
 
 - Zero-element arrays.
 
@@ -156,6 +150,9 @@ C Language Features
   argument before the ellipsis (...), as in
   [Standard C](https://en.wikipedia.org/wiki/ANSI_C).
 
+- [K&R](https://en.wikipedia.org/wiki/C_%28programming_language%29#K.26R_C)
+  function definitions, e.g., f() int a; { ... }
+
 - Ending an initializer list with a comma.
 
 - Use of the [C preprocessor](https://en.wikipedia.org/wiki/C_preprocessor)
@@ -180,6 +177,9 @@ C Language Features
 - [Binary](https://en.wikipedia.org/wiki/Binary_code) literals
   (e.g., `0b101010` for 42). Note that this feature is not part of
   Standard C.
+
+- Function-local [function prototypes](https://en.wikipedia.org/wiki/Function_prototype),
+  since version 0.1.85.
 
 - [Goto](https://en.wikipedia.org/wiki/Goto) and non-case labeled statements.
 
@@ -491,22 +491,6 @@ included in the .a file, then it would not be used by the linker because
 no code refers explicitly to the contents of prepostmain.asm.
 
 
-### Multiple definitions
-
-Because of the way the linker works, there is no error message when the
-same function or global variable is defined with external linkage by
-two modules. Only a warning is issued. Such a warning should be viewed
-as an error and the duplication should be resolved.
-
-For similar reasons, warnings will be issued when two modules define
-static functions or globals with the same name, e.g., `static int n;`.
-Such warnings may be safely ignored, because the symbols are static,
-thus not exported, and will not actually clash.
-
-These ambiguous diagnostic messages may be fixed by future versions of
-CMOC and LWTOOLS.
-
-
 ### Specifying code and data addresses
 
 In a modular program, the address at which code and data must be
@@ -723,8 +707,8 @@ an integer under Standard C. To get a warning for such operations,
 pass the `-Wgives-byte` command-line option. This can be useful when
 porting an existing C program to CMOC.
 
-This warning is not given if both sides of the operation have a cast,
-e.g., `(char) x + (char) y`.
+This warning is not given if either side of the operation has a cast,
+e.g., `(char) x + (char) y`, or `x + (char) y`.
 
 
 ### Signedness of integers
@@ -866,8 +850,8 @@ This format is documented in the _Disk Basic Unravelled_ book.
 CMOC does not provide the tools needed to convert this format to the Thomson
 computers' native format.
 
-When passing `--usim`, the compiler targets the USim
-6809 simulator, which comes with CMOC.
+When passing `--usim`, the compiler targets the [USim 6809 simulator](https://github.com/raybellis/usim),
+which CMOC is shipped with.
 The `USIM` identifier will be defined.
 No .bin file is produced in this case.
 The .srec file can be executed by passing its path to
@@ -880,7 +864,7 @@ The program must `#include <cmoc.h>` to use functions like printf().
 See that file for a list of implemented C functions.
 Many are C functions while others are CMOC extensions.
 ("Standard" here means that those functions come with CMOC, not that
-CMOC aims to provide a complete [C standard library]( https://en.wikipedia.org/wiki/C_standard_library).)
+CMOC aims to provide a complete [C standard library](https://en.wikipedia.org/wiki/C_standard_library).)
 
 #### Provided header files
 
@@ -1023,30 +1007,26 @@ sbrk() returns `(void *) -1`. For example:
     if (p != (void *) -1)
         memset(p, 'X', 100);
 
-The name of the function comes from the notion of a "program break",
-which is the current end of the memory allocated to the program.
-The memory after that is presumed to be free for dynamic allocation.
-
-In the case of the CoCo, the assumption is that the program is loaded
-after the Basic program and variables. This means the space that
+In the case of the CoCo and the Dragon, the assumption is that the program is
+loaded after the Basic program and variables. This means the space that
 `sbrk()` can allocate from goes from there to the top of the stack,
-which is around $3F00 on a 16K CoCo and $7F00 on a 32K-or-more CoCo.
+which is around $3F00 on a 16K CoCo and $7F00 on a CoCo with 32K or more.
 Do not use `sbrk()` if these assumptions do not apply, e.g., when
 using `--data` to position the writable globals elsewhere than
 right after the code and read-only data.
 
-Use the `--stack-space` option or the `#pragma stack_space` directive
-(documented elsewhere in this manual) when the program needs more than
-1024 bytes of stack space.
+On the CoCo and the Dragon, use the `--stack-space` option or the
+`#pragma stack_space` directive (documented elsewhere in this manual)
+when the program needs more than 1024 bytes of stack space.
+
+On OS-9, sbrk() allocates memory by extending the data segment of the
+current process.
 
 To determine how much of that memory is available for sbrk(),
 call sbrkmax(), which returns the number of bytes as a size\_t
-(unsigned). CMOC ends the region available to sbrk() about 1024 bytes
-before the stack pointer, leaving those bytes to program calls and
-local variables.
+(unsigned).
 
-sbrkmax() returns 0 if the program is loaded after the stack space.
-
+sbrk() and sbrkmax() are declared by cmoc.h.
 
 ### Inline assembly
 
@@ -1086,10 +1066,10 @@ especially when a C variable has the same name as a processor register.)
             ldx     :out        /* comments must be C style */
             lda     :ch         // or C++ style
             ldb     :n          ; or semi-colon comment (passed to assembler)
-    f_loop:
+    @loop:
             sta     ,x+
             decb
-            bne     f_loop
+            bne     @loop
             stx     :end
         }
         return end;
@@ -1136,7 +1116,7 @@ See the *Calling convention* section elsewhere in this manual
 for the rules to observe. Namely, inline assembly must not modify
 U or Y. It is allowed to modify D, X and CC.
 
-#### Arrays an struct fields
+#### Arrays and struct fields
 
 Since 0.1.79, referring to a struct field is supported:
 
@@ -1261,6 +1241,34 @@ instructions like TFM, LDQ, etc.
 The underlying assembler (lwasm) accepts them by default.
 
 The code generated by CMOC does not use the 6309-specific registers or instructions.
+
+
+#### At global scope
+
+Since CMOC 0.1.84, verbatim assembly block of the form `asm { ... }`
+are allowed at global scope. For example:
+
+    asm
+    {
+    foo:
+    }
+
+    void bar() {}
+
+CMOC guarantees that this assembly block will be emitted
+just before `bar()`, with no other intervening instructions or
+assembly labels or directives, except for the EXPORT directive
+that exports `bar()`, since it has external linkage.
+
+The above example defines a `foo` label whose value will be equal
+to the address of `bar()`.
+
+If a sequence of more than one assembly blocks precedes a certain
+C function, those blocks are all emitted, in order, just before
+that function's code.
+
+Inline assembly blocks that are not followed by a C function are
+emitted, in order, after the functions have been emitted.
 
 
 ### Interrupt Service Routines
@@ -1554,12 +1562,26 @@ a constant expression.
 
 ### Floating-point arithmetic
 
-The `float` and `double` keywords and floating-point numeric literals
-(e.g., `1.2f` or `-3.5e-17`) have been supported since version 0.1.40,
-but **only under the Color Computer's Disk Basic environment and under
-the Dragon's Basic environment**.
+Floating-point arithmetic is supported in some situations:
 
-A warning is issued when the `double` keyword is encountered, so the
+* when targeting the CoCo's with Extended Color Basic present;
+* when targeting the Dragon with its Basic present;
+* (since CMOC 0.1.86) when compiling with **--mc6839**, which involves adding a copy
+  of Motorola's MC6839 floating-point ROM.
+
+With --mc6839:
+
+* At least **8k gets added** to the program code, because
+  the whole ROM image gets added as is. Also, a 32-bit float format is
+  used instead of the 40-bit format used by CoCo and Dragon Basic.
+  This means that the numbers have about 7 significant digits instead of 9
+* The **main() function must first enableCMOCFloatSupport()**
+  if the program wants to use the %f placeholder of CMOC's printf() function.
+* A trap function can be set by calling setMC6839Trap() (declared by cmoc.h).
+  This function will be called when an MC6839 operation fails.
+
+In all cases,
+a warning is issued when the `double` keyword is encountered, so the
 user knows not to expect double-precision. There is also a warning
 when a numeric literal does not use the `f` suffix, which specifies
 that the literal is single-precision. There too, double-precision
@@ -1568,6 +1590,7 @@ must not be expected. It is recommended to code programs using the
 
 The compiler will fail to compile a program that uses floating-point
 arithmetic when a platform other than the ones supported is targeted.
+Using --mc6839 may then be an option.
 
 CMOC's printf() function supports the %f placeholder, but
 it does not support the width or precision parameteres of %f
@@ -1577,6 +1600,19 @@ The `<cmoc.h>` header file provides functions `strtof()` and `atoff()`
 to convert an ASCII decimal representation of a floating-pointer number
 into a float value, as well as `ftoa()`, to convert a float value into
 an ASCII decimal representation.
+
+Note that CMOC's float support **must not be assumed to be thread-safe**.
+This means that if a multitasking system is in place, other than OS-9,
+then only one thread at a time can make use of float operations.
+If an interrupt service routine is getting executed, it too must not
+do float operations if the main program is making use of them.
+(The reason for this restriction is that some floating point libraries
+use software floating point accumulators, e.g., FPA0 and FPA1 in the
+Extended Color Basic case.)
+
+Under OS-9, multitasking is achieved by running more than one process,
+and each process will have its own set of software floating point
+accumulators.
 
 
 ### Function Names as Strings
@@ -1919,6 +1955,125 @@ code that calls memcpy() to copy the struct.
 If -nodefaultlibs is given, the program will not link,
 because memcpy() is provided by `libcmoc-std-*.a`.
 The program must thus provide its own implementation of memcpy().
+
+
+### Making OS-9 system calls
+
+As of CMOC 0.1.83, the way to make systems calls to OS-9 is to use
+inline assembly. This section shows an example program, called `os9load.c`,
+that loads the first few bytes of a file into a memory buffer.
+
+    #include <cmoc.h>
+
+    // filePath: Must end with '\r'.
+    // Returns the number of bytes read from the file (may be lower than bufferLength).
+    //
+    size_t loadFileToBuffer(const char *filePath,
+                            void *buffer,
+                            size_t bufferLength)
+    {
+        // Open the file in read mode.
+        unsigned char pathNumber, errorCode;
+        asm
+        {
+            lda     #$01            ; read mode
+            ldx     :filePath
+            os9     $84             ; I$Open
+            bcs     @error
+            clrb
+            sta     :pathNumber
+    @error
+            stb     :errorCode
+        }
+        if (errorCode != 0)
+        {
+            printf("I$Open failed: error #%u\n", errorCode);
+            return 0;
+        }
+
+        // Load bytes from the file to the buffer.
+        size_t numBytesRead;
+        asm
+        {
+            lda     :pathNumber
+            ldx     :buffer         ; address where to store the bytes
+            pshs    y               ; save global data ptr; cannot refer to C globals for now
+            ldy     :bufferLength   ; number of bytes to read
+            os9     $89             ; I$Read
+            bcs     @error
+            clrb
+            sty     :numBytesRead
+    @error
+            stb     :errorCode
+            puls    y               ; restore global data ptr; can refer to C globals again
+        }
+        if (errorCode != 0)
+        {
+            printf("I$Read failed: error #%u\n", errorCode);
+            // Do not return because we need to close the file.
+        }
+
+        // Close the file.
+        unsigned char closeErrorCode;
+        asm
+        {
+            lda     :pathNumber
+            os9     $8F             ; I$Close
+            bcs     @error
+            clrb
+    @error
+            stb     :closeErrorCode
+        }
+        if (errorCode != 0)  // if read error
+            return 0;  // do not report close error if any; read error already reported
+        if (closeErrorCode != 0)
+        {
+            printf("I$Close failed: error #%u\n", errorCode);
+            return 0;
+        }
+        return numBytesRead;  // success
+    }
+
+    int main() 
+    {
+        char contents[10];
+        size_t numBytesRead = loadFileToBuffer("foo.txt\r", contents, sizeof(contents));
+        printf("First %u bytes: [", numBytesRead);
+        putstr(contents, numBytesRead);
+        printf("]\n");
+        return 0;
+    }
+
+It can be compiled by giving this command: `cmoc --os9 os9load.c`
+
+Once the `os9load` executable has been transferred to NitrOS-9, it can
+be used by first creating a `foo.txt` file (e.g., with `build foo.txt`).
+
+If for example this file contains "`This is the foo.txt file.`",
+then when `os9load` is run, it will print this:
+
+    First 10 bytes: [This is th]
+
+Details on the systems calls can be found in the OS-9 System Programmer's Manual.
+
+Whenever the Y register is used in an OS-9 system call, it must be
+preserved, typically with PSHS and PULS, as done above, because a CMOC program
+uses that register to point to the process's data segment.
+
+That segment contains the program's global variables. As long as the Y register
+is used for something else, the CMOC program must refrain from referring to
+global variables. (Local variables are accessed through the U or S registers.)
+
+
+### Command line arguments
+
+Under OS-9, the arguments passed to the command can be accessed by reading
+the `argv` array passed to main() as in Standard&nbsp;C. No `#include` directive
+is needed to access that array. CMOC does not come with a command-line
+processing library like Unix's _getopt_.
+
+Under the other targets supported by CMOC, there is no way to pass arguments
+to the program.
 
 
 License

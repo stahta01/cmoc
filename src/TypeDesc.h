@@ -1,4 +1,4 @@
-/*  $Id: TypeDesc.h,v 1.42 2023/01/20 03:03:52 sarrazip Exp $
+/*  $Id: TypeDesc.h,v 1.44 2024/02/12 02:48:32 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -79,6 +79,8 @@ public:
 
     bool isPtrOrArray() const;
 
+    bool isPtrToArray() const;
+
     // The signedness of the char type is ignored.
     //
     bool isArrayOfChar() const;
@@ -134,8 +136,21 @@ public:
     // or if it is an array of elements whose type isConstant() (e.g., const int a[]).
     // Note that this method returns false for 'const int *', because the pointer is writable,
     // i.e., the const keyword is not at the first level.
+    // This function's name is misleading. See also isConstAtFirstLevel() and isPointerToOrArrayOfConst().
     //
     bool isConstant() const;
+
+    // Returns true if this type has the const keyword, regardless of whether
+    // the pointed-to type is const, in the case of a pointer type.
+    // This means that true is returned for 'int * const p', but not for 'const int *p'.
+    //
+    bool isConstAtFirstLevel() const;
+
+    // Returns true of this type is a pointer to, or an array of, a type that is const
+    // at its first level.
+    // This means that true is returned for 'const int *p', but not for 'int * const p'.
+    //
+    bool isPointerToOrArrayOfConst() const;
 
     // Determines if a variable of this type is suitable for the rodata section, for ROM.
     // This is different from isConstant(), which checks for "C constness".

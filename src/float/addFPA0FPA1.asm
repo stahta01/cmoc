@@ -13,8 +13,6 @@ addFPA0FPA1	EXPORT
 * Preserves X.
 *
 addFPA0FPA1
-	lda     FP1EXP		; load exponent of FPA1
-	ldb     FP0EXP		; load exponent of FPA0
 	flt_addFPA1ToFPA0
 
 	ldx	,s		; result

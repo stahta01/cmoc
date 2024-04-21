@@ -1,4 +1,4 @@
-/*  $Id: FunctionDef.h,v 1.30 2022/08/12 03:44:18 sarrazip Exp $
+/*  $Id: FunctionDef.h,v 1.34 2023/08/27 01:41:04 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -46,7 +46,12 @@ public:
     // Calls delete on the FormalParamList pointer received for the constructor, if any.
     //
     virtual ~FunctionDef();
-    
+
+    // Central function that determines the assembly language label of the entry point
+    // of a C function whose name is given by 'id'.
+    //
+    static std::string makeLabelFromFunctionId(const std::string &id);
+
     // If this FunctionDef already has a body, this method calls delete on 'body'
     // and issues a compiler error.
     // Otherwise, this FunctionDef becomes owner of the TreeSequence object,
@@ -76,7 +81,7 @@ public:
     //
     bool isCalled() const;
 
-    virtual void checkSemantics(Functor &f);
+    virtual void checkSemantics(Functor &f) override;
 
     // Must be called before calling emitCode().
     // Must only be called once.
@@ -85,9 +90,9 @@ public:
 
     // declareFormalParams() and allocateLocalVariables() must have been called.
     //
-    virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
+    virtual CodeStatus emitCode(ASMText &out, bool lValue) const override;
 
-    virtual bool iterate(Functor &f);
+    virtual bool iterate(Functor &f) override;
 
     // May return NULL.
     const FormalParamList *getFormalParamList() const;
@@ -111,7 +116,7 @@ public:
     //
     std::string findAssemblyLabelFromIDLabeledStatement(const std::string &id) const;
 
-    virtual bool isLValue() const { return false; }
+    virtual bool isLValue() const override { return false; }
 
     // Returns an instruction argument.
     // Only relevant when a function receives a hidden parameter that points

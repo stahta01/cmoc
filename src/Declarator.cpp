@@ -1,4 +1,4 @@
-/*  $Id: Declarator.cpp,v 1.43 2022/07/07 16:14:08 sarrazip Exp $
+/*  $Id: Declarator.cpp,v 1.48 2023/09/06 03:07:23 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -55,8 +55,7 @@ Declarator::~Declarator()
     delete formalParamList;
     delete initExpr;
 
-    for (vector<Tree *>::iterator it = arraySizeExprList.begin(); it != arraySizeExprList.end(); ++it)
-        delete *it;
+    deleteVectorElements(arraySizeExprList);
 }
 
 
@@ -65,6 +64,13 @@ Declarator::setInitExpr(Tree *_initExpr)
 {
     assert(!initExpr);
     initExpr = _initExpr;
+}
+
+
+const Tree *
+Declarator::getInitExpr() const
+{
+    return initExpr;
 }
 
 
@@ -176,11 +182,11 @@ Declarator::computeArrayDimensions(vector<uint16_t> &arrayDimensions,
                                    const vector<Tree *> &arraySizeExprList,
                                    const string &id,
                                    const Tree *initExpr,
-                                   const Tree *declarationTree)
+                                   const Tree *errorLocation)
 {
     if (arraySizeExprList.size() == 0)
     {
-        Tree::errormsg(declarationTree, "array %s: no dimensions", id.c_str());
+        Tree::errormsg(errorLocation, "array %s: no dimensions", id.c_str());
         return false;
     }
 
@@ -189,7 +195,7 @@ Declarator::computeArrayDimensions(vector<uint16_t> &arrayDimensions,
     for (vector<Tree *>::const_iterator it = arraySizeExprList.begin(); it != arraySizeExprList.end(); ++it)
         if (*it == NULL && it != arraySizeExprList.begin())
         {
-            Tree::errormsg(declarationTree, "array %s: dimension other than first one is unspecified", id.c_str());
+            Tree::errormsg(errorLocation, "array %s: dimension other than first one is unspecified", id.c_str());
             return false;
         }
 
@@ -215,7 +221,8 @@ Declarator::computeArrayDimensions(vector<uint16_t> &arrayDimensions,
         }
         else if (!allowUnknownFirstDimension)
         {
-            Tree::warnmsg(declarationTree, "array `%s' assumed to have one element", id.c_str());
+            if (TranslationUnit::instance().warnArrayWithUnknownFirstDimension())
+                Tree::warnmsg(errorLocation, "array `%s' assumed to have one element", id.c_str());
             arrayDimensions.push_back(1);
         }
     }
@@ -301,10 +308,10 @@ Declarator::getFunctionPointerLevel() const
 
 
 uint16_t
-Declarator::getTotalNumArrayElements() const
+Declarator::getTotalNumArrayElements(const Tree *errorLocation) const
 {
     vector<uint16_t> arrayDimensions;
-    if (!computeArrayDimensions(arrayDimensions, false, NULL))  // arrayDimensions will be empty if non-array
+    if (!computeArrayDimensions(arrayDimensions, false, errorLocation))  // arrayDimensions will be empty if non-array
         return 0;
     if (arrayDimensions.size() == 0)
         return 0;
@@ -390,7 +397,7 @@ Declarator::createFormalParameter(DeclarationSpecifierList &dsl) const
         {
             td->appendDimensions(arrayDimensions);
 
-            // Make td point to the what td is an array (of arrays) of.
+            // Make td point to what td is an array (of arrays) of.
             while (td->isArray())
                 td = td->getPointedTypeDesc();
         }

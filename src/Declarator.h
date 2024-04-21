@@ -1,4 +1,4 @@
-/*  $Id: Declarator.h,v 1.25 2022/07/07 16:14:08 sarrazip Exp $
+/*  $Id: Declarator.h,v 1.27 2023/09/06 03:07:23 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -51,6 +51,8 @@ public:
 
     void setInitExpr(Tree *_initExpr);
 
+    const Tree *getInitExpr() const;
+
     void checkForFunctionReturningArray() const;
 
     // Adds a dimension to this declarator.
@@ -92,7 +94,11 @@ public:
     bool getNumDimensions(size_t &numDimensions) const;
 
     // Returns the number of elements (over all the dimensions), not the number of bytes.
-    uint16_t getTotalNumArrayElements() const;
+    //
+    // errorLocation: Tree on which to call errormsg() or warnmsg(), if needed, so that
+    //                the right line number appears in the message. Allowed to be null.
+    //
+    uint16_t getTotalNumArrayElements(const Tree *errorLocation = NULL) const;
 
     // v: Must come from new. This Declarator takes ownership of the vector object and will delete it in its destructor.
     //
@@ -135,25 +141,25 @@ public:
     // arrayDimensions: NOT cleared before elements are appended, if any.
     // allowUnknownFirstDimension: if true, this unknown 1st dimension is assumed to be 1.
     //
-    // declarationTree: Tree on which to call errormsg() or warnmsg(), so that
-    //                  the right line number appears in the message. Allowed to be null.
+    // errorLocation: Tree on which to call errormsg() or warnmsg(), if needed, so that
+    //                the right line number appears in the message. Allowed to be null.
     //
     static bool computeArrayDimensions(std::vector<uint16_t> &arrayDimensions,
                                        bool allowUnknownFirstDimension,
                                        const std::vector<Tree *> &arraySizeExprList,
                                        const std::string &id,
                                        const Tree *initExpr,
-                                       const Tree *declarationTree);
+                                       const Tree *errorLocation);
 
     // May also be called for non-arrays (does nothing and succeeds).
     bool computeArrayDimensions(std::vector<uint16_t> &arrayDimensions,
                                 bool allowUnknownFirstDimension,
-                                const Tree *declarationTree) const
+                                const Tree *errorLocation) const
     {
         if (type != ARRAY)
             return true;
         return computeArrayDimensions(arrayDimensions, allowUnknownFirstDimension,
-                                      arraySizeExprList, id, initExpr, declarationTree);
+                                      arraySizeExprList, id, initExpr, errorLocation);
     }
 
     std::string toString() const;

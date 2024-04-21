@@ -1,4 +1,4 @@
-/*  $Id: DeclarationSequence.h,v 1.8 2020/06/06 04:41:43 sarrazip Exp $
+/*  $Id: DeclarationSequence.h,v 1.9 2023/08/27 01:41:03 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -47,7 +47,7 @@ public:
     //
     void processDeclarator(Declarator *declarator, const DeclarationSpecifierList &dsl);
 
-    virtual void checkSemantics(Functor &f);
+    virtual void checkSemantics(Functor &f) override;
 
     void removeEnumeratorList() { enumeratorList = NULL; }
 

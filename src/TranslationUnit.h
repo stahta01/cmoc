@@ -1,4 +1,4 @@
-/*  $Id: TranslationUnit.h,v 1.89 2023/04/10 04:48:52 sarrazip Exp $
+/*  $Id: TranslationUnit.h,v 1.100 2024/01/18 04:19:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2023 Pierre Sarrazin <http://sarrazip.com/>
@@ -44,6 +44,8 @@ public:
         return *theInstance;
     }
 
+    static bool hasInstance() { return theInstance != NULL; }
+
     static TypeManager &getTypeManager() { return instance().typeManager; }
 
     static void createInstance(const Parameters &params);
@@ -55,7 +57,7 @@ public:
 
     // defList: Must come from 'new' (or be null). Ownership transferred to TranslationUnit.
     void setDefinitionList(TreeSequence *defList);
-    
+
     // Stores 'fd' in a table (indexed by function identifiers) used by getFunctionDef().
     void addFunctionDef(FunctionDef *fd);
 
@@ -87,6 +89,8 @@ public:
 
     TargetPlatform getTargetPlatform() const;
 
+    FloatingPointLibrary getFloatingPointLibrary() const;
+
     // Indicates if the platform the compiler is generating code for uses the Y register,
     // typically as a data segment pointer. On platforms that do not do this, Y may be
     // used in generated code.
@@ -107,7 +111,14 @@ public:
 
     void allocateLocalVariables();
 
+    // Calls methods on the ASMText to emit instructions and directives in an in-memory format
+    // contained in the ASMText.
+    // Does not actually write an assembly language file.
     // allocateLocalVariables() must have been called.
+    //
+    // N.B.: finishEmittingAssembler() MUST be called soon after this to emit imports for
+    //       the utility routines and to emit the END directive.
+    //
     // Stops short if an error is detected.
     // dataAddress: 0xFFFF is the data section is NOT separate from the code/read-only section.
     // stackSpace: Ignored when targetting OS-9.
@@ -117,6 +128,11 @@ public:
     void emitAssembler(ASMText &out, uint16_t dataAddress,
                        uint16_t stackSpace, uint16_t extraStackSpace,
                        bool emitBootLoaderMarker);
+
+    // Emits IMPORT directives for each utility routine registered with registerNeededUtility().
+    // Emits the END directive.
+    //
+    void finishEmittingAssembler(ASMText &out);
 
     void pushScope(Scope *scope);
     Scope *getCurrentScope();
@@ -208,9 +224,19 @@ public:
 
     bool warnAboutInlineAsmArrayIndexes() const;
 
-    void warnAboutVolatile();
+    bool warnOnShadowingLocalVariable() const;
 
-    bool warnIfForConditionComparesDifferentSizes();
+    void enableVolatileWarning();
+
+    bool warnIfForConditionComparesDifferentSizes() const;
+
+    bool warnArrayWithUnknownFirstDimension() const;
+
+    bool warnTooManyElementsInInitializer() const;
+
+    bool warnShiftAlwaysZero() const;
+
+    bool warnLabelOnDeclaration() const;
 
     // Adds the given filename to the list of filenames that the current
     // translation unit depends on.
@@ -219,10 +245,14 @@ public:
 
     // Writes a makefile prerequisite rule.
     // Files whose path begins with the string in pkgdatadir (case sensitive) are not listed.
+    // dependenciesFilename: If not empty, is written as the second target of the rule.
+    // outputFilename: The path of the file that is the target of the rule.
+    // pkgdatadir: Files whose path begins with this string (case sensitive) are not listed,
+    //             as they are considered system header files.
     //
     void writePrerequisites(std::ostream &out,
                             const std::string &dependenciesFilename,
-                            const std::string &objectFilename,
+                            const std::string &outputFilename,
                             const std::string &pkgdatadir) const;
 
     // Adds decl to globalVariables if not extern.
@@ -235,6 +265,10 @@ private:
     TranslationUnit(const Parameters &params);
 
     void detectCalledFunctions();
+    CodeStatus emitPrecedingVerbatimAssemblyBlocks(ASMText &out, std::vector<Tree *>::const_iterator it);
+    CodeStatus emitAssemblerStmts(ASMText &out,
+                                  std::vector<Tree *>::const_iterator begin,
+                                  std::vector<Tree *>::const_iterator end);
     static std::string resolveVectrexMusicAddress(const std::string &symbol);
     void emitProgramEnd(ASMText &out) const;
     CodeStatus emitWritableGlobals(ASMText &out) const;
@@ -303,7 +337,7 @@ private:
     int8_t vxTitlePosY;
     std::string vxCopyright;
 
-    std::vector<std::string> sourceFilenamesSeen;  // as listed by cpp output
+    std::vector<std::string> prerequisiteFilenamesSeen;  // as listed by cpp output
 
     // Forbidden operations:
     TranslationUnit(const TranslationUnit &);
@@ -314,14 +348,11 @@ private:
 class TranslationUnitDestroyer
 {
 public:
-    TranslationUnitDestroyer(bool _destroyTU) : destroyTU(_destroyTU) {}
     ~TranslationUnitDestroyer()
     {
-        if (destroyTU)
+        if (TranslationUnit::hasInstance())
             TranslationUnit::destroyInstance();
     }
-private:
-    bool destroyTU;
 };
 
 

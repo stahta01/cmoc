@@ -1,4 +1,4 @@
-/*  $Id: TreeSequence.h,v 1.14 2022/02/01 04:05:44 sarrazip Exp $
+/*  $Id: TreeSequence.h,v 1.15 2023/08/27 01:41:05 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -52,15 +52,15 @@ public:
     //
     void clear();
 
-    virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
+    virtual CodeStatus emitCode(ASMText &out, bool lValue) const override;
 
-    virtual bool iterate(Functor &f);
+    virtual bool iterate(Functor &f) override;
 
     // Searches for 'existingChild' in this sequence, calls delete on it,
     // then puts 'newChild' in its place in this sequence.
     // existingChild MUST be in this sequence.
     //
-    virtual void replaceChild(Tree *existingChild, Tree *newChild);
+    virtual void replaceChild(Tree *existingChild, Tree *newChild) override;
 
     // Removes the given pointer from the list of Tree pointers of this sequence.
     // Does not destroy *existingChild.
@@ -68,7 +68,7 @@ public:
     //
     void detachChild(const Tree *existingChild);
 
-    virtual bool isLValue() const { return false; }
+    virtual bool isLValue() const override { return false; }
 
     std::string toString() const;
 

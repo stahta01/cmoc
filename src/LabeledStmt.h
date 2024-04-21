@@ -1,4 +1,4 @@
-/*  $Id: LabeledStmt.h,v 1.9 2019/03/10 18:29:45 sarrazip Exp $
+/*  $Id: LabeledStmt.h,v 1.11 2023/12/31 03:30:03 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -35,9 +35,11 @@ public:
 
     virtual ~LabeledStmt();
 
-    virtual bool iterate(Functor &f);
+    virtual bool iterate(Functor &f) override;
 
-    virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
+    virtual void checkSemantics(Functor &f) override;
+
+    virtual CodeStatus emitCode(ASMText &out, bool lValue) const override;
 
     bool isCase() const { return id.empty() && expression; }
 
@@ -57,7 +59,7 @@ public:
 
     std::string getAssemblyLabelIfIDEqual(const std::string &id) const;
 
-    virtual bool isLValue() const { return false; }
+    virtual bool isLValue() const override { return false; }
 
 private:
 

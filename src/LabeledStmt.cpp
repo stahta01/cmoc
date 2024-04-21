@@ -1,7 +1,7 @@
-/*  $Id: LabeledStmt.cpp,v 1.6 2016/06/18 18:14:20 sarrazip Exp $
+/*  $Id: LabeledStmt.cpp,v 1.8 2024/01/11 04:01:19 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2024 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@
 #include "LabeledStmt.h"
 
 #include "TranslationUnit.h"
+#include "DeclarationSequence.h"
 
 using namespace std;
 
@@ -31,6 +32,7 @@ LabeledStmt::LabeledStmt(Tree *_caseExpr, Tree *_statement)
     expression(_caseExpr),
     statement(_statement)
 {
+    assert(statement);
 }
 
 
@@ -109,4 +111,16 @@ LabeledStmt::iterate(Functor &f)
     if (!f.close(this))
         return false;
     return true;
+}
+
+
+void
+LabeledStmt::checkSemantics(Functor &)
+{
+    if (TranslationUnit::instance().warnLabelOnDeclaration()
+        && dynamic_cast<const DeclarationSequence *>(statement) != NULL)
+    {
+        // With GCC 9.4.0, this would be an error.
+        warnmsg("a label can only be part of a statement and a declaration is not a statement");
+    }
 }

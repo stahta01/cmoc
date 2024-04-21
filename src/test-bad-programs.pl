@@ -16,11 +16,11 @@ my @testCaseList =
 
 {
 title => q{Empty source file},
-suspended => 1,  # Suspended b/c Mac OS X cpp appears to generate 1-line output, so error line no is 2 instead of 1.  
 program => q!!,
 expected => [
     qq!lwlink: __error__: External symbol program_start not found!,
     qq!lwlink: __error__: Cannot resolve exec address 'program_start'!,
+    qq!cmoc: __fatal error__: linker failed.!,
     ]
 },
 
@@ -77,7 +77,7 @@ program => q!
 expected => [ qq!,check-prog.c:3: __warning__: function 'f' is not void but does not have any return statement!,
               qq!,check-prog.c:4: __warning__: function 'g' is not void but does not have any return statement!,
               qq!,check-prog.c:5: __error__: returning expression of type `int', which differs from function's return type (`void')!,
-              qq!,check-prog.c:6: __error__: return without argument in a non-void function!,
+              qq!,check-prog.c:6: __warning__: return without argument in a non-void function!,
             ]
 },
 
@@ -97,7 +97,7 @@ program => q!
 expected => [
     qq!,check-prog.c:4: __warning__: initializing pointer 'p0' from negative constant!,
     qq!,check-prog.c:6: __warning__: initializing pointer 'p2' from integer expression!,
-    qq!,check-prog.c:6: __error__: calling undeclared function f()!,
+    qq!,check-prog.c:6: __warning__: calling undeclared function f()!,
     ]
 },
 
@@ -266,6 +266,7 @@ title => q{Invalid dimensions for array},
 program => q!
     int global0[50000];
     int global1[-1];
+    char globalMatrix[1000][2000];
     struct S
     {
         char member0[-1];  // this must give an err msg even if struct not instantiated
@@ -279,18 +280,21 @@ program => q!
     {
         char local0[40000];
         char local1[-1];
+        char localMatrix[1000][2000];
         struct T t;  // must not assert on this line
         return 0;
     }
     !,
 expected => [
-    qq!,check-prog.c:6: __error__: invalid dimensions for member array `member0' in struct `S'!,
-    qq!,check-prog.c:7: __error__: invalid dimensions for member array `member1' in struct `S'!,
-    qq!,check-prog.c:11: __error__: invalid dimensions for member array `m' in struct `T'!,
+    qq!,check-prog.c:7: __error__: invalid dimensions for member array `member0' in struct `S'!,
+    qq!,check-prog.c:8: __error__: invalid dimensions for member array `member1' in struct `S'!,
+    qq!,check-prog.c:12: __error__: invalid dimensions for member array `m' in struct `T'!,
     qq!,check-prog.c:2: __error__: invalid dimensions for array `global0'!,
     qq!,check-prog.c:3: __error__: invalid dimensions for array `global1'!,
-    qq!,check-prog.c:16: __error__: invalid dimensions for array `local1'!,
-    qq!,check-prog.c:15: __error__: invalid dimensions for array `local0'!,
+    qq!,check-prog.c:4: __error__: invalid dimensions for array `globalMatrix'!,
+    qq!,check-prog.c:18: __error__: invalid dimensions for array `localMatrix'!,
+    qq!,check-prog.c:17: __error__: invalid dimensions for array `local1'!,
+    qq!,check-prog.c:16: __error__: invalid dimensions for array `local0'!,
     ]
 },
 
@@ -488,8 +492,6 @@ program => q!
     !,
 expected => [
     qq!,check-prog.c:2: __error__: using `const char[]' to initialize `char'!,
-    qq!,check-prog.c:2: __error__: using `const char[]' to initialize `char'!,
-    qq!,check-prog.c:2: __error__: using `const char[]' to initialize `char'!,
     ]
 },
 
@@ -631,8 +633,6 @@ program => q!
     {
         f0();
         f1();
-
-
         return 0;
     }
     void f1()
@@ -646,10 +646,9 @@ program => q!
     !,
 expected => [
     qq!,check-prog.c:4: __error__: formal parameters for f3() are different from previously declared at ,check-prog.c:3!,
-    qq!,check-prog.c:21: __error__: formal parameters for f5() are different from previously declared at ,check-prog.c:20!,
-    qq!,check-prog.c:8: __error__: undeclared identifier `f0'!,
-    qq!,check-prog.c:8: __error__: calling undeclared function f0()!,
-    qq!,check-prog.c:9: __error__: calling undeclared function f1()!,
+    qq!,check-prog.c:19: __error__: formal parameters for f5() are different from previously declared at ,check-prog.c:18!,
+    qq!,check-prog.c:8: __warning__: calling undeclared function f0()!,
+    qq!,check-prog.c:9: __warning__: calling undeclared function f1()!,
     ]
 },
 
@@ -812,6 +811,7 @@ title => q{Passing a wrong type to a function expecting a non-void pointer},
 program => q!
     struct S {};
     void f(struct S *p) {}
+    void g(const char *s) {}
     struct T {}; union U {};
     int main()
     {
@@ -826,13 +826,17 @@ program => q!
         f(&s);  // OK
         union U u;
         f(&u);
+        g(' ');
+        g(32);  // OK
+        g(1000);  // OK
         return 0;
     }
     !,
 expected => [
-    qq!,check-prog.c:11: __error__: `int *' used as parameter 1 (p) of function f() which is `struct S *'!,
-    qq!,check-prog.c:13: __error__: `struct T *' used as parameter 1 (p) of function f() which is `struct S *'!,
-    qq!,check-prog.c:17: __error__: `union U *' used as parameter 1 (p) of function f() which is `struct S *'!,
+    qq!,check-prog.c:12: __error__: `int *' used as parameter 1 (p) of function f() which is `struct S *'!,
+    qq!,check-prog.c:14: __error__: `struct T *' used as parameter 1 (p) of function f() which is `struct S *'!,
+    qq!,check-prog.c:18: __error__: `union U *' used as parameter 1 (p) of function f() which is `struct S *'!,
+    qq!,check-prog.c:19: __warning__: passing character constant as parameter 1 (s) of function g(), which is `const char *'!,
     ]
 },
 
@@ -1199,7 +1203,7 @@ expected => [
 
 
 {
-title => q{Function prototype local to a function body},
+title => q{Return type for function prototype different from previously declared},
 program => q!
     void f() {}
     int g()
@@ -1213,7 +1217,23 @@ program => q!
     }
     !,
 expected => [
-    qq!,check-prog.c:5: __error__: invalid declaration!,
+    qq!,check-prog.c:5: __error__: return type for f() is different from previously declared at ,check-prog.c:2!,
+    ]
+},
+
+
+{
+title => q{Wrong type of pointer to point to a function declared by a local prototype},
+program => q!
+    int main()
+    {
+        char *f(int, long *);
+        int *p = f;
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:5: __error__: using `char *(*)(int, long *)' to initialize `int *'!,
     ]
 },
 
@@ -1270,11 +1290,9 @@ program => q!
     !,
 expected => [
     qq!,check-prog.c:4: __error__: undeclared identifier `a'!,
-    qq!,check-prog.c:4: __error__: undeclared identifier `a'!,
     qq!,check-prog.c:4: __error__: argument of sizeof operator is of type void!,
     qq!,check-prog.c:4: __error__: left side of operator [] is of type void!,
     qq!,check-prog.c:4: __error__: array reference on non array or pointer!,
-    qq!,check-prog.c:4: __error__: argument of sizeof operator is of type void!,
     qq!,check-prog.c:4: __error__: l-value required as left operand of array reference!,
     ]
 },
@@ -1809,6 +1827,10 @@ expected => [
 {
 title => q{Various array errors},
 program => q!
+    struct S
+    {
+        char a[];
+    };
     int main()
     {
         int a0[];
@@ -1816,14 +1838,33 @@ program => q!
         int a3["foo"];
         int n = 5;
         int a4[n];
+        struct S s0;
+        struct S s1;
+        struct S s2;
         return 0;
     }
     !,
 expected => [
-    qq!,check-prog.c:4: __warning__: array `a0' assumed to have one element!,
-    qq!,check-prog.c:5: __error__: array a1: dimension other than first one is unspecified!,
-    qq!,check-prog.c:6: __error__: pointer or array expression used for size of array `a3'!,
-    qq!,check-prog.c:8: __error__: invalid size expression for dimension 1 of array `a4'!,
+    qq!,check-prog.c:4: __warning__: array `a' assumed to have one element!,
+    qq!,check-prog.c:8: __warning__: array `a0' assumed to have one element!,
+    qq!,check-prog.c:9: __error__: array a1: dimension other than first one is unspecified!,
+    qq!,check-prog.c:10: __error__: pointer or array expression used for size of array `a3'!,
+    qq!,check-prog.c:12: __error__: invalid size expression for dimension 1 of array `a4'!,
+    ]
+},
+
+
+{
+title => q{-Wno-unknown-first-dim},
+options => "-Wno-unknown-first-dim",
+program => q!
+    int main()
+    {
+        int a0[];
+        return 0;
+    }
+    !,
+expected => [
     ]
 },
 
@@ -1950,11 +1991,11 @@ program => q!
     !,
 expected => [
     qq!,check-prog.c:3: __error__: invalid dimensions for array `gEmpty'!,
-    qq!,check-prog.c:6: __error__: too many elements (4) in initializer for array of 3 element(s)!,
+    qq!,check-prog.c:6: __warning__: too many elements (4) in initializer for array of 3 element(s)!,
     qq!,check-prog.c:7: __warning__: only 2 element(s) in initializer for array of 3 element(s)!,
     qq!,check-prog.c:8: __error__: too many characters (4) in string literal initializer for array of 3 character(s)!,
     qq!,check-prog.c:9: __error__: too many characters (7) in string literal initializer for array of 3 character(s)!,
-    qq!,check-prog.c:11: __error__: too many elements (4) in initializer for array of 3 element(s)!,
+    qq!,check-prog.c:11: __warning__: too many elements (4) in initializer for array of 3 element(s)!,
     qq!,check-prog.c:12: __warning__: only 2 element(s) in initializer for array of 3 element(s)!,
     qq!,check-prog.c:13: __error__: invalid dimensions for array `empty'!,
     ]
@@ -2433,7 +2474,7 @@ expected => [
     qq!,check-prog.c:20: __warning__: assigning `char *' to `char * const' is not const-correct!,
     qq!,check-prog.c:26: __warning__: assigning `const char[]' to `char *' is not const-correct!,
     qq!,check-prog.c:30: __warning__: assigning `char' to `const char' is not const-correct!,
-    qq!,check-prog.c:13: __warning__: incrementing a constant expression (type is `const int')!,
+    qq!,check-prog.c:13: __warning__: incrementing expression of type `const int' is not const-correct!,
     qq!,check-prog.c:25: __warning__: initializing non-constant `char *' (yourbuf) from `const char[]'!,
     qq!,check-prog.c:40: __warning__: assigning `int' to `const int' is not const-correct!,
     qq!,check-prog.c:43: __warning__: assigning `const int *' to `int *' is not const-correct!,
@@ -2442,13 +2483,13 @@ expected => [
     qq!,check-prog.c:52: __warning__: `const int *' used as parameter 1 (p) of function takesNonConstIntPtr() which is `int *' (not const-correct)!,
     qq!,check-prog.c:53: __warning__: `const int *' used as parameter 1 (p) of function takesNonConstIntPtr() which is `int *' (not const-correct)!,
     qq!,check-prog.c:55: __warning__: `const int *' used as parameter 1 (p) of function takesNonConstIntPtr() which is `int *' (not const-correct)!,
-    qq!,check-prog.c:38: __warning__: incrementing a constant expression (type is `const int')!,
+    qq!,check-prog.c:38: __warning__: incrementing expression of type `const int' is not const-correct!,
     qq!,check-prog.c:41: __warning__: using `const int *' to initialize `int *' is not const-correct!,
-    qq!,check-prog.c:51: __warning__: incrementing a constant expression (type is `const int')!,
+    qq!,check-prog.c:51: __warning__: incrementing expression of type `const int' is not const-correct!,
     qq!,check-prog.c:67: __warning__: assigning `const char[]' to `char *' is not const-correct!,
     qq!,check-prog.c:68: __warning__: assigning `int' to `const int' is not const-correct!,
     qq!,check-prog.c:66: __warning__: initializing non-constant `char *' (s) from `const char[]'!,
-    qq!,check-prog.c:69: __warning__: incrementing a constant expression (type is `const int')!,
+    qq!,check-prog.c:69: __warning__: incrementing expression of type `const int' is not const-correct!,
     qq!,check-prog.c:78: __warning__: assigning `int' to `const int' is not const-correct!,
     qq!,check-prog.c:80: __warning__: using `const int *' to initialize `int *' is not const-correct!,
     qq!,check-prog.c:92: __warning__: using `const char *' to initialize `char *' is not const-correct!,
@@ -2752,17 +2793,10 @@ program => q!
     !,
 expected => [
     qq!,check-prog.c:2: __error__: empty declarator name!,
-    qq!,check-prog.c:2: __error__: empty declarator name!,
     qq!,check-prog.c:3: __error__: empty typename!,
     qq!,check-prog.c:4: __error__: empty typename!,
-    qq!,check-prog.c:4: __error__: empty typename!,
-    qq!,check-prog.c:5: __error__: empty typename!,
     qq!,check-prog.c:5: __error__: empty typename!,
     qq!,check-prog.c:9: __error__: empty declarator name!,
-    qq!,check-prog.c:9: __error__: empty declarator name!,
-    qq!,check-prog.c:9: __error__: empty declarator name!,
-    qq!,check-prog.c:10: __error__: empty declarator name!,
-    qq!,check-prog.c:10: __error__: empty declarator name!,
     qq!,check-prog.c:10: __error__: empty declarator name!,
     ]
 },
@@ -2944,6 +2978,24 @@ expected => [
 
 
 {
+title => q{Assigning to a member of a const struct through a pointer},
+program => q!
+    struct A { int x; };
+    int main()
+    {
+        struct A a = { 999 };
+        const struct A *pA = &a;
+        pA->x = 888;  // bad: pA points to a const struct
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:7: __warning__: assigning `int' to `const int' is not const-correct!,
+    ]
+},
+
+
+{
 title => q{Assigning/incrementing/decrementing const member of struct},
 program => q!
     typedef struct Couple { int x, y; } Couple;
@@ -2964,12 +3016,40 @@ program => q!
     }
     !,
 expected => [
-    qq!,check-prog.c:8: __error__: assigning to member `x' of `const struct Couple' is not const-correct!,
-    qq!,check-prog.c:10: __error__: assigning to member `y' of `const struct Couple' is not const-correct!,
-    qq!,check-prog.c:11: __error__: assigning to member `y' of `const struct Couple' is not const-correct!,
-    qq!,check-prog.c:13: __error__: assigning to member `x' of `const struct Couple' is not const-correct!,
-    qq!,check-prog.c:14: __error__: incrementing member `y' of `const struct Couple' is not const-correct!,
-    qq!,check-prog.c:15: __error__: decrementing member `y' of `const struct Couple' is not const-correct!,
+    qq!,check-prog.c:8: __warning__: assigning `int' to `const int' is not const-correct!,
+    qq!,check-prog.c:10: __warning__: assigning `int' to `const int' is not const-correct!,
+    qq!,check-prog.c:11: __warning__: assigning `int' to `const int' is not const-correct!,
+    qq!,check-prog.c:13: __warning__: assigning `int' to `const int' is not const-correct!,
+    qq!,check-prog.c:14: __warning__: incrementing expression of type `const int' is not const-correct!,
+    qq!,check-prog.c:15: __warning__: decrementing expression of type `const int' is not const-correct!,
+    ]
+},
+
+
+{
+title => q{Assigning to a const pointer},
+program => q!
+    struct A { int x; };
+    int main()
+    {
+        struct A a, b;
+        struct A * const pA = &a;
+        pA = &b;  // bad: the pointer itself is const, and cannot point to something else after declaration
+        pA->x = 999;    // ok
+        ++pA->x;        // ok
+        int m, n;
+        int * const pInt = &m;
+        pInt = &n;      // bad
+        *pInt = 888;    // ok
+        ++pInt;         // bad
+        ++*pInt;        // ok
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:7: __warning__: assigning `struct A *' to `struct A * const' is not const-correct!,
+    qq!,check-prog.c:12: __warning__: assigning `int *' to `int * const' is not const-correct!,
+    qq!,check-prog.c:14: __warning__: incrementing expression of type `int * const' is not const-correct!,
     ]
 },
 
@@ -2999,6 +3079,8 @@ expected => [
 title => q{Warning about binary operation on byte-sized arguments},
 options => "-Wgives-byte",
 program => q!
+    enum { N = 100 };
+    struct S { char s[4]; };
     int main()
     {
         char a = 100, b = 200;
@@ -3007,11 +3089,14 @@ program => q!
         int p2 = a * (int) b;
         int p3 = (int) a * (int) b;
         int p4 = (char) a * (char) b;  // yields byte, but no warning because both operands have a cast
+        int p5 = a * (char) b;  // yields byte, but no warning because one of the operands has a cast
+        int p6 = (char) a * b;  // yields byte, but no warning because one of the operands has a cast
+        unsigned p = N * sizeof(struct S);  // no warning because enum name is int and sizeof() is size_t
         return 0;
     }
     !,
 expected => [
-    qq!,check-prog.c:5: __warning__: operator `multiplication' on two byte-sized arguments gives byte under CMOC, unlike under Standard C!,
+    qq!,check-prog.c:7: __warning__: operator `multiplication' on two byte-sized arguments gives byte under CMOC, unlike under Standard C!,
     ]
 },
 
@@ -3214,6 +3299,7 @@ expected => [
     qq!lwlink: __error__: External symbol _l not found in ,check-prog.o:code!,
     qq!lwlink: __error__: External symbol _l not found in ,check-prog.o:code!,
     qq!lwlink: __error__: Incomplete reference at ,check-prog.o:code+06!,
+    qq!cmoc: __fatal error__: linker failed.!,
     ]
 },
 
@@ -3272,6 +3358,26 @@ expected => [
     qq!,check-prog.c:5: __error__: declaration for parameter `c' but function bar1() has no such parameter!,
     qq!,check-prog.c:6: __error__: declaration for parameter `b' but function bar2() has no such parameter!,
     qq!,check-prog.c:7: __error__: syntax error: unsigned!,  # a better error message would require reworking the grammar
+    ]
+},
+
+
+{
+title => q{K&R function prototype that has no return type vs. taking a pointer to it with wrong type},
+program => q!
+    undefinedFunction();  // return type assumed to be 'int'
+    undefinedFunctionWithParams(a, b);  // parameter names accepted
+    //undefinedFunctionWithParams(a) char a;  // types for the parameter names: not supported: causes syntax error on '{'
+    int main()
+    {
+        long (*funcPtr0)() = undefinedFunction;
+        long (*funcPtr1)() = undefinedFunctionWithParams;
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:7: __error__: using `int (*)(void)' to initialize `long (*)(...)'!,
+    qq!,check-prog.c:8: __error__: using `int (*)(int, int)' to initialize `long (*)(...)'!,
     ]
 },
 
@@ -3477,6 +3583,7 @@ expected => [
 
 {
 title => q{Parenthesised function name keeps function call from matching macro with same same},
+options => "-Werror",  # to avoid letting assembler complain about external symbols not being found
 program => q!
     #define foo() 99
     #define bar(n) ((n) + 1)
@@ -3492,14 +3599,248 @@ program => q!
     }
     !,
 expected => [
-    qq!,check-prog.c:8: __error__: undeclared identifier `foo'!,
-    qq!,check-prog.c:9: __error__: undeclared identifier `bar'!,
-    qq!,check-prog.c:10: __error__: undeclared identifier `baz'!,
-    qq!,check-prog.c:11: __error__: undeclared identifier `quux'!,
-    qq!,check-prog.c:8: __error__: calling undeclared function foo()!,
-    qq!,check-prog.c:9: __error__: calling undeclared function bar()!,
-    qq!,check-prog.c:10: __error__: calling undeclared function baz()!,
-    qq!,check-prog.c:11: __error__: calling undeclared function quux()!,
+    qq!,check-prog.c:8: __warning__: calling undeclared function foo()!,
+    qq!,check-prog.c:9: __warning__: calling undeclared function bar()!,
+    qq!,check-prog.c:10: __warning__: calling undeclared function baz()!,
+    qq!,check-prog.c:11: __warning__: calling undeclared function quux()!,
+    ]
+},
+
+
+{
+title => q{Assigning a to constant pointer to an array, or to the array},
+program => q!
+    int a[3] = { 10, 11, 12 };
+    typedef int ArrayType[3];
+    ArrayType * const ptrToArray = a;  // not an array, but a pointer to an array
+    typedef const int ConstArrayType[3];
+    ConstArrayType * const ptrToConstArray = a;  // not an array, but a pointer to an array
+    int main()
+    {
+        ptrToArray = 0;
+        *ptrToArray = 0;
+        (*ptrToArray)[2] = 13;  // ok
+        ptrToConstArray = 0;
+        *ptrToConstArray = 0;
+        (*ptrToConstArray)[2] = 13;
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:4: __warning__: initializing `int[3] * const' (ptrToArray) from incompatible `int[]'!,
+    qq!,check-prog.c:6: __warning__: initializing `const int[3] * const' (ptrToConstArray) from incompatible `int[]'!,
+    qq!,check-prog.c:9: __warning__: assigning `int' to `int[3] * const' is not const-correct!,
+    qq!,check-prog.c:12: __warning__: assigning `int' to `const int[3] * const' is not const-correct!,
+    qq!,check-prog.c:13: __warning__: assigning `int' to `const int[3]' is not const-correct!,
+    qq!,check-prog.c:14: __warning__: assigning `int' to `const int' is not const-correct!,
+    qq!,check-prog.c:10: __error__: cannot assign to array name!,
+    qq!,check-prog.c:13: __error__: cannot assign to array name!,
+    ]
+},
+
+
+{
+title => q{Initializing a pointer from an array of incompatible type},
+program => q!
+    static const int y_startpositions[2][3] =
+        {{120, 110, 90},
+        {20, 110, 90}};
+    typedef const char ArrayType[3];
+    static ArrayType * const y_startpos = y_startpositions;
+    int main()
+    {
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:6: __warning__: initializing `const char[3] * const' (y_startpos) from incompatible `const int[][]'!,
+    ]
+},
+
+
+{
+title => q{typedef with initializer},
+program => q!
+    typedef int a = 42;
+    typedef int b = 43, c = 44;
+    int main()
+    {
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:2: __error__: typedef `a' is initialized!,
+    qq!,check-prog.c:3: __error__: typedef `b' is initialized!,
+    qq!,check-prog.c:3: __error__: typedef `c' is initialized!,
+    ]
+},
+
+
+{
+title => q{Bit shifts that always give zero},
+program => q!
+    int main()
+    {
+        unsigned char uc = 0;
+        unsigned char ucl = (uc << 8);
+        unsigned char ucr = (uc >> 8);
+        char sc = 0;
+        char scl = (sc << 8);
+        char scr = (sc >> 8);  // no Warning b/c result depends on sign of 'sc'
+
+        unsigned int ui = 0;
+        unsigned int uil = (uc << 16);
+        unsigned int uir = (uc >> 16);
+        int si = 0;
+        int sil = (sc << 16);
+        int sir = (sc >> 16);  // no Warning b/c result depends on sign of 'sc'
+
+        unsigned long ul = 0;
+        unsigned long ull = (uc << 32);
+        unsigned long ulr = (uc >> 32);
+        long sl = 0;
+        long sll = (sc << 32);
+        long slr = (sc >> 32);  // no Warning b/c result depends on sign of 'sc'
+
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:5: __warning__: shift always gives zero!,
+    qq!,check-prog.c:6: __warning__: shift always gives zero!,
+    qq!,check-prog.c:8: __warning__: shift always gives zero!,
+    qq!,check-prog.c:12: __warning__: shift always gives zero!,
+    qq!,check-prog.c:13: __warning__: shift always gives zero!,
+    qq!,check-prog.c:15: __warning__: shift always gives zero!,
+    qq!,check-prog.c:19: __warning__: shift always gives zero!,
+    qq!,check-prog.c:20: __warning__: shift always gives zero!,
+    qq!,check-prog.c:22: __warning__: shift always gives zero!,
+    ]
+},
+
+
+{
+title => q{Undefined enum name used in array size causes error message instead of crash},
+program => q`
+    struct S
+    {
+        char a[BOGUS];  // BOGUS is not defined
+    };
+    int main()
+    {
+        struct S mv;
+        mv.a[BOGUS] = 'X';
+        return 0;
+    }
+    `,
+expected => [
+    qq!,check-prog.c:4: __error__: invalid size expression for dimension 1 of array `a'!,
+    qq!,check-prog.c:4: __error__: invalid dimensions for member array `a' in struct `S'!,
+    qq!,check-prog.c:9: __error__: undeclared identifier `BOGUS'!,
+    qq!,check-prog.c:9: __error__: right side of operator [] is of type void!,
+    qq!,check-prog.c:4: __error__: failed to compute array dimensions of struct member `a'!,
+    qq!,check-prog.c:9: __error__: failed to determine array element size!,
+    qq!,check-prog.c:9: __error__: array subscript is not an integer (`void')!,
+    ]
+},
+
+
+{
+title => q{Assigning long to int},
+program => q`
+    int main()
+    {
+        unsigned short v0 = (unsigned long) 1;
+        unsigned short v1 = 1UL;
+        v0 = (unsigned long) 2;
+        v0 = 100000UL;
+        return 0;
+    }
+    `,
+expected => [
+    qq!,check-prog.c:6: __warning__: assigning to `unsigned int' from larger type `unsigned long'!,
+    qq!,check-prog.c:7: __warning__: assigning to `unsigned int' from larger type `unsigned long'!,
+    qq!,check-prog.c:4: __warning__: initializer of type `unsigned long' is too large for `unsigned int`!,
+    qq!,check-prog.c:5: __warning__: initializer of type `unsigned long' is too large for `unsigned int`!,
+    ]
+},
+
+
+{
+title => q{Option -Wshadow warns about a local variable shadowing another},
+options => "-Wshadow",
+program => q!
+    int main()
+    {
+        int x = 1;
+        {
+            int x = 2;
+        }
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:6: __warning__: declaration of `x' shadows local variable of same name declared at ,check-prog.c:4!,
+    ]
+},
+
+
+{
+title => q{Warning on label on declaration},
+program => q!
+    int f() { return 42; }
+    int main()
+    {
+        switch (f())
+        {
+            case 0:
+                int n = 0;  // GCC 9.4.0 gives an error here
+                break;
+            case 1:
+                f();
+                break;
+        }
+    L0:
+        int m = 0;  // GCC 9.4.0 gives an error here
+    L1:
+        m++;
+        return 0;
+    }
+    !,
+expected => [
+   qq!,check-prog.c:7: warning: a label can only be part of a statement and a declaration is not a statement!,
+   qq!,check-prog.c:14: warning: a label can only be part of a statement and a declaration is not a statement!,
+   ]
+},
+
+
+{
+title => q{A member of a const struct is also const},
+program => q!
+    struct A
+    {
+        int n;
+    };
+    struct B
+    {
+        struct A a;
+    };
+    void f(struct A *pa)
+    {
+        pa->n++;
+    }
+    int main()
+    {
+        const struct B b = { { 42 } };
+        f(&b.a);  // bad
+        const struct B *pb = &b;
+        f(&pb->a);  // bad
+        return 0;
+    }
+    !,
+expected => [
+    qq!,check-prog.c:17: __warning__: `const struct A *' used as parameter 1 (pa) of function f() which is `struct A *' (not const-correct)!,
+    qq!,check-prog.c:19: __warning__: `const struct A *' used as parameter 1 (pa) of function f() which is `struct A *' (not const-correct)!,
     ]
 },
 
@@ -3658,6 +3999,7 @@ sub compileProgram($$)
 
         # Mask errors and warnings to keep auto build system from complaining.
         $line =~ s/: error:/: __error__:/gi;
+        $line =~ s/: fatal error:/: __fatal error__:/gi;
         $line =~ s/: warning:/: __warning__:/g;
 
         push @compOutput, $line;
@@ -3698,6 +4040,7 @@ sub runTestNumber
     }
     
     my $lineNum = 0;
+    die unless defined $rhTestCase->{program};
     for my $line (split /\n/, $rhTestCase->{program})
     {
         printf("%3u%5s%s\n", ++$lineNum, "", $line);

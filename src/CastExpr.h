@@ -1,4 +1,4 @@
-/*  $Id: CastExpr.h,v 1.10 2021/10/29 01:27:37 sarrazip Exp $
+/*  $Id: CastExpr.h,v 1.12 2023/08/27 01:41:03 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -23,6 +23,10 @@
 #include "Tree.h"
 
 
+// Type coercion expression.
+// The TypeDesc of this object is the type to which the sub-expression is cast.
+// Example: For (int) x, the type of this tree is int, and getSubExpr() returns the tree for 'x'.
+//
 class CastExpr : public Tree
 {
 public:
@@ -35,9 +39,9 @@ public:
 
     Tree *getSubExpr();
 
-    virtual void checkSemantics(Functor &f);
+    virtual void checkSemantics(Functor &f) override;
 
-    virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
+    virtual CodeStatus emitCode(ASMText &out, bool lValue) const override;
 
     // The emitted code must be in B or D.
     // tree: Should designate the statement or expression that is emitting the cast.
@@ -45,16 +49,16 @@ public:
     //
     static CodeStatus emitCastCode(ASMText &out, const TypeDesc *castTD, const TypeDesc *subTD, const Tree &tree);
 
-    virtual bool iterate(Functor &f);
+    virtual bool iterate(Functor &f) override;
 
-    virtual void replaceChild(Tree *existingChild, Tree *newChild)
+    virtual void replaceChild(Tree *existingChild, Tree *newChild) override
     {
         if (deleteAndAssign(subExpr, existingChild, newChild))
             return;
         assert(!"child not found");
     }
 
-    virtual bool isLValue() const { return false; }
+    virtual bool isLValue() const override { return false; }
 
     static bool isZeroCastToVoidPointer(const Tree &tree);
 

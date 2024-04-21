@@ -1,4 +1,4 @@
-/*  $Id: Parameters.h,v 1.3 2023/04/10 04:48:48 sarrazip Exp $
+/*  $Id: Parameters.h,v 1.13 2024/01/18 04:19:50 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2023 Pierre Sarrazin <http://sarrazip.com/>
@@ -54,6 +54,8 @@ public:
     bool generatePrerequisitesFile;      // --deps option
     bool generatePrerequisitesFileOnly;  // --deps-only option
     std::string prerequisiteFilename;  // if not empty, used instead of forming .d from .o
+    std::string prerequisiteRuleTarget;  // string that must appear as the target of the dependency rule;
+                                         // if empty, the compilation output filename is used instead by compileCFile()
 
     bool preprocOnly;
     bool genAsmOnly;
@@ -76,7 +78,12 @@ public:
     bool isUncalledStaticFunctionWarningEnabled;
     bool isMissingFieldInitializersWarningEnabled;
     bool inlineAsmArrayIndexesWarningEnabled;
+    bool shadowingLocalVariableWarningEnabled;
     bool forConditionComparesDifferentSizesWarningEnabled;
+    bool warnArrayWithUnknownFirstDimension;
+    bool warnTooManyElementsInInitializer;
+    bool warnShiftAlwaysZero;
+    bool warnLabelOnDeclaration;
 
     bool wholeFunctionOptimization;
     bool forceJumpMode;
@@ -86,10 +93,11 @@ public:
     bool stackSpaceSpecifiedByCommandLine;
     uint16_t limitAddress;  // see --limit; 0xFFFF means not applicable
     bool limitAddressSetBySwitch;  // true if --limit used
+    bool assumeCFileByDefault;  // if true, any file other than .s, .asm, .o, .a is assumed to be a C file; if false, only .c files compiled as C
     std::string outputFilename;
     std::vector<std::string> libDirs;  // list of directories to pass to lwlink via -L options
     bool useDefaultLibraries;  // if false, only libcmoc-crt-*.a is used
-    bool useNativeFloatLibrary;
+    FloatingPointLibrary floatingPointLibrary;  // library that provides floating point arithmetic routines
     bool relocatabilitySupported;
 
     std::list<std::string> includeDirList;
@@ -100,70 +108,15 @@ public:
     static uint32_t getVersionInteger();
 
 public:
-    Parameters()
-    :   codeAddress(0x2800),  // DECB Basic program starts at 0x2601 by default
-        dataAddress(0xFFFF),
-        codeAddressSetBySwitch(false),
-        dataAddressSetBySwitch(false),
-        stackSpace(1024),
-        extraStackSpace(0),
-        functionStackSpace(uint32_t(-1)),
-        pkgdatadir(),
-        cmocfloatlibdir(),
-        lwasmPath("lwasm"),
-        lwlinkPath("lwlink"),
-        intermediateFilesKept(false),
-        intermediateDir(),
-        generatePrerequisitesFile(false),
-        generatePrerequisitesFileOnly(false),
-        prerequisiteFilename(),
-        preprocOnly(false),
-        genAsmOnly(false),
-        compileOnly(false),
-        asmCmd(false),  // write asm command in a .cmd file
-        verbose(false),
-        treatWarningsAsErrors(false),
-        nullPointerCheckingEnabled(false),
-        stackOverflowCheckingEnabled(false),
-        targetPlatform(COCO_BASIC),
-        assumeTrack34(false),
-        forcedLWLinkFormat(),
-        callToUndefinedFunctionAllowed(false),
-        warnSignCompare(false),
-        warnPassingConstForFuncPtr(false),
-        isConstIncorrectWarningEnabled(true),
-        isBinaryOpGivingByteWarningEnabled(false),
-        isLocalVariableHidingAnotherWarningEnabled(false),
-        isNonLiteralPrintfFormatWarningEnabled(true),
-        isUncalledStaticFunctionWarningEnabled(true),
-        isMissingFieldInitializersWarningEnabled(true),
-        inlineAsmArrayIndexesWarningEnabled(true),
-        forConditionComparesDifferentSizesWarningEnabled(false),
-        wholeFunctionOptimization(false),
-        forceJumpMode(false),
-        forcedJumpMode(SwitchStmt::IF_ELSE),
-        optimizationLevel(2),
-        omitFramePointer(false),
-        stackSpaceSpecifiedByCommandLine(false),
-        limitAddress(0xFFFF),
-        limitAddressSetBySwitch(false),
-        outputFilename(),
-        libDirs(),
-        useDefaultLibraries(true),
-        useNativeFloatLibrary(false),
-        relocatabilitySupported(true),
-        includeDirList(),
-        searchDefaultIncludeDirs(true),
-        defines()
-    {
-    }
+
+    Parameters();
 
     // May change some parameters of this object.
     //
     int compileCFile(const std::string &inputFilename,
                      const std::string &moduleName,
                      const std::string &asmFilename,
-                     const std::string &outputFilename,
+                     const std::string &compilationOutputFilename,
                      const char *targetPlatformName,
                      const char *targetPreprocId);
 
@@ -178,6 +131,10 @@ public:
     //
     std::string useIntDir(const std::string &s) const;
 
+    // True only for ".c", unless assumeCFileByDefault is true.
+    //
+    bool isCFileExtension(const std::string &extension) const;
+
     // Prints to cout.
     // Returns 1.
     //
@@ -191,6 +148,27 @@ public:
     //
     void displayHelp() const;
 
+};
+
+
+class PipeCloser
+{
+public:
+    PipeCloser(const char *_runningTool, FILE *_file)
+        : runningTool(_runningTool), file(_file) {}
+    ~PipeCloser() { (void) close(); }
+
+    // Issues error message to cout upon error.
+    // Returns value returned by pclose() (0 means success).
+    int close();
+
+private:
+    // Forbidden:
+    PipeCloser(const PipeCloser &);
+    PipeCloser &operator = (const PipeCloser &);
+private:
+    std::string runningTool;
+    FILE *file;
 };
 
 

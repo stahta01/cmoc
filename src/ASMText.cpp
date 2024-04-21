@@ -1,4 +1,4 @@
-/*  $Id: ASMText.cpp,v 1.173 2023/03/26 01:45:52 sarrazip Exp $
+/*  $Id: ASMText.cpp,v 1.185 2024/02/26 01:42:55 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2023 Pierre Sarrazin <http://sarrazip.com/>
@@ -41,6 +41,7 @@ const ASMText::OptimizingMethod ASMText::level1OptimFuncs[] =
     &ASMText::pushLoadDLoadX,
     &ASMText::replaceLDDZero,
     &ASMText::pushDLoadXLoadD,
+    &ASMText::pushDLoadX,
     &ASMText::stripConsecutiveLoadsToSameReg,
     &ASMText::storeLoad,
     &ASMText::condBranchOverUncondBranch,
@@ -116,6 +117,12 @@ const ASMText::OptimizingMethod ASMText::level2OptimFuncs[] =
     &ASMText::ldbBranchLdbCompare,
     &ASMText::removePushBFromLdbPushLdbCmp,
     &ASMText::removeLDDAfterPushingD,
+    &ASMText::arrayIndexMul,
+    &ASMText::removeClrAFromArrayIndexMul,
+    &ASMText::removeRepeatedLDX,
+    &ASMText::avoidPushingDoubledD,
+    &ASMText::removePushBPullABeforeMul,
+    &ASMText::removePushBBeforeSubB,
 };
 
 
@@ -814,6 +821,34 @@ ASMText::pushLoadDLoadX(size_t index)
     {
         replaceWithInstr(index, "TFR", "D,X", "optim: pushLoadDLoadX");
         commentOut(index + 2);
+        return true;
+    }
+    return false;
+}
+
+
+// Check for this pattern:
+//   PSHS B,A
+//   LDX ,S++
+//   LDB/LDD #...
+//   LBSR MUL168/MUL16
+// Replace PSHS & LDX with TFR D,X.
+// This is safe because the LBSR will overwrite D, so we know the original D won't be needed.
+//
+bool
+ASMText::pushDLoadX(size_t index)
+{
+    if (index + 3 >= elements.size())  // pattern has 4 instructions
+        return false;
+    if (!isInstr(index,     "PSHS", "B,A"))
+        return false;
+    if (!isInstr(index + 1, "LDX", ",S++"))
+        return false;
+    if ((isInstrWithImmedArg(index + 2, "LDB") && isInstr(index + 3, "LBSR", "MUL168"))
+        || (isInstrWithImmedArg(index + 2, "LDD") && isInstr(index + 3, "LBSR", "MUL16" )))
+    {
+        replaceWithInstr(index, "TFR", "D,X", "optim: pushDLoadX");  // replace PSHS
+        commentOut(index + 1, "optim: pushDLoadX");  // remove LDX
         return true;
     }
     return false;
@@ -4662,7 +4697,239 @@ ASMText::removeLDDAfterPushingD(size_t index)
 }
 
 
-// Tries to remove the use of a register for the frame pointer from the functions
+// Look for:
+//     LDD	<arg>
+//     LDX	#nnn		with nnn <= 255 (typically an array element size in bytes re: BinaryOpExpr::emitArrayRef())
+//     LBSR	MUL16		puts the product in D; also accept BSR/JSR
+// Replace with:
+//     LDX	<arg>
+//     LDB	#nnn
+//     LBSR	MUL168		puts the product in D
+//
+bool
+ASMText::arrayIndexMul(size_t index)
+{
+    if (!isInstrAnyArg(index, "LDD"))
+        return false;
+    // Got an LDD at 'index'.
+    size_t ldxIndex = findNextInstrBeforeLabel(index + 1);
+    if (ldxIndex == size_t(-1) || !isInstrWithImmedArg(ldxIndex, "LDX"))
+        return false;
+    // Got an LDX #. Check that its immediate argument is <= 255.
+    uint16_t ldxImmedArg = extractImmedArg(ldxIndex);
+    if (ldxImmedArg > 255)
+        return false;
+    size_t bsrIndex = findNextInstrBeforeLabel(ldxIndex + 1);
+    if (bsrIndex == size_t(-1) || (!isInstrAnyArg(bsrIndex, "LBSR") && !isInstrAnyArg(bsrIndex, "BSR") && !isInstrAnyArg(bsrIndex, "JSR")))
+        return false;
+    // Got an LBSR/BSR/JSR.
+    if (elements[bsrIndex].fields[1] != "MUL16")
+        return false;
+
+    // Apply the optimization.
+    elements[index].fields[0] = "LDX";  // replace LDD
+    elements[ldxIndex].fields[0] = "LDB";  // replace LDX
+    elements[ldxIndex].fields[2] += " (optim: arrayIndexMul)";
+    elements[bsrIndex].fields[1] = "MUL168";  // replace routine name
+    TranslationUnit::instance().registerNeededUtility("MUL168");
+    return true;
+}
+
+
+// Look for:
+//     CLRA
+//     LDB     <arg>
+//     LBSR    MUL16
+// Remove the CLRA and use MUL168.
+//
+bool
+ASMText::removeClrAFromArrayIndexMul(size_t index)
+{
+    if (!isInstr(index, "CLRA", ""))
+        return false;
+    size_t ldbIndex = findNextInstrBeforeLabel(index + 1);
+    if (ldbIndex == size_t(-1) || !isInstrAnyArg(ldbIndex, "LDB"))
+        return false;
+    // Got an LDB.
+    size_t bsrIndex = findNextInstrBeforeLabel(ldbIndex + 1);
+    if (bsrIndex == size_t(-1) || (!isInstrAnyArg(bsrIndex, "LBSR") && !isInstrAnyArg(bsrIndex, "BSR") && !isInstrAnyArg(bsrIndex, "JSR")))
+        return false;
+    // Got an LBSR/BSR/JSR.
+    if (elements[bsrIndex].fields[1] != "MUL16")
+        return false;
+
+    // Apply the optimization.
+    commentOut(index, "optim: removeClrAFromArrayIndexMul");
+    elements[bsrIndex].fields[1] = "MUL168";  // replace routine name
+    TranslationUnit::instance().registerNeededUtility("MUL168");
+    return true;
+}
+
+
+// Look for this:
+//     LDX <arg>
+//     LDA/LDB/etc. that does not change X
+//     ...
+//     LDX <same arg>
+// Remove the second LDX.
+// This optimization has been seen to allow other optimizations to find
+// more instructions to remove.
+//
+bool
+ASMText::removeRepeatedLDX(size_t index)
+{
+    if (!isInstrAnyArg(index, "LDX"))
+        return false;
+    const size_t firstLDXIndex = index;
+    size_t secondLDXIndex = size_t(-1);
+    ++index;
+    for (;;)
+    {
+        size_t intermediateInstrIndex = findNextInstrBeforeLabel(index);
+        if (intermediateInstrIndex == size_t(-1))
+            break;  // end of instruction sequence
+        Element &el = elements[intermediateInstrIndex];
+        if (el.fields[0] == "LDX" && el.fields[1] == elements[firstLDXIndex].fields[1])
+        {
+            secondLDXIndex = intermediateInstrIndex;
+            break;
+        }
+        static const char *acceptedInstructions[] = { "LDA", "LDB", "CLRA", "CLRB", "STA", "STB", "LDD", "STD" };
+        static const auto end = acceptedInstructions + sizeof(acceptedInstructions) / sizeof(acceptedInstructions[0]);
+        auto it = std::find_if(acceptedInstructions, end,
+                               [&el](const char *s) { return el.fields[0] == s; });
+        if (it == end)  // if not found
+            return false;  // not an accepted instruction
+        const string &arg = el.fields[1];
+        if (arg.find("-X") != string::npos || arg.find("X+") != string::npos)  // if decrement or increment
+            return false;  // X changed by intervening instructions: can't apply optimization
+        
+        index = intermediateInstrIndex + 1;  // for next search
+    }
+
+    if (secondLDXIndex == size_t(-1))
+        return false;  // second indentical LDX not found
+    
+    // Apply the optimization.
+    commentOut(secondLDXIndex, "optim: removeRepeatedLDX");
+    return true;
+}
+
+
+// Replace this:
+//   PSHS    B,A
+//   LDD     {foo}
+//   ADDD    ,S
+//   ADDD    ,S++
+// with this:
+//   LSLB
+//   ROLA
+//   ADDD    {foo}
+//
+bool
+ASMText::avoidPushingDoubledD(size_t index)
+{
+    if (!isInstr(index, "PSHS", "B,A"))
+        return false;
+    size_t lddIndex = findNextInstrBeforeLabel(index + 1);
+    if (!isInstrAnyArg(lddIndex, "LDD"))
+        return false;
+    size_t firstAddIndex = findNextInstrBeforeLabel(lddIndex + 1);
+    if (!isInstr(firstAddIndex, "ADDD", ",S"))
+        return false;
+    size_t secondAddIndex = findNextInstrBeforeLabel(firstAddIndex + 1);
+    if (!isInstr(secondAddIndex, "ADDD", ",S++"))
+        return false;
+
+    string lddArg     = elements[lddIndex].fields[1];
+    string lddComment = elements[lddIndex].fields[2];
+
+    commentOut(index, "optim: avoidPushingDoubledD");
+    replaceWithInstr(lddIndex,       "LSLB");
+    replaceWithInstr(firstAddIndex,  "ROLA");
+    replaceWithInstr(secondAddIndex, "ADDD", lddArg, lddComment);
+    return true;
+}
+
+
+// Replace this:
+//   PSHS    B
+//   [CLRA]         ; optional
+//   LDB    {foo}
+//   PULS    A
+//   MUL
+// with this:
+//   LDA    {foo}
+//   MUL
+//
+bool
+ASMText::removePushBPullABeforeMul(size_t index)
+{
+    if (!isInstr(index, "PSHS", "B"))
+        return false;
+    size_t ldbIndex = findNextInstrBeforeLabel(index + 1);
+    size_t clraIndex = size_t(-1);
+    if (isInstr(ldbIndex, "CLRA", ""))
+    {
+        clraIndex = ldbIndex;
+        ldbIndex = findNextInstrBeforeLabel(ldbIndex + 1);
+    }
+    if (!isInstrAnyArg(ldbIndex, "LDB"))
+        return false;
+    size_t pulsIndex = findNextInstrBeforeLabel(ldbIndex + 1);
+    if (!isInstr(pulsIndex, "PULS", "A"))
+        return false;
+    size_t mulIndex = findNextInstrBeforeLabel(pulsIndex + 1);
+    if (!isInstr(mulIndex, "MUL", ""))
+        return false;
+    
+    // Apply the optimization.
+    commentOut(index, "optim: removePushBPullABeforeMul");  // remove the PSHS B
+    if (clraIndex != size_t(-1))
+        commentOut(clraIndex, "optim: removePushBPullABeforeMul");
+    elements[ldbIndex].fields[0] = "LDA";
+    commentOut(pulsIndex, "optim: removePushBPullABeforeMul");
+    return true;
+}
+
+
+// Replace this:
+//      PSHS    B
+//      [CLRA]
+//      LDB     {foo}
+//      SUBB    S+
+// with this:
+//      [CLRA]
+//      NEGB
+//      ADDB    {foo}
+//
+bool
+ASMText::removePushBBeforeSubB(size_t index)
+{
+    if (!isInstr(index, "PSHS", "B"))
+        return false;
+    size_t ldbIndex = findNextInstrBeforeLabel(index + 1);
+    if (isInstr(ldbIndex, "CLRA", ""))
+        ldbIndex = findNextInstrBeforeLabel(ldbIndex + 1);
+    if (!isInstrAnyArg(ldbIndex, "LDB"))
+        return false;
+    size_t subIndex = findNextInstrBeforeLabel(ldbIndex + 1);
+    if (!isInstr(subIndex, "SUBB", ",S+"))
+        return false;
+
+    // Apply the optimization.
+    commentOut(index, "optim: removePushBBeforeSubB");  // remove PSHS
+    elements[subIndex].fields[0] = "ADDB";
+    elements[subIndex].fields[1] = elements[ldbIndex].fields[1];  // move LDB arg to ADDB
+    elements[subIndex].fields[2] = "optim: removePushBBeforeSubB";
+    elements[ldbIndex].fields[0] = "NEGB";
+    elements[ldbIndex].fields[1] = "";
+    elements[ldbIndex].fields[2] = "optim: removePushBBeforeSubB";
+    return true;
+}
+
+
+// Tries to remove the use of a register for the frame pointer from the function
 // that starts at 'index'.
 // Returns true if it succeeds, false if it could not be done.
 //
@@ -4788,7 +5055,15 @@ ASMText::removeFramePointer(size_t &index)
             else
                 adjustment -= bytesMoved;
         }
-        else if (endsWith(arg, ",U") || endsWith(arg, ",U]"))  // if reference to local var or func arg
+        else if (ins == "LBSR" || (ins == "JSR" && arg.find(',') == string::npos))  // LBSR, or JSR to a label
+        {
+            // Check for CMOC routines that pop the 2 bytes that follow their return address before returning.
+            if (arg == "shiftByteLeft" || arg == "shiftByteRightSigned" || arg == "shiftByteRightUnsigned")
+                adjustment -= 1;
+            else if (arg == "shiftLeft" || arg == "shiftRightSigned" || arg == "shiftRightUnsigned")
+                adjustment -= 2;
+        }
+        else if (endsWith(arg, ",U") || endsWith(arg, ",U]"))  // if reference to local var or func arg (ins could be JSR)
         {
             int16_t displacementFromU = (int16_t) atoi(arg.c_str() + int(arg[0] == '['));  // negative means local var, positive means func arg
             int16_t displacementFromS = displacementFromU + localVarSpace + (displacementFromU > 0 ? -2 : 0) + adjustment;
@@ -4803,10 +5078,8 @@ ASMText::removeFramePointer(size_t &index)
     }
 
     if (destroyLocalVarSpaceIndex == size_t(-1))
-    {
-        assert(!"expected LEAS ,U not found");
-        return false;  // abort: expected LEAS ,U not found
-    }
+        return false;  // abort: expected LEAS ,U not found; can happen in function that contains infinite loop, e.g., for (;;);
+
     if (rtsIndex == size_t(-1))
     {
         assert(!"expected PULS U,PC not found");

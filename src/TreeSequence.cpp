@@ -1,4 +1,4 @@
-/*  $Id: TreeSequence.cpp,v 1.17 2022/01/06 03:39:31 sarrazip Exp $
+/*  $Id: TreeSequence.cpp,v 1.18 2023/08/21 00:48:20 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -39,8 +39,7 @@ TreeSequence::TreeSequence()
 /*virtual*/
 TreeSequence::~TreeSequence()
 {
-    for (std::vector<Tree *>::iterator it = sequence.begin(); it != sequence.end(); ++it)
-        delete *it;
+    deleteVectorElements(sequence);
 }
 
 

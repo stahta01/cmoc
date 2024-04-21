@@ -1,4 +1,4 @@
-/*  $Id: TypeManager.h,v 1.39 2023/04/09 05:59:04 sarrazip Exp $
+/*  $Id: TypeManager.h,v 1.41 2024/01/27 18:27:11 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -53,7 +53,7 @@ public:
 
     void createBasicTypes();
 
-    void createInternalStructs(class Scope &globalScope, TargetPlatform targetPlatform);
+    void createInternalStructs(class Scope &globalScope, TargetPlatform targetPlatform, FloatingPointLibrary floatLib);
 
     const TypeDesc *getVoidType() const;
 
@@ -139,9 +139,17 @@ public:
 
     void dumpTypes(std::ostream &out) const;
 
-    // In bytes. Returns 0 if floats are not supposed on the given platform.
+    struct FloatingPointFormat
+    {
+        uint8_t sizeInBytes = 0;
+        int16_t minExponent = 0;
+        int16_t maxExponent = 0;
+        int16_t exponentBias = 0;
+    };
+
+    // In bytes. Returns a size of 0 if floats are not supposed on the given platform.
     //
-    static size_t getFloatingPointFormatSize(TargetPlatform platform, bool isDoublePrecision);
+    static FloatingPointFormat getFloatingPointFormat(TargetPlatform platform, FloatingPointLibrary floatLib, bool isDoublePrecision);
 
 private:
 

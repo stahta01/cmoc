@@ -87,34 +87,33 @@ extern int yydebug;
     VERBATIM_ASM = 293,
     STRUCT = 294,
     UNION = 295,
-    THIS = 296,
-    PLUS_EQUALS = 297,
-    MINUS_EQUALS = 298,
-    ASTERISK_EQUALS = 299,
-    SLASH_EQUALS = 300,
-    PERCENT_EQUALS = 301,
-    LT_LT_EQUALS = 302,
-    GT_GT_EQUALS = 303,
-    CARET_EQUALS = 304,
-    AMP_EQUALS = 305,
-    PIPE_EQUALS = 306,
-    RIGHT_ARROW = 307,
-    INTERRUPT = 308,
-    SIZEOF = 309,
-    ELLIPSIS = 310,
-    TYPEDEF = 311,
-    ENUM = 312,
-    SWITCH = 313,
-    CASE = 314,
-    DEFAULT = 315,
-    REGISTER = 316,
-    GOTO = 317,
-    EXTERN = 318,
-    STATIC = 319,
-    CONST = 320,
-    VOLATILE = 321,
-    AUTO = 322,
-    FUNC_RECEIVES_FIRST_PARAM_IN_REG = 323
+    PLUS_EQUALS = 296,
+    MINUS_EQUALS = 297,
+    ASTERISK_EQUALS = 298,
+    SLASH_EQUALS = 299,
+    PERCENT_EQUALS = 300,
+    LT_LT_EQUALS = 301,
+    GT_GT_EQUALS = 302,
+    CARET_EQUALS = 303,
+    AMP_EQUALS = 304,
+    PIPE_EQUALS = 305,
+    RIGHT_ARROW = 306,
+    INTERRUPT = 307,
+    SIZEOF = 308,
+    ELLIPSIS = 309,
+    TYPEDEF = 310,
+    ENUM = 311,
+    SWITCH = 312,
+    CASE = 313,
+    DEFAULT = 314,
+    REGISTER = 315,
+    GOTO = 316,
+    EXTERN = 317,
+    STATIC = 318,
+    CONST = 319,
+    VOLATILE = 320,
+    AUTO = 321,
+    FUNC_RECEIVES_FIRST_PARAM_IN_REG = 322
   };
 #endif
 /* Tokens.  */
@@ -156,40 +155,39 @@ extern int yydebug;
 #define VERBATIM_ASM 293
 #define STRUCT 294
 #define UNION 295
-#define THIS 296
-#define PLUS_EQUALS 297
-#define MINUS_EQUALS 298
-#define ASTERISK_EQUALS 299
-#define SLASH_EQUALS 300
-#define PERCENT_EQUALS 301
-#define LT_LT_EQUALS 302
-#define GT_GT_EQUALS 303
-#define CARET_EQUALS 304
-#define AMP_EQUALS 305
-#define PIPE_EQUALS 306
-#define RIGHT_ARROW 307
-#define INTERRUPT 308
-#define SIZEOF 309
-#define ELLIPSIS 310
-#define TYPEDEF 311
-#define ENUM 312
-#define SWITCH 313
-#define CASE 314
-#define DEFAULT 315
-#define REGISTER 316
-#define GOTO 317
-#define EXTERN 318
-#define STATIC 319
-#define CONST 320
-#define VOLATILE 321
-#define AUTO 322
-#define FUNC_RECEIVES_FIRST_PARAM_IN_REG 323
+#define PLUS_EQUALS 296
+#define MINUS_EQUALS 297
+#define ASTERISK_EQUALS 298
+#define SLASH_EQUALS 299
+#define PERCENT_EQUALS 300
+#define LT_LT_EQUALS 301
+#define GT_GT_EQUALS 302
+#define CARET_EQUALS 303
+#define AMP_EQUALS 304
+#define PIPE_EQUALS 305
+#define RIGHT_ARROW 306
+#define INTERRUPT 307
+#define SIZEOF 308
+#define ELLIPSIS 309
+#define TYPEDEF 310
+#define ENUM 311
+#define SWITCH 312
+#define CASE 313
+#define DEFAULT 314
+#define REGISTER 315
+#define GOTO 316
+#define EXTERN 317
+#define STATIC 318
+#define CONST 319
+#define VOLATILE 320
+#define AUTO 321
+#define FUNC_RECEIVES_FIRST_PARAM_IN_REG 322
 
 /* Value type.  */
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 75 "parser.yy"
+#line 73 "parser.yy"
 
     char *str;
     signed char character;
@@ -221,7 +219,7 @@ union YYSTYPE
     std::vector<Enumerator *> *enumeratorList;
     TypeQualifierBitFieldVector *typeQualifierBitFieldVector;
 
-#line 225 "parser.hh"
+#line 223 "parser.hh"
 
 };
 typedef union YYSTYPE YYSTYPE;

@@ -1,4 +1,4 @@
-/*  $Id: Declaration.h,v 1.37 2023/03/23 03:16:24 sarrazip Exp $
+/*  $Id: Declaration.h,v 1.39 2023/08/27 01:41:03 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -80,6 +80,7 @@ public:
     void setGlobal(bool g);
     bool isGlobal() const;
     bool isStatic() const;  // may be global or local
+    bool isGlobalStatic() const { return isGlobal() && isStatic(); }
     bool isLocalStatic() const { return !isGlobal() && isStatic(); }
     bool isDynamicInitializerForced() const { return dynamicInitializerForced; }
     void forceDynamicInitializer() { dynamicInitializerForced = true; }
@@ -117,13 +118,13 @@ public:
     //
     CodeStatus emitStaticArrayInitializer(ASMText &out) const;
 
-    virtual void checkSemantics(Functor &f);
+    virtual void checkSemantics(Functor &f) override;
 
-    virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
+    virtual CodeStatus emitCode(ASMText &out, bool lValue) const override;
 
-    virtual bool iterate(Functor &f);
+    virtual bool iterate(Functor &f) override;
 
-    virtual void replaceChild(Tree *existingChild, Tree *newChild)
+    virtual void replaceChild(Tree *existingChild, Tree *newChild) override
     {
         if (deleteAndAssign(initializationExpr, existingChild, newChild))
             return;
@@ -132,7 +133,7 @@ public:
 
     CodeStatus emitStaticValues(ASMText &out, const Tree *arrayElementInitializer, const TypeDesc *requiredTypeDesc) const;
 
-    virtual bool isLValue() const { return false; }
+    virtual bool isLValue() const override { return false; }
 
     // Creates a Declaration and puts it in the current scope.
     // The TypeDesc of the Declaration will 'typeDesc' unless it is null,

@@ -1,3 +1,5 @@
+; N.B.: Not used when using --mc6839. See mc6839-strtof.c instead.
+
 	INCLUDE float.inc
 
 	SECTION code

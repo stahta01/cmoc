@@ -1,4 +1,4 @@
-/*  $Id: JumpStmt.cpp,v 1.30 2023/02/18 02:26:49 sarrazip Exp $
+/*  $Id: JumpStmt.cpp,v 1.34 2023/08/17 02:48:31 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -117,6 +117,8 @@ JumpStmt::checkSemantics(Functor &f)
                 ;  // returning a word from a word function: fine, regardless of signedness
             else if (funcRetType == BYTE_TYPE && argType == BYTE_TYPE)
                 ;  // returning a byte from a byte function: fine, regardless of signedness
+            else if (funcRetTypeDesc->isRealOrLong() && (argument->getTypeDesc()->isIntegral() || argument->getTypeDesc()->isReal()))
+                ;  // returning a number from a function that returns a real or long
             else if (funcRetType == POINTER_TYPE && (argType == BYTE_TYPE || argType == WORD_TYPE)
                     && argument->evaluateConstantExpr(value) && value == 0)
                 ;  // returning zero from a pointer function: fine
@@ -146,7 +148,7 @@ JumpStmt::checkSemantics(Functor &f)
                             funcRetTypeDesc->toString().c_str());
         }
         else if (funcRetType != VOID_TYPE)
-            errormsg("return without argument in a non-void function");
+            warnmsg("return without argument in a non-void function");
     }
 
     if (jumpType == GO_TO)
@@ -210,6 +212,19 @@ JumpStmt::emitCode(ASMText &out, bool lValue) const
                             out.ins("LDD", currentFunctionDef->getAddressOfReturnValue(), "address of return value");
                             callUtility(out, "copyDWordFromXToD");
                         }
+                        else if (argument->getTypeDesc()->isSingle())
+                        {
+                            // Emit the float as an l-value, so we get its address in X.
+                            if (!argument->emitCode(out, true))
+                                return false;
+                            out.ins("TFR", "X,D", "source float");
+
+                            // Get the address where to write the long.
+                            // It has been passed to the current function as a hidden 1st parameter.
+                            out.ins("LDX", currentFunctionDef->getAddressOfReturnValue(), "address of return value");
+
+                            callUtility(out, currentFunctionDef->getTypeDesc()->isSigned ? "initSignedDWordFromSingle" : "initUnsignedDWordFromSingle", "preserves X");
+                        }
                         else
                         {
                             assert(argument->getTypeDesc()->isByteOrWord());
@@ -226,16 +241,45 @@ JumpStmt::emitCode(ASMText &out, bool lValue) const
                     }
                     else if (currentFunctionDef->getTypeDesc()->isSingle())
                     {
-                        // Emit the struct/union as an l-value, so we get its address in X.
-                        if (!argument->emitCode(out, true))
-                            return false;
-                        out.ins("TFR", "X,D", "source float");
+                        if (argument->getTypeDesc()->isByteOrWord())
+                        {
+                            if (!argument->emitCode(out, false))  // get value in B or D
+                                return false;
+                            if (argument->getType() == BYTE_TYPE)
+                                out.ins(argument->getConvToWordIns());
 
-                        // Get the address where to write the struct/union.
-                        // It has been passed to the current function as a hidden 1st parameter.
-                        out.ins("LDX", currentFunctionDef->getAddressOfReturnValue(), "address of return value");
+                            // Get the address where to write the float.
+                            // It has been passed to the current function as a hidden 1st parameter.
+                            out.ins("LDX", currentFunctionDef->getAddressOfReturnValue(), "address of return value");
 
-                        callUtility(out, "copySingle");
+                            callUtility(out, argument->isSigned() ? "initSingleFromSignedWord" : "initSingleFromUnsignedWord", "preserves X");
+                        }
+                        else if (argument->getTypeDesc()->isLong())
+                        {
+                            // Emit the long as an l-value, so we get its address in X.
+                            if (!argument->emitCode(out, true))
+                                return false;
+                            out.ins("TFR", "X,D", "source dword");
+
+                            // Get the address where to write the float.
+                            // It has been passed to the current function as a hidden 1st parameter.
+                            out.ins("LDX", currentFunctionDef->getAddressOfReturnValue(), "address of return value");
+
+                            callUtility(out, argument->isSigned() ? "initSingleFromSignedDWord" : "initSingleFromUnsignedDWord", "preserves X");
+                        }
+                        else  // float to float:
+                        {
+                            // Emit the struct/union as an l-value, so we get its address in X.
+                            if (!argument->emitCode(out, true))
+                                return false;
+                            out.ins("TFR", "X,D", "source float");
+
+                            // Get the address where to write the struct/union.
+                            // It has been passed to the current function as a hidden 1st parameter.
+                            out.ins("LDX", currentFunctionDef->getAddressOfReturnValue(), "address of return value");
+
+                            callUtility(out, "copySingle");
+                        }
                     }
                     else if (currentFunctionDef->getType() == CLASS_TYPE)  // if returning struct/union
                     {
@@ -300,3 +344,4 @@ JumpStmt::iterate(Functor &f)
         return false;
     return true;
 }
+

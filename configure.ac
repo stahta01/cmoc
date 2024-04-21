@@ -1,8 +1,8 @@
-# $Id: configure.ac,v 1.166 2023/04/29 23:30:48 sarrazip Exp $
+# $Id: configure.ac,v 1.181 2024/03/11 00:14:35 sarrazip Exp $
 
 AC_PREREQ(2.54)
 
-AC_INIT(cmoc, 0.1.82)
+AC_INIT(cmoc, 0.1.86)
 AC_CONFIG_SRCDIR(src/lexer.ll)
 AM_INIT_AUTOMAKE
 
@@ -13,7 +13,7 @@ AC_SUBST(PACKAGE_FULL_NAME)
 AC_SUBST(PACKAGE_SUMMARY_EN)
 AC_SUBST(PACKAGE_SUMMARY_FR)
 
-MANUAL_DATE_EN="April 29th, 2023"; AC_SUBST(MANUAL_DATE_EN)
+MANUAL_DATE_EN="March 10th, 2024"; AC_SUBST(MANUAL_DATE_EN)
 
 dnl  Adds an --enable-debug option to configure.
 dnl  Must be invoked before AC_PROG_CXX.
@@ -32,6 +32,27 @@ dnl
 AX_CXX_COMPILE_STDCXX([11], [ext], [mandatory])
 
 AC_COMPILE_WARNINGS
+
+# Try to add option -Wsuggest-override to get a warning when an overriding virtual function
+# is missing the override keyword.
+# If the option is supported, $(W_SUGGEST_OVERRIDE) can be used in a *_CXXFLAGS variable
+# of a Makefile.am file.
+#
+AC_MSG_CHECKING([if C++ compiler supports -Wsuggest-override])
+saved_CXXFLAGS="$CXXFLAGS"
+CXXFLAGS="-Wsuggest-override"
+AC_COMPILE_IFELSE(
+        [int main() { return 0; }],
+        [
+            AC_MSG_RESULT(yes)
+            W_SUGGEST_OVERRIDE=-Wsuggest-override
+            AC_SUBST(W_SUGGEST_OVERRIDE)
+        ],
+        [
+            AC_MSG_RESULT(no)
+        ])
+CXXFLAGS="$saved_CXXFLAGS"
+
 
 AC_CHECK_PROG(GREP, grep, grep)
 AC_CHECK_PROG(EGREP, egrep, egrep)

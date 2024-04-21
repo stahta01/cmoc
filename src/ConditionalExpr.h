@@ -1,4 +1,4 @@
-/*  $Id: ConditionalExpr.h,v 1.8 2020/07/31 13:18:17 sarrazip Exp $
+/*  $Id: ConditionalExpr.h,v 1.9 2023/08/27 01:41:03 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -37,16 +37,16 @@ public:
     //
     virtual ~ConditionalExpr();
 
-    virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
+    virtual CodeStatus emitCode(ASMText &out, bool lValue) const override;
     
-    virtual bool iterate(Functor &f);
+    virtual bool iterate(Functor &f) override;
 
-    virtual void replaceChild(Tree *existingChild, Tree *newChild);
+    virtual void replaceChild(Tree *existingChild, Tree *newChild) override;
 
     const Tree *getTrueExpression() const;
     const Tree *getFalseExpression() const;
 
-    virtual bool isLValue() const { return trueExpr->isLValue() && falseExpr->isLValue(); }
+    virtual bool isLValue() const override { return trueExpr->isLValue() && falseExpr->isLValue(); }
 
 private:
 

@@ -19,12 +19,11 @@ unpackXtoFPA1AndPrep    IMPORT
 ;
 subSingleSingle
 	pshs	u,y,x
-	leau	unpackXToFPA1AndDiv,PCR
+	leau	@unpackXToFPA1AndSub,PCR
 	lbsr	binOpSingleSingle
 	puls	x,y,u,pc
-
-
-unpackXToFPA1AndDiv
+;
+@unpackXToFPA1AndSub
 	lbsr	unpackXtoFPA1AndPrep
 	flt_subFPA0FromFPA1
 	rts

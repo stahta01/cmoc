@@ -1,9 +1,25 @@
 #include <cmoc.h>
 
 
-int
+asm int
 isspace(int c)
 {
-    return c == ' ' || c == '\t' || c == '\r' || c == '\n';  // \f and \v left off...
+    asm
+    {
+        ldd     2,s         ; argument 'c'
+        cmpd    #9
+        blo     @notSpace
+        cmpd    #13
+        bls     @space
+        cmpd    #32
+        beq     @space
+@notSpace
+        clrb
+        clra
+        rts
+@space
+        ldb     #1
+@return
+        clra
+    }
 }
-

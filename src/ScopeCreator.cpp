@@ -1,4 +1,4 @@
-/*  $Id: ScopeCreator.cpp,v 1.22 2022/07/13 03:27:19 sarrazip Exp $
+/*  $Id: ScopeCreator.cpp,v 1.25 2023/12/30 07:05:36 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -96,23 +96,43 @@ ScopeCreator::privateOpen(Tree *t)
     DeclarationSequence *declSeq = dynamic_cast<DeclarationSequence *>(t);
     if (declSeq != NULL)
     {
-        for (std::vector<Tree *>::iterator it = declSeq->begin(); it != declSeq->end(); ++it)
+        bool warnOnShadow = translationUnit.warnOnShadowingLocalVariable();
+        for (Tree *tree : *declSeq)
         {
-            if (Declaration *decl = dynamic_cast<Declaration *>(*it))
+            if (Declaration *decl = dynamic_cast<Declaration *>(tree))
             {
-                /*cout << "# ScopeCreator::privateOpen(" << t << "): Declaration: " << decl->getVariableId()
+                const string declId = decl->getVariableId();
+                /*cout << "# ScopeCreator::privateOpen(" << t << "): Declaration: " << declId
                         << " at line " << decl->getLineNo()
                         << ", cs=" << cs << "\n";*/
                 if (!cs->declareVariable(decl))
                 {
-                    const Declaration *existingDecl = cs->getVariableDeclaration(decl->getVariableId(), false);
+                    const Declaration *existingDecl = cs->getVariableDeclaration(declId, false);
                     assert(existingDecl);
                     decl->errormsg("variable `%s' already declared in this scope at %s",
-                                   decl->getVariableId().c_str(), existingDecl->getLineNo().c_str());
+                                   declId.c_str(), existingDecl->getLineNo().c_str());
+                }
+                else if (warnOnShadow)  // check if variable with same name declared in parent scope other than global one
+                {
+                    for (Scope *parent = cs->getParent(); parent != NULL; parent = parent->getParent())
+                    {
+                        const Declaration *outerDecl = NULL;
+                        if (parent->getParent() != NULL && (outerDecl = parent->getVariableDeclaration(declId, false)) != NULL)
+                            decl->warnmsg("declaration of `%s' shadows local variable of same name declared at %s",
+                                        declId.c_str(),
+                                        outerDecl->getLineNo().c_str());
+                    }
                 }
             }
+            else if (FunctionDef *fd = dynamic_cast<FunctionDef *>(tree))
+            {
+                if (fd->getBody())
+                    tree->errormsg("local functions not supported");
+                else
+                    TranslationUnit::instance().registerFunction(fd);  // register prototype that is local to a function
+            }
             else
-                (*it)->errormsg("invalid declaration");
+                tree->errormsg("invalid declaration");
         }
         return true;
     }
@@ -211,6 +231,9 @@ ScopeCreator::processIdentifierExpr(IdentifierExpr &ie)
         ie.setTypeDesc(translationUnit.getTypeManager().getArrayOfChar());
         return;
     }
+
+    if (ie.isNameInAFunctionCall())  // if foo(...) where foo() not declared: tolerate K&R usage
+        return;
 
     ie.errormsg("undeclared identifier `%s'", id.c_str());
 }

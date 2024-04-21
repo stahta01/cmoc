@@ -1,4 +1,4 @@
-/*  $Id: CommaExpr.h,v 1.1 2017/12/02 02:45:36 sarrazip Exp $
+/*  $Id: CommaExpr.h,v 1.2 2023/08/27 01:41:03 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2017 Pierre Sarrazin <http://sarrazip.com/>
@@ -33,7 +33,7 @@ public:
 
     virtual ~CommaExpr();
 
-    virtual bool isLValue() const;
+    virtual bool isLValue() const override;
 
 };
 

@@ -1,7 +1,7 @@
-/*  $Id: ExpressionTypeSetter.cpp,v 1.76 2021/04/18 03:54:36 sarrazip Exp $
+/*  $Id: ExpressionTypeSetter.cpp,v 1.81 2024/02/12 02:48:32 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2024 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -31,6 +31,7 @@
 #include "IdentifierExpr.h"
 #include "CommaExpr.h"
 #include "Declaration.h"
+#include "FunctionDef.h"
 
 using namespace std;
 
@@ -42,6 +43,37 @@ ExpressionTypeSetter::ExpressionTypeSetter()
 
 ExpressionTypeSetter::~ExpressionTypeSetter()
 {
+}
+
+
+void
+ExpressionTypeSetter::checkForByteOperandsGivingByte(BinaryOpExpr *bin)
+{
+    if (!TranslationUnit::instance().warnOnBinaryOpGivingByte())
+        return;
+    switch (bin->getOperator())
+    {
+        case BinaryOpExpr::ADD:
+        case BinaryOpExpr::SUB:
+        case BinaryOpExpr::MUL:
+        case BinaryOpExpr::DIV:
+        case BinaryOpExpr::MOD:
+        {
+            if (   dynamic_cast<CastExpr *>(bin->getLeft())  != NULL
+                || dynamic_cast<CastExpr *>(bin->getRight()) != NULL)
+                break;  // no warning if one of the operands has a cast
+
+            if (bin->getType() == BYTE_TYPE && bin->getLeft()->getType()  == BYTE_TYPE
+                                            && bin->getRight()->getType() == BYTE_TYPE)
+            {
+                bin->warnmsg("operator `%s' on two byte-sized arguments gives byte under CMOC, unlike under Standard C",
+                            bin->getOperatorName());
+            }
+            break;
+        }
+        default:
+            ;
+    }
 }
 
 
@@ -70,7 +102,10 @@ ExpressionTypeSetter::close(Tree *t)
                          bin->getLeft()->getTypeDesc()->toString().c_str(),
                          bin->getRight()->getTypeDesc()->toString().c_str());
         }
-        return processBinOp(bin);
+        if (!processBinOp(bin))
+            return false;
+        checkForByteOperandsGivingByte(bin);
+        return true;
     }
 
     UnaryOpExpr *un = dynamic_cast<UnaryOpExpr *>(t);
@@ -168,7 +203,16 @@ ExpressionTypeSetter::close(Tree *t)
             return true;  // error message issued
 
         assert(mi->getTypeDesc()->type != VOID_TYPE);
-        om->setTypeDesc(mi->getTypeDesc());
+        const TypeDesc *td = mi->getTypeDesc();
+
+        // Make the type 'const' in some situations.
+        if (   ( om->isDirect() && subExpr->getTypeDesc()->isConstAtFirstLevel())  // if 'const Object obj' and 'om' is 'obj.member'
+            || (!om->isDirect() && subExpr->getTypeDesc()->isPointerToOrArrayOfConst()))  // if ptr to object is 'const' type, e.g., p->x where p is const Complex *
+        {
+            td = TranslationUnit::getTypeManager().getConst(td);
+        }
+        om->setTypeDesc(td);
+
         return true;
     }
 
@@ -212,6 +256,7 @@ ExpressionTypeSetter::close(Tree *t)
                 t->setTypeDesc(td);
 
         }
+        return true;
     }
 
     // Comma expression (e.g., "x = 1, y = 2;").
@@ -227,6 +272,7 @@ ExpressionTypeSetter::close(Tree *t)
             else
                 t->setTypeDesc(subExprTD);
         }
+        return true;
     }
 
     return true;
@@ -494,9 +540,11 @@ ExpressionTypeSetter::processBinOp(BinaryOpExpr *bin)
                     else
                         right->warnmsg("assigning non-pointer/array (%s) to `%s'", rightTD->toString().c_str(), leftTD->toString().c_str());
                     break;
-                case FunctionCallExpr::WARN_PASSING_CONSTANT_FOR_PTR:
-                    if (TranslationUnit::instance().isWarningOnPassingConstForFuncPtr())  // if -Wpass-const-for-func-pointer
-                        right->warnmsg("assigning non-zero numeric constant to `%s'", leftTD->toString().c_str());
+                case FunctionCallExpr::WARN_PASSING_CHAR_CONSTANT_FOR_PTR:
+                    right->warnmsg("assigning character constant to `%s'", leftTD->toString().c_str());
+                    break;
+                case FunctionCallExpr::WARN_PASSING_NON_ZERO_CONSTANT_FOR_PTR:
+                    right->warnmsg("assigning non-zero numeric constant to `%s'", leftTD->toString().c_str());
                     break;
                 case FunctionCallExpr::WARN_ARGUMENT_TOO_LARGE:
                     right->warnmsg("assigning to `%s' from larger type `%s'", leftTD->toString().c_str(), rightTD->toString().c_str());

@@ -1,4 +1,4 @@
-/*  $Id: DWordConstantExpr.h,v 1.3 2022/04/18 04:54:37 sarrazip Exp $
+/*  $Id: DWordConstantExpr.h,v 1.4 2023/08/27 01:41:03 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2017 Pierre Sarrazin <http://sarrazip.com/>
@@ -53,11 +53,11 @@ public:
     //
     static void emitDWordConstantDefinition(ASMText &out, const std::vector<uint8_t> &representation);
 
-    virtual void checkSemantics(Functor &f);
+    virtual void checkSemantics(Functor &f) override;
 
-    virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
+    virtual CodeStatus emitCode(ASMText &out, bool lValue) const override;
 
-    virtual bool isLValue() const { return false; }
+    virtual bool isLValue() const override { return false; }
 
 private:
 

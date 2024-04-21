@@ -3,12 +3,17 @@
 ; In an LWASM macro, as of LWTOOLS 4.18, a label must be followed by 'equ *';
 ; it cannot be alone on its line.
 
+        IFDEF OS9                       ;;OS9 (lines with ";;OS9" are not copied to float-os9.inc)
+        INCLUDE float-os9.inc           ;;OS9
+        ELSE                            ;;OS9
+
 
 ; Section that implements a common programming interface using
 ; Extended Color Basic's floating-point routines.
 ;
         IFDEF _CMOC_MS_FLOAT_
 
+EXPBIAS EQU     128             ; bias applied to a stored exponent
 
 FP0ADDR	EQU	$004F
 FP1ADDR	EQU	$005C
@@ -44,9 +49,6 @@ LBB91                   EQU     $BB91
 LBC96                   EQU     $BC96
 LBDE6                   EQU     $BDE6           ; original label
 
-; Location of 5 bytes that represent -32768.0 in the packed float format.
-;
-packedMinus32768        EQU     $B3DF
 
 ; Routine that converts an ASCII decimal string at X into FPA0.
 ; The character at X must be in A. The carry must be set iff A is a numeric character.
@@ -71,7 +73,6 @@ LBB91                   EQU     $933C
 LBC96                   EQU     $9441
 LBDE6                   EQU     $9594
 
-packedMinus32768        EQU     $8B1C
 convertStrToFlt         EQU     $94BD
 
         ENDC
@@ -80,17 +81,21 @@ convertStrToFlt         EQU     $94BD
 ; Interface to a set of floating-point routines.
 ; Based on Extended Color Basic.
 
-; May trash FPA1.
+; May trash D, X, FPA1.
 ;
 flt_loadSignedDIntoFPA0 MACRO
         jsr     GIVABF
         ENDM
 
-; Preserves X.
+
+; Preserves X and U.
 ;
 flt_unpackFromXToFPA0 MACRO
+        pshs    x
         jsr     LBC14
+        puls    x
         ENDM
+
 
 ; Trashes A, U. Preserves X.
 ;
@@ -98,34 +103,47 @@ flt_packFPA0ToX MACRO
         jsr     LBC35
         ENDM
 
+
 flt_unpackFromXToFPA1 MACRO
         jsr     LBB2F
         ENDM
 
+
 ; Adds the packed float at X to FPA0, leaves the sum in FPA0.
 ; Trashes X and FPA1.
+; Preserves U.
 ;
 flt_addNumberAtXToFPA0 MACRO
         jsr     LB9C2
         ENDM
 
-; Input: Exponent of FPA0 in B and exponent of FPA1 in A. TODO: stop requiring this; move the lda/ldb here.
+
+; FPA0 = FPA1 + FPA0
+; Input: FPA0, FPA1.
+; Output: Result in FPA0.
+; Allowed to trash FPA1.
 ;
 flt_addFPA1ToFPA0 MACRO
+	lda     FP1EXP		; load exponent of FPA1
+	ldb     FP0EXP		; load exponent of FPA0, set N and Z
         jsr     LB9C5
         ENDM
 
+
 ; FPA0 = FPA1 - FPA0
-; Input: FPA0, FPA1, exponent of FPA0 in B, exponent of FPA1 in A.
+; Input: FPA0, FPA1.
 ; Output: Result in FPA0.
 ; Allowed to trash FPA1.
 ;
 flt_subFPA0FromFPA1 MACRO
+        lda     FP1EXP
+        ldb     FP0EXP          ; sets N and Z
         jsr     LB9BC
         ENDM
 
+
 ; Input: C is 1 if the value in FPA0 is non-negative.
-; If C is 1, the sign is inverted and the mantissa is negated (as per 32-bit two's complement)
+; If C is 0, the sign is inverted and the mantissa is negated (as per 32-bit two's complement)
 ; before the normalization is done.
 ; Branches to the Color Basic OV ERROR routine upon overflow.
 ; Trashes D, X.
@@ -134,39 +152,45 @@ flt_normalizeFPA0 MACRO
         jsr     LBA18
         ENDM
 
+
 ; FPA0 *= FPA1.
-; Input: Z is 1 if the exponent of FPA0 is zero.
-;        A is the exponent of FPA1.
 ;
 flt_mulFPA0ByFPA1 MACRO
+        lda     FP1EXP
+        ldb     FP0EXP          ; sets N and Z
         jsr     CmdMultiply
         ENDM
 
+
 ; Input: FPA0 = divisor, FPA1 = dividend.
-;        Z is 1 if FPA0 exponent is zero.
 ; Output: FPA0 = quotient.
 ; Allowed to trash FPA1.
 ;
 flt_divFPA1ByFPA0 MACRO
+        lda     FP1EXP
+        ldb     FP0EXP          ; sets N and Z
         jsr     LBB91
         ENDM
 
+
 ; Compares FPA0 to packed number at X.
-; Puts -1, 0 or +1 in B, sets CC.
+; Puts 0 in B if equals, +1 in B if FPA0 > *X, -1 in B if FPA0 < *X.
+; Sets N and Z according to B. Sets V to 0.
 ; Trashes A. Allowed to trash X.
 ;
 flt_compareFPA0ToX MACRO
         jsr     LBC96
         ENDM
 
-; Does not precede the string with a space if 'f' is positive or zero.
+
+; Does not precede the string with a space if FPA0 is positive or zero.
 ; Input: FPA0 contains the number to be converted.
 ;        U => ASCII buffer to write to.
 ; Trashes: A, B, X, FPA0.
 ; Based on Color Basic code at $BDDC.
 ;
 flt_convertFPA0ToASCII MACRO
-	tst	FP0SGN		; get sign of 'f'
+	tst	FP0SGN		; get sign of FPA0
 	bpl	@positive
 	lda	#'-'
 	sta	,u+		; output minus sign
@@ -177,17 +201,20 @@ flt_convertFPA0ToASCII MACRO
 	jsr	LBDE6		; let Basic do rest of conversion
         ENDM
 
+
 ; Set value type to numeric -- only applicable under Color Basic.
 ;
 flt_clrVALTYP MACRO
         clr     VALTYP
         ENDM
 
+
 ; Clear sub byte -- only applicable under Color Basic.
 ;
 flt_clrFPSBYT MACRO
 	clr	FPSBYT
         ENDM
+
 
 ; Compute sign of result from FP0SGN and FP1SGN -- only applicable under Color Basic.
 ; Trashes B.
@@ -196,6 +223,69 @@ flt_computeResultSign MACRO
 	ldb     FP0SGN
 	eorb    FP1SGN
 	stb     RESSGN
+        ENDM
+
+
+; Copy accumulator 0 to accumulator 1.
+;
+flt_copyFPA0ToFPA1 MACRO
+	ldd	FP0ADDR
+	std	FP1ADDR
+	ldd	FP0ADDR+2
+	std	FP1ADDR+2
+	ldd	FP0ADDR+4
+	std	FP1ADDR+4
+        ENDM
+
+
+; Only changes A.
+; Output: A is the biased exponent of FPA0, and Z reflects this byte value.
+;
+flt_loadAFromFPA0BiasedExp MACRO
+        lda     FP0EXP
+        ENDM
+
+
+; Does not change B. Affects CC.
+;
+flt_storeBInFPA0BiasedExp MACRO
+	stb	FP0EXP
+        ENDM
+
+
+; Does not change any data registers.
+; Resulting CC is not significant.
+;
+flt_clearFPA0Sign MACRO
+	clr	FP0SGN
+        ENDM
+
+
+; Does not change any data registers.
+; Resulting CC is not significant.
+;
+flt_invertFPA0Sign MACRO
+	com	FP0SGN
+        ENDM
+
+
+; Does not change any data registers.
+; Affects N.
+; 
+flt_testFPA0Sign MACRO
+	tst	FP0SGN
+        ENDM
+
+
+flt_invertFPA1Sign MACRO
+	com	FP1SGN
+        ENDM
+
+
+; Resulting CC is not significant.
+; 
+flt_loadBFromTopFPA0MantissaByte MACRO
+        ldb     FP0MAN
         ENDM
 
 
@@ -215,6 +305,7 @@ flt_computeResultSign MACRO
 ;
         IFDEF _CMOC_NATIVE_FLOAT_
 
+EXPBIAS EQU     128             ; bias applied to a stored exponent
 
 ; Unpacked float point accumulators.
 ;
@@ -354,7 +445,6 @@ flt_mulFPA0ByFPA1 MACRO
 ; FPA0 = FPA1 / FPA0.
 ;
 flt_divFPA1ByFPA0 MACRO
-        beq     @divByZero              ; undefined behavior
 ; Call floatable_divUFloat40(UFloat40 *dividend, const UFloat40 *divisor).
         leax    FP0ADDR,pcr
         pshs    x                       ; pass address of FPA0 for 'divisor'
@@ -369,7 +459,6 @@ flt_divFPA1ByFPA0 MACRO
         std     FP0ADDR+2,pcr
         ldd     FP1ADDR+4,pcr
         std     FP0ADDR+4,pcr
-@divByZero equ *
         ENDM
 
 flt_compareFPA0ToX MACRO
@@ -415,4 +504,244 @@ flt_computeResultSign MACRO
         ENDM
 
 
+flt_copyFPA0ToFPA1 MACRO
+	ldd	FP0ADDR,pcr
+	std	FP1ADDR,pcr
+	ldd	FP0ADDR+2,pcr
+	std	FP1ADDR+2,pcr
+	ldd	FP0ADDR+4,pcr
+	std	FP1ADDR+4,pcr
+        ENDM
+
+
+flt_loadAFromFPA0BiasedExp MACRO
+        lda     FP0EXP,pcr
+        ENDM
+
+
+flt_storeBInFPA0BiasedExp MACRO
+	stb	FP0EXP,pcr
+        ENDM
+
+
+flt_clearFPA0Sign MACRO
+	clr	FP0SGN,pcr
+        ENDM
+
+
+flt_invertFPA0Sign MACRO
+	com	FP0SGN,pcr
+        ENDM
+
+
+flt_testFPA0Sign MACRO
+	tst	FP0SGN,pcr
+        ENDM
+
+
+flt_invertFPA1Sign MACRO
+	com	FP1SGN,pcr
+        ENDM
+
+
+flt_loadBFromTopFPA0MantissaByte MACRO
+        ldb     FP0MAN,pcr
+        ENDM
+
+
         ENDC    ; _CMOC_NATIVE_FLOAT_
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+; Section that implements a common programming interface using
+; the Motorola MC6839 floating point ROM.
+;
+; CAUTION: See the _CMOC_MS_FLOAT_ section above for the expected behavior of each macro.
+;
+; These routines are not re-entrant, namely because FPA0 and FPA1
+; are global variables.
+;
+; See "MC6839 Floating-point ROM Datasheet.pdf", page 4 ("Floating Point Formats").
+;
+        IFDEF _CMOC_MC6839_
+
+; MC6839 floating point control block.
+fpcb            STRUCT
+control                 rmb 1
+trap_enable             rmb 1
+status                  rmb 1
+secondary_status        rmb 1
+trap_routine            rmb 2
+                ENDSTRUCT
+
+EXPBIAS         EQU     127             ; bias applied to a stored exponent
+MC6839_ROM      IMPORT                  ; address where the MC6839 ROM is loaded
+FPREG           EQU     MC6839_ROM+$3D  ; MC6839 entry point for register-accepting routines
+FPCB_SINGLE     IMPORT                  ; type descriptor for single-precision (40-bit) floats (see fpcb struct above)
+
+; MC6839 operation codes.
+FADD            EQU     $00
+FSUB            EQU     $02
+FMUL            EQU     $04
+FDIV            EQU     $06
+FREM            EQU     $08
+FSQRT           EQU     $12
+FINT            EQU     $14
+FFIXS           EQU     $16
+FFIXD           EQU     $18
+FAB             EQU     $1E
+FNEG            EQU     $20
+FFLTS           EQU     $24
+FFLTD           EQU     $26
+FCMP            EQU     $8A
+FTCMP           EQU     $CC
+FPCMP           EQU     $8E
+FTPCMP          EQU     $D0
+FMOV            EQU     $9A
+BINDEC          EQU     $1C
+DECBIN          EQU     $22
+
+; Unpacked float point accumulators.
+;
+FP0ADDR         IMPORT
+FP1ADDR         IMPORT
+
+
+flt_loadSignedDIntoFPA0 MACRO
+initSingleFromSignedWord IMPORT
+        leax    FP0ADDR,pcr
+        lbsr    initSingleFromSignedWord
+        ENDM
+
+flt_unpackFromXToFPA0 MACRO
+        ldd     ,x
+        std     FP0ADDR,pcr
+        ldd     2,x
+        std     FP0ADDR+2,pcr
+        ENDM
+
+flt_packFPA0ToX MACRO
+        ldd     FP0ADDR,pcr
+        std     ,x
+        ldd     FP0ADDR+2,pcr
+        std     2,x
+        ENDM
+
+flt_unpackFromXToFPA1 MACRO
+        ldd     ,x
+        std     FP1ADDR,pcr
+        ldd     2,x
+        std     FP1ADDR+2,pcr
+        ENDM
+
+flt_addNumberAtXToFPA0 MACRO
+addNumberAtXToFPA0 IMPORT
+        lbsr    addNumberAtXToFPA0
+        ENDM
+
+flt_addFPA1ToFPA0 MACRO
+addFPA1ToFPA0 IMPORT
+        lbsr    addFPA1ToFPA0
+        ENDM
+
+flt_subFPA0FromFPA1 MACRO
+subFPA0FromFPA1 IMPORT
+        lbsr    subFPA0FromFPA1
+        ENDM
+
+flt_mulFPA0ByFPA1 MACRO
+mulFPA0ByFPA1 IMPORT
+        lbsr    mulFPA0ByFPA1
+        ENDM
+
+flt_divFPA1ByFPA0 MACRO
+divFPA1ByFPA0 IMPORT
+        lbsr    divFPA1ByFPA0
+        ENDM
+
+flt_compareFPA0ToX MACRO
+compareFPA0ToX IMPORT
+        lbsr    compareFPA0ToX
+        ENDM
+
+_ftoa                   IMPORT
+push4ByteStruct         IMPORT
+
+flt_convertFPA0ToASCII MACRO
+; Call ftoa(char out[], float f) in float/mc6839-ftoa.c.
+        leax    FP0ADDR,pcr             ; pass address of FPA0 as 'f' parameter
+        leas    -4,s
+        lbsr    push4ByteStruct         ; push float pointed to by X
+        pshs    u                       ; pass output buffer address as 'dest' parameter
+        lbsr    _ftoa                   ; preserves U
+        leas    2+4,s                   ; pop parameters
+        ENDM
+
+
+; Nothing to do when not under Color Basic.
+; B should be considered trashed.
+;
+flt_computeResultSign MACRO
+        ENDM
+
+
+; Copy 32 bits.
+;
+flt_copyFPA0ToFPA1 MACRO
+	ldd	FP0ADDR,pcr
+	std	FP1ADDR,pcr
+	ldd	FP0ADDR+2,pcr
+	std	FP1ADDR+2,pcr
+        ENDM
+
+
+flt_loadAFromFPA0BiasedExp MACRO
+loadAFromFPA0BiasedExp IMPORT
+        lbsr    loadAFromFPA0BiasedExp
+        ENDM
+
+
+flt_storeBInFPA0BiasedExp MACRO
+storeBInFPA0BiasedExp IMPORT
+        lbsr    storeBInFPA0BiasedExp
+        ENDM
+
+
+flt_clearFPA0Sign MACRO
+        pshs    a
+        lda     FP0ADDR,pcr
+        anda    #$7F
+        sta     FP0ADDR,pcr
+        puls    a
+        ENDM
+
+
+flt_invertFPA0Sign MACRO
+        pshs    a
+        lda     FP0ADDR,pcr
+        eora    #$80
+        sta     FP0ADDR,pcr
+        puls    a
+        ENDM
+
+
+flt_testFPA0Sign MACRO
+        tst     FP0ADDR,pcr
+        ENDM
+
+
+flt_invertFPA1Sign MACRO
+        pshs    a
+        lda     FP1ADDR,pcr
+        eora    #$80
+        sta     FP1ADDR,pcr
+        puls    a
+        ENDM
+
+
+        ENDC    ; _CMOC_MC6839_
+
+
+        ENDC    ;;OS9

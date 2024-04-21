@@ -1,4 +1,4 @@
-/*  $Id: IdentifierExpr.cpp,v 1.10 2022/06/09 03:23:42 sarrazip Exp $
+/*  $Id: IdentifierExpr.cpp,v 1.11 2023/08/19 01:37:33 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -31,7 +31,8 @@ IdentifierExpr::IdentifierExpr(const char *id)
   : Tree(),
     identifier(id),
     variableExpr(NULL),
-    functionNameStringLiteral(NULL)
+    functionNameStringLiteral(NULL),
+    _isNameInAFunctionCall(false)
 {
 }
 
@@ -106,6 +107,20 @@ bool
 IdentifierExpr::isEnumeratorName() const
 {
     return !variableExpr && !functionNameStringLiteral;
+}
+
+
+void
+IdentifierExpr::makeNameInAFunctionCall(bool isNameInAFunctionCall)
+{
+    _isNameInAFunctionCall = isNameInAFunctionCall;
+}
+
+
+bool
+IdentifierExpr::isNameInAFunctionCall() const
+{
+    return _isNameInAFunctionCall;
 }
 
 

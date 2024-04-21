@@ -1,4 +1,4 @@
-# $Id: Makefile.am,v 1.78 2023/04/09 01:06:29 sarrazip Exp $
+# $Id: Makefile.am,v 1.88 2024/02/26 03:39:11 sarrazip Exp $
 
 # N.B.: CMOC must already have been compiled before this directory can be processed.
 
@@ -14,6 +14,7 @@ LWASMFLAGS =
 cmocincdir = $(pkgdatadir)/include
 cmocinc_HEADERS = \
 	assert.h \
+	assert-impl.h \
 	cmoc.h \
 	coco.h \
 	disk.h \
@@ -95,7 +96,6 @@ CRT_ASM = \
 	initByteFromDWord.asm \
 	initDWordFromSignedWord.asm \
 	initDWordFromUnsignedWord.asm \
-	initSingleFromSingle.asm \
 	initWordFromDWord.asm \
 	isDWordZero.asm \
 	jumpTableSwitch.asm \
@@ -185,6 +185,7 @@ STD_ASM = \
 	chrtomem.asm \
 	strcat.asm \
 	strchr.asm \
+	strrchr.asm \
 	strstr.asm \
 	strcmp.asm \
 	stricmp.asm \
@@ -206,13 +207,17 @@ C_COMMON = \
 	atol.c \
 	atoul.c \
 	strtol.c \
+	strspn.c \
+	strcspn.c \
+	strtok.c \
+	strpbrk.c \
 	utoa.c \
 	itoa.c \
 	ultoa.c \
 	ltoa.c \
 	_FinishIntegerToASCII.c \
 	stdarg.c \
-        setjmp.c \
+	setjmp.c \
 	sqrt16.c \
 	sqrt32.c \
 	divmod16.c \
@@ -228,7 +233,8 @@ C_COMMON = \
 	isspace.c \
 	isdigit.c \
 	isalpha.c \
-	isalnum.c
+	isalnum.c \
+	assert.c
 
 # Also part of 'std' library, but only under Color Basic and Dragon:
 #
@@ -265,19 +271,7 @@ C_COCO_OR_DRAGON_BASIC = \
 	sleep.c \
 	sound.c \
 	waitkey.c \
-	width.c \
-    applyRealFunction.c \
-	sinf.c \
-	cosf.c \
-	tanf.c \
-	atanf.c \
-	logf.c \
-	expf.c \
-	sqrtf.c \
-	fabsf.c \
-	floorf.c \
-	truncf.c \
-	roundf.c
+	width.c
 
 # Also part of 'std' library, but only under Color Basic:
 #
@@ -286,9 +280,19 @@ C_COCO_BASIC = \
 	readDECBFile.c \
 	dskcon-standalone.c
 
+# Also part of 'std' library, but only for OS-9:
+#
+C_OS9 = \
+    os9-sbrk.c \
+    os9-sbrkmax.c \
+    os9-sbrk-util.c
+
+H_OS9 = os9-sbrk-util.h
+
 # Also part of 'std' library, but only for the Vectrex:
 #
 C_VECTREX = vectrex_bios.c
+
 
 CRT_ECB_OBJ  = $(CRT_ASM:.asm=.ecb_o)
 CRT_USIM_OBJ = $(CRT_ASM:.asm=.usim_o)
@@ -321,7 +325,7 @@ libcmoc-crt-tht.a: $(CRT_THT_OBJ)
 
 STD_ECB_OBJ  = $(STD_ASM:.asm=.ecb_o)  $(C_COMMON:.c=.ecb_o) $(C_COCO_OR_DRAGON_BASIC:.c=.ecb_o) $(C_COCO_BASIC:.c=.ecb_o)
 STD_USIM_OBJ = $(STD_ASM:.asm=.usim_o) $(C_COMMON:.c=.usim_o)
-STD_OS9_OBJ  = $(STD_ASM:.asm=.os9_o)  $(C_COMMON:.c=.os9_o)
+STD_OS9_OBJ  = $(STD_ASM:.asm=.os9_o)  $(C_COMMON:.c=.os9_o) $(C_OS9:.c=.os9_o)
 STD_FLEX_OBJ  = $(STD_ASM:.asm=.flex_o)  $(C_COMMON:.c=.flex_o)
 STD_VECTREX_OBJ = $(STD_ASM:.asm=.vec_o) $(C_COMMON:.c=.vec_o) $(C_VECTREX:.c=.vec_o)
 STD_DRAGON_OBJ  = $(STD_ASM:.asm=.dgn_o)  $(C_COMMON:.c=.dgn_o) $(C_COCO_OR_DRAGON_BASIC:.c=.dgn_o)
@@ -401,7 +405,7 @@ check:
 	$(PERL) -e 'while (<>) { if (/\xA0/) { print "Non-breakable space at $$ARGV:$$.\n"; exit 1 } } continue { close ARGV if eof }' \
 		$(cmocinc_HEADERS) $(vectrexinc_HEADERS) \
 		$(CRT_ASM) $(STD_ASM) \
-		$(C_COMMON) $(C_COCO_OR_DRAGON_BASIC) $(C_COCO_BASIC) $(C_VECTREX) \
+		$(C_COMMON) $(C_COCO_OR_DRAGON_BASIC) $(C_COCO_BASIC) $(H_OS9) $(C_OS9) $(C_VECTREX) \
 		Makefile.am
 
 CLEANFILES = $(cmoclib_DATA) \
@@ -411,4 +415,4 @@ CLEANFILES = $(cmoclib_DATA) \
         $(STD_THM_OBJ) $(STD_THT_OBJ)
 
 EXTRA_DIST = std.inc os9fixup.pl $(CRT_ASM) $(STD_ASM) \
-		$(C_COMMON) $(C_COCO_OR_DRAGON_BASIC) $(C_COCO_BASIC) $(C_VECTREX)
+		$(C_COMMON) $(C_COCO_OR_DRAGON_BASIC) $(C_COCO_BASIC) $(H_OS9) $(C_OS9) $(C_VECTREX)

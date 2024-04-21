@@ -1,4 +1,4 @@
-/*  $Id: Tree.h,v 1.37 2023/03/23 03:16:24 sarrazip Exp $
+/*  $Id: Tree.h,v 1.45 2024/02/25 19:58:21 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
@@ -83,8 +83,7 @@ public:
     bool isDouble() const { assert(typeDesc); return typeDesc->isDouble(); }
     bool isLong() const { assert(typeDesc); return typeDesc->isLong(); }
     bool isRealOrLong() const { assert(typeDesc); return isReal() || isLong(); }
-    bool isConst() const { assert(typeDesc); return typeDesc->isConstant(); }
-    bool isPtrToOrArrayOfConst() const { assert(typeDesc); return typeDesc->isPtrOrArray() && typeDesc->getPointedTypeDesc()->isConstant(); }
+    bool isPtrOrArray() const { assert(typeDesc); return typeDesc->isPtrOrArray(); }
     const char *getConvToWordIns() const { return typeDesc->getConvToWordIns(); }
     const char *getLoadIns() const  { return getType() == BYTE_TYPE ? "LDB" : "LDD"; }
     const char *getStoreIns() const { return getType() == BYTE_TYPE ? "STB" : "STD"; }
@@ -111,6 +110,10 @@ public:
     // True if this tree is a long literal, a real literal, or if evaluateConstantExpr() succeeds.
     //
     bool isNumericalLiteral() const;
+
+    bool isNumericalLiteralCastToOtherType() const;
+
+    bool isStringLiteralCastToPtrToAnyChar() const;
 
     // Returns true iff this tree is a constant according to evaluateConstantExpr()
     // and this constant fits in a byte (even is the tree's type is not BYTE_TYPE).

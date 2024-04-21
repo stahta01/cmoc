@@ -1,4 +1,4 @@
-/*  $Id: RealConstantExpr.cpp,v 1.20 2022/08/19 01:23:06 sarrazip Exp $
+/*  $Id: RealConstantExpr.cpp,v 1.22 2024/01/27 18:27:11 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
@@ -74,6 +74,8 @@ RealConstantExpr::isDoublePrecision() const
 // running this compiler.
 // Source: https://en.wikipedia.org/wiki/Double-precision_floating-point_format
 //
+// mantissa: Receives a 52-bit number.
+//
 static void
 getDoublePrecisionBits(double value, bool &isNegative, int16_t &exponent, uint64_t &mantissa)
 {
@@ -87,6 +89,8 @@ getDoublePrecisionBits(double value, bool &isNegative, int16_t &exponent, uint64
     mantissa = uint64_t(bytes[6] & 0x0F) << 48;
     for (int i = 6; i--; )  // 5..0
         mantissa |= uint64_t(bytes[i]) << (i * 8);
+
+    assert((mantissa & 0xFFF0000000000000ULL) == 0);  // only 52 lower bits can be set
 }
 
 
@@ -128,16 +132,21 @@ RealConstantExpr::getRepresentation() const
     if (isDoublePrecision())
         return vector<uint8_t>();
 
-    if (!TranslationUnit::instance().isFloatingPointSupported())
+    auto &tu = TranslationUnit::instance();
+    if (!tu.isFloatingPointSupported())
         return vector<uint8_t>();
 
     // Extract info from IEEE 754 of 'realValue'.
     // CAUTION: This assumes a little endian platform.
 
-    TargetPlatform targetPlatform = TranslationUnit::instance().getTargetPlatform();
+    TargetPlatform targetPlatform = tu.getTargetPlatform();
+    FloatingPointLibrary floatLib = tu.getFloatingPointLibrary();
     vector<uint8_t> rep;
 
-    size_t numBytes = TranslationUnit::instance().getTypeManager().getFloatingPointFormatSize(targetPlatform, false);
+    const TypeManager::FloatingPointFormat fmt = tu.getTypeManager().getFloatingPointFormat(targetPlatform, floatLib, false);
+    const size_t numBytes = fmt.sizeInBytes;
+    if (numBytes != 4 && numBytes != 5)
+        return vector<uint8_t>();
 
     if (realValue == 0.0)
     {
@@ -154,32 +163,37 @@ RealConstantExpr::getRepresentation() const
         //        << " -> " << (isNegative ? "-" : "+") << ", " << exponent << ", $" << hex << mantissa << dec << endl;
 
         // Color Basic format: "Color Basic Unravelled II".
-        // OS-9 format: "Microware C Compiler User's Guide - The C Compiler system (C-Compiler-Ch1.PDF), page 1-5.
+        // MC6839 format: "MC6839 Floating-point ROM Manual" (PDF).
 
-        if (exponent < -128 || exponent > 126)
+        if (exponent < fmt.minExponent || exponent > fmt.maxExponent)
             return vector<uint8_t>();  // cannot represent on target platform
 
-        uint8_t expByte = uint8_t(exponent + 1) + 0x80;
+        uint16_t biasedExp = uint16_t(exponent) + fmt.exponentBias;
+        if (floatLib != FloatingPointLibrary::MC6839_LIB)
+            ++biasedExp;
 
-        assert(expByte != 0);
+        assert(biasedExp != 0);
 
-        bool is40BitFormat = (numBytes == 5);  // if false, then OS-9 C format
-        if (is40BitFormat)
-            rep.push_back(expByte);
-        int numMantissaBytes = (is40BitFormat ? 4 : 3);
-        for (int i = 0; i < numMantissaBytes; ++i)
-            rep.push_back(uint8_t(mantissa >> (52 - 7 - i * 8)));
-        if (isNegative)
-            rep[is40BitFormat ? 1 : 0] |= 0x80;
-        if (!is40BitFormat)
-            rep.push_back(expByte);
-
-        /*cout << "#   Result: " << hex
+        if (floatLib != FloatingPointLibrary::MC6839_LIB)  // if Color Basic or native float library format:
+        {
+            rep.push_back(uint8_t(biasedExp));
+            for (int i = 0; i < 4; ++i)
+                rep.push_back(uint8_t(mantissa >> (52 - 7 - i * 8)));
+            if (isNegative)
+                rep[1] |= 0x80;
+            /*cout << "#   Result: " << hex
                  << setw(2) << (unsigned) rep[0] << " "
                  << setw(2) << (unsigned) rep[1] << " "
                  << setw(2) << (unsigned) rep[2] << " "
                  << setw(2) << (unsigned) rep[3] << " "
                  << setw(2) << (unsigned) rep[4] << dec << endl;*/
+        }
+        else  // MC6839 format:
+        {
+            uint32_t n = (isNegative << 31) | (uint32_t(biasedExp) << 23) | uint32_t(mantissa >> (52 - 23));
+            for (int i = 0; i < 4; ++i)
+                rep.push_back(uint8_t(n >> (24 - i * 8)));
+        }
     }
     return rep;
 }

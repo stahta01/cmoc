@@ -1,4 +1,4 @@
-/*  $Id: SwitchStmt.h,v 1.12 2023/04/09 05:59:04 sarrazip Exp $
+/*  $Id: SwitchStmt.h,v 1.13 2023/08/27 01:41:05 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2017 Pierre Sarrazin <http://sarrazip.com/>
@@ -52,13 +52,13 @@ public:
 
     const SwitchCaseList &getCases() const { return cases; }
 
-    virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
+    virtual CodeStatus emitCode(ASMText &out, bool lValue) const override;
 
-    virtual bool iterate(Functor &f);
+    virtual bool iterate(Functor &f) override;
 
-    virtual void checkSemantics(Functor &f);
+    virtual void checkSemantics(Functor &f) override;
 
-    virtual void replaceChild(Tree *existingChild, Tree *newChild)
+    virtual void replaceChild(Tree *existingChild, Tree *newChild) override
     {
         if (deleteAndAssign(expression, existingChild, newChild))
             return;
@@ -67,7 +67,7 @@ public:
         assert(!"child not found");
     }
 
-    virtual bool isLValue() const { return false; }
+    virtual bool isLValue() const override { return false; }
 
     // first = case value; second = index in cases[].
     typedef std::pair<uint16_t, uint32_t> CaseValueAndIndexPair;

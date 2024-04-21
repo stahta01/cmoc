@@ -1,4 +1,4 @@
-/*  $Id: TypeManager.cpp,v 1.58 2022/08/19 01:23:06 sarrazip Exp $
+/*  $Id: TypeManager.cpp,v 1.63 2024/01/27 18:27:11 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -19,7 +19,6 @@
 
 #include "TypeManager.h"
 
-#include "util.h"
 #include "Declarator.h"
 #include "WordConstantExpr.h"
 #include "ClassDef.h"
@@ -58,7 +57,7 @@ TypeManager::createBasicTypes()
 
 
 void
-TypeManager::createInternalStructs(Scope &globalScope, TargetPlatform targetPlatform)
+TypeManager::createInternalStructs(Scope &globalScope, TargetPlatform targetPlatform, FloatingPointLibrary floatLib)
 {
     // Internal structs that represent 'float', 'double', 'long' and 'unsigned long', e.g.,
     // struct _Float { unsigned char bytes[N]; };
@@ -69,8 +68,8 @@ TypeManager::createInternalStructs(Scope &globalScope, TargetPlatform targetPlat
     //
     createStructWithPairOfWords(globalScope, "_Long",   true);
     createStructWithPairOfWords(globalScope, "_ULong", false);
-    createStructWithArrayOfBytes(globalScope, "_Float",  getFloatingPointFormatSize(targetPlatform, false));
-    createStructWithArrayOfBytes(globalScope, "_Double", getFloatingPointFormatSize(targetPlatform, true));
+    createStructWithArrayOfBytes(globalScope, "_Float",  getFloatingPointFormat(targetPlatform, floatLib, false).sizeInBytes);
+    createStructWithArrayOfBytes(globalScope, "_Double", getFloatingPointFormat(targetPlatform, floatLib, true).sizeInBytes);
 }
 
 
@@ -116,8 +115,7 @@ TypeManager::createStructWithPairOfWords(Scope &globalScope, const char *structN
 
 TypeManager::~TypeManager()
 {
-    for (vector<TypeDesc *>::iterator it = types.begin(); it != types.end(); ++it)
-        delete *it;
+    deleteVectorElements(types);
 
     // Destroy the Enumerator objects.
     for (EnumeratorList::iterator it = enumerators.begin(); it != enumerators.end(); ++it)
@@ -533,6 +531,8 @@ TypeManager::addTypeDef(const TypeDesc *declSpecTypeDef, Declarator *declarator)
         errormsg("cannot redefine typedef `%s'", id.c_str());
     else if (declSpecTypeDef->isInterruptServiceRoutine() && ! declarator->isFunctionPointer())
         errormsg("modifier `interrupt' cannot be used on typedef");
+    else if (declarator->getInitExpr() != NULL)
+        errormsg("typedef `%s' is initialized", id.c_str());
     else
     {
         if (! declarator->isFunctionPointer() && ! declarator->isArrayOfFunctionPointers() && declarator->getFormalParamList() != NULL)
@@ -741,21 +741,47 @@ TypeManager::dumpTypes(std::ostream &out) const
 }
 
 
-size_t
-TypeManager::getFloatingPointFormatSize(TargetPlatform platform, bool isDoublePrecision)
+TypeManager::FloatingPointFormat
+TypeManager::getFloatingPointFormat(TargetPlatform platform, FloatingPointLibrary floatLib, bool isDoublePrecision)
 {
-    switch (platform)
+    FloatingPointFormat fmt;
+
+    if (floatLib == FloatingPointLibrary::MC6839_LIB)
     {
-    case COCO_BASIC:
-    case DRAGON:
-    case USIM:
-    case VOID_TARGET:
-        return 5;
-    case OS9:
-        return isDoublePrecision ? 8 : 4;
-    default:
-        return 0;
+        fmt.minExponent = isDoublePrecision ? -1022 : -126;
+        fmt.maxExponent = isDoublePrecision ? +1024 : +128;
+        fmt.exponentBias = isDoublePrecision ? 1023 : 127;
     }
+    else
+    {
+        fmt.minExponent = -127;
+        fmt.maxExponent = +128;
+        fmt.exponentBias = 128;
+    }
+
+    if (floatLib == FloatingPointLibrary::MC6839_LIB)
+        fmt.sizeInBytes = isDoublePrecision ? 8 : 4;
+    else if (floatLib == FloatingPointLibrary::NATIVE_LIB)
+        fmt.sizeInBytes = 5;
+    else
+    {
+        switch (platform)
+        {
+        case COCO_BASIC:
+        case DRAGON:
+            fmt.sizeInBytes = 5;
+            break;
+        case OS9:
+            fmt.sizeInBytes = isDoublePrecision ? 8 : 4;
+            break;
+        case USIM:
+        case VOID_TARGET:
+        default:
+            fmt.sizeInBytes = 0;
+        }
+    }
+
+    return fmt;
 }
 
 

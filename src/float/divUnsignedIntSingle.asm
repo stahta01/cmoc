@@ -27,12 +27,7 @@ divUnsignedIntSingle
 * Trashes FPA0.
 loadUnsignedDInFPA1
 	lbsr	loadUnsignedDInFPA0
-	ldd	FP0ADDR
-	std	FP1ADDR
-	ldd	FP0ADDR+2
-	std	FP1ADDR+2
-	ldd	FP0ADDR+4
-	std	FP1ADDR+4
+	flt_copyFPA0ToFPA1
 	rts
 
 

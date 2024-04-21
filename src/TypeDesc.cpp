@@ -1,4 +1,4 @@
-/*  $Id: TypeDesc.cpp,v 1.50 2022/07/07 16:14:09 sarrazip Exp $
+/*  $Id: TypeDesc.cpp,v 1.52 2024/02/12 02:48:32 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -121,6 +121,13 @@ bool
 TypeDesc::isPtrOrArray() const
 {
     return type == POINTER_TYPE || type == ARRAY_TYPE;
+}
+
+
+bool
+TypeDesc::isPtrToArray() const
+{
+    return type == POINTER_TYPE && pointedTypeDesc->type == ARRAY_TYPE;
 }
 
 
@@ -276,6 +283,23 @@ TypeDesc::isConstant() const
     if (type != ARRAY_TYPE)
         return false;
     return pointedTypeDesc->isConstant();
+}
+
+
+bool
+TypeDesc::isConstAtFirstLevel() const
+{
+    return isConst;
+}
+
+
+bool
+TypeDesc::isPointerToOrArrayOfConst() const
+{
+    if (type != POINTER_TYPE && type != ARRAY_TYPE)
+        return false;
+    assert(pointedTypeDesc);
+    return pointedTypeDesc->isConstAtFirstLevel();
 }
 
 

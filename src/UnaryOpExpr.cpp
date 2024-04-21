@@ -1,7 +1,7 @@
-/*  $Id: UnaryOpExpr.cpp,v 1.62 2022/06/22 02:01:25 sarrazip Exp $
+/*  $Id: UnaryOpExpr.cpp,v 1.66 2024/02/26 02:04:43 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
+    Copyright (C) 2003-2023 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -146,18 +146,9 @@ UnaryOpExpr::checkSemantics(Functor & /*f*/)
             const char *prefix = (oper == PREINC || oper == POSTINC ? "in" : "de");
             if (subExpr->getType() == ARRAY_TYPE)
                 errormsg("cannot %screment array name", prefix);
-            else if (subExpr->isConst())
-                warnmsg("%scrementing a constant expression (type is `%s')", prefix, subExpr->getTypeDesc()->toString().c_str());
-            else
-            {
-                const ObjectMemberExpr *ome = dynamic_cast<const ObjectMemberExpr *>(subExpr);
-                if (ome && (ome->getSubExpr()->isConst() || ome->getSubExpr()->isPtrToOrArrayOfConst()))
-                    errormsg("%scrementing member `%s' of `%s' is not const-correct",
-                             prefix, ome->getMemberName().c_str(),
-                             ome->getSubExpr()->isPtrToOrArrayOfConst()
-                                 ? ome->getSubExpr()->getTypeDesc()->getPointedTypeDesc()->toString().c_str()
-                                 : ome->getSubExpr()->getTypeDesc()->toString().c_str());
-            }
+            else if (subExpr->getTypeDesc()->isConstAtFirstLevel())
+                warnmsg("%scrementing expression of type `%s' is not const-correct",
+                        prefix, subExpr->getTypeDesc()->toString().c_str());
 
             if (subExpr->getTypeDesc()->isPtrToFunction())
                 warnmsg("%scrementing a function pointer", prefix);
@@ -419,8 +410,24 @@ UnaryOpExpr::getSizeOfValue(uint16_t &size) const
         return true;
     }
 
-    if (sizeofArgTypeDesc && sizeofArgTypeDesc->type != ARRAY_TYPE)
+    if (sizeofArgTypeDesc)
     {
+        if (sizeofArgTypeDesc->type == ARRAY_TYPE)
+        {
+            vector<uint16_t> arrayDimensions;
+            sizeofArgTypeDesc->appendDimensions(arrayDimensions);
+            int16_t finalElemSizeInBytes = TranslationUnit::instance().getTypeSize(*sizeofArgTypeDesc->getFinalArrayType());
+            int16_t s = computeDimensionsProduct(arrayDimensions, 0, finalElemSizeInBytes);
+            if (s < 0)
+            {
+                errormsg("unsupported sizeof (on type `%s')", sizeofArgTypeDesc->toString().c_str());
+                return true;
+            }
+            size = uint16_t(s);
+            return true;
+        }
+
+        // Not an array type.
         if (sizeofArgTypeDesc->type == CLASS_TYPE && TranslationUnit::instance().getClassDef(sizeofArgTypeDesc->className) == NULL)
             return false;  // error msg already emitted by checkForSizeOfUnknownStruct()
 
@@ -491,7 +498,7 @@ UnaryOpExpr::emitCode(ASMText &out, bool lValue) const
                 const VariableExpr *ve = subExpr->asVariableExpr();
                 if (ve != NULL)
                 {
-                    out.ins("CLRA", "Negation of variable " + ve->getId());
+                    out.ins("CLRA", "", "Negation of variable " + ve->getId());
                     out.ins("CLRB");
                     out.ins("SUBD", ve->getFrameDisplacementArg());
                     return true;
@@ -649,14 +656,14 @@ UnaryOpExpr::emitCode(ASMText &out, bool lValue) const
                 // Indirection of struct pointer as r-value not supported.
                 if (!lValue && subExpr->getType() == POINTER_TYPE && subExpr->getTypeDesc()->getPointedTypeDesc()->type == CLASS_TYPE)
                 {
-                    errormsg("indirection of struct as an r-value not supported: use '->' operator instead");
+                    errormsg("indirection of pointer to struct as an r-value not supported: use '->' operator instead");
                     return true;  // continuing is harmless and allows compiler to report further errors if any
                 }
 
-                WordConstantExpr *wce = dynamic_cast<WordConstantExpr *>(subExpr);
-                CastExpr *castExpr = dynamic_cast<CastExpr *>(subExpr);
-                WordConstantExpr *castWCE = (castExpr != NULL
-                                    ? dynamic_cast<WordConstantExpr *>(castExpr->getSubExpr())
+                const WordConstantExpr *wce = dynamic_cast<WordConstantExpr *>(subExpr);
+                const CastExpr *castExpr = dynamic_cast<CastExpr *>(subExpr);
+                const WordConstantExpr *castWCE = (castExpr != NULL
+                                    ? dynamic_cast<const WordConstantExpr *>(castExpr->getSubExpr())
                                     : NULL);
                 const VariableExpr *ve = NULL;
                 bool checkNullPtr = TranslationUnit::instance().isNullPointerCheckingEnabled();
@@ -693,9 +700,25 @@ UnaryOpExpr::emitCode(ASMText &out, bool lValue) const
                 }
                 else
                 {
+                    bool indirectionDone = false;
+                    bool pointerLoadedInX = true;
                     string addressRef = ",X";
                     ve = subExpr->asVariableExpr();
-                    if (ve != NULL)
+
+                    if (subExpr->getTypeDesc()->isPtrToArray())
+                    {
+                        if (!subExpr->emitCode(out, false))  // get pointer value in D
+                            return false;
+                        if (lValue)
+                        {
+                            subExpr->errormsg("unsupported indirection");
+                            return true;
+                        }
+                        // r-value.
+                        indirectionDone = true;
+                        pointerLoadedInX = false;
+                    }
+                    else if (ve != NULL)
                     {
                         string comment = "get address for indirection of variable " + ve->getId();
                         if (subExpr->getType() == ARRAY_TYPE)
@@ -703,7 +726,11 @@ UnaryOpExpr::emitCode(ASMText &out, bool lValue) const
                         else if (lValue || checkNullPtr)
                             out.ins("LDX", ve->getFrameDisplacementArg(), comment);
                         else  // emitting r-value, so result expected in D or B, not in X
+                        {
+                            assert(!lValue);
                             addressRef = "[" + ve->getFrameDisplacementArg() + "]";
+                            pointerLoadedInX = false;
+                        }
                     }
                     else
                     {
@@ -714,10 +741,10 @@ UnaryOpExpr::emitCode(ASMText &out, bool lValue) const
                         out.ins("TFR", "D,X");
                     }
 
-                    if (checkNullPtr)
+                    if (pointerLoadedInX && checkNullPtr)
                         callUtility(out, "check_null_ptr_x");
 
-                    if (!lValue)
+                    if (!lValue && !indirectionDone)  // if emitting r-value
                         out.ins(getLoadInstruction(getType()), addressRef, "indirection");
                 }
             }

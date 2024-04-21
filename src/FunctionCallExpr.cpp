@@ -1,4 +1,4 @@
-/*  $Id: FunctionCallExpr.cpp,v 1.102 2023/04/09 01:06:28 sarrazip Exp $
+/*  $Id: FunctionCallExpr.cpp,v 1.106 2023/12/30 07:05:35 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -46,6 +46,8 @@ FunctionCallExpr::FunctionCallExpr(Tree *func, TreeSequence *args)
 {
     assert(function != NULL);
     assert(arguments != NULL);
+    if (auto ie = dynamic_cast<IdentifierExpr *>(function))
+        ie->makeNameInAFunctionCall(true);  // remember that this ID is used to call a function, i.e., foo()
 }
 
 
@@ -107,7 +109,11 @@ FunctionCallExpr::paramAcceptsArg(const TypeDesc &paramTD, const Tree &argTree)
             return WARN_REAL_FOR_INTEGRAL;
         if (paramTD.isIntegral() && argTD.isPtrOrArray())  // e.g., int <- int *
             return WARN_PTR_FOR_INTEGRAL;
-        return argTD.isNumerical() || argTD.isPtrOrArray() ? NO_PROBLEM : ERROR_MSG;
+        if (!argTD.isNumerical() && !argTD.isPtrOrArray())
+            return ERROR_MSG;
+        if (argTree.getTypeSize() > 2)
+            return WARN_ARGUMENT_TOO_LARGE;
+        return NO_PROBLEM;
     case CLASS_TYPE:
         if (paramTD.isNumerical())
         {
@@ -133,8 +139,10 @@ FunctionCallExpr::paramAcceptsArg(const TypeDesc &paramTD, const Tree &argTree)
             uint16_t result = 0;
             if (!argTree.evaluateConstantExpr(result))
                 return WARN_NON_PTR_ARRAY_FOR_PTR;
-            if (result != 0)
-                return WARN_PASSING_CONSTANT_FOR_PTR;
+            if (argTree.getType() == BYTE_TYPE)
+                return WARN_PASSING_CHAR_CONSTANT_FOR_PTR;
+            if (result != 0 && TranslationUnit::instance().isWarningOnPassingConstForFuncPtr())  // re: -Wpass-const-for-func-pointer
+                return WARN_PASSING_NON_ZERO_CONSTANT_FOR_PTR;
             return NO_PROBLEM;
         }
         if (!argTD.isPtrOrArray())
@@ -196,19 +204,19 @@ public:
     FormalParamListContraption(const FormalParamList &_formalParamList)
         : formalParamList(_formalParamList), it(formalParamList.begin()) {}
     virtual ~FormalParamListContraption() {}
-    virtual bool hasNextParam() const { return it != formalParamList.end(); }
-    virtual void nextParam() { assert(it != formalParamList.end()); ++it; }
-    virtual bool isAcceptableNumberOfArguments(size_t numArguments) const
+    virtual bool hasNextParam() const override { return it != formalParamList.end(); }
+    virtual void nextParam() override { assert(it != formalParamList.end()); ++it; }
+    virtual bool isAcceptableNumberOfArguments(size_t numArguments) const override
         { return formalParamList.isAcceptableNumberOfArguments(numArguments); }
-    virtual bool endsWithEllipsis() const { return formalParamList.endsWithEllipsis(); }
-    virtual size_t size() const { return formalParamList.size(); }
-    virtual const TypeDesc *getCurrentParamTypeDesc() const
+    virtual bool endsWithEllipsis() const override { return formalParamList.endsWithEllipsis(); }
+    virtual size_t size() const override { return formalParamList.size(); }
+    virtual const TypeDesc *getCurrentParamTypeDesc() const override
     {
         assert(it != formalParamList.end());
         assert(*it);
         return (*it)->getTypeDesc();
     }
-    virtual const FormalParameter *getCurrentParamAsFormalParameter() const
+    virtual const FormalParameter *getCurrentParamAsFormalParameter() const override
     {
         assert(it != formalParamList.end());
         assert(*it);
@@ -226,23 +234,23 @@ public:
     TypeDescVectorContraption(const vector<const TypeDesc *> &_formalParamTypes, bool _ellipsis)
         : formalParamTypes(_formalParamTypes), it(formalParamTypes.begin()), ellipsis(_ellipsis) {}
     virtual ~TypeDescVectorContraption() {}
-    virtual bool hasNextParam() const { return it != formalParamTypes.end(); }
-    virtual void nextParam() { assert(it != formalParamTypes.end()); ++it; }
-    virtual bool isAcceptableNumberOfArguments(size_t numArguments) const
+    virtual bool hasNextParam() const override { return it != formalParamTypes.end(); }
+    virtual void nextParam() override { assert(it != formalParamTypes.end()); ++it; }
+    virtual bool isAcceptableNumberOfArguments(size_t numArguments) const override
     {
         if (ellipsis)
             return numArguments >= size();
         return numArguments == size();
     }
-    virtual bool endsWithEllipsis() const { return ellipsis; }
-    virtual size_t size() const { return formalParamTypes.size(); }
-    virtual const TypeDesc *getCurrentParamTypeDesc() const
+    virtual bool endsWithEllipsis() const override { return ellipsis; }
+    virtual size_t size() const override { return formalParamTypes.size(); }
+    virtual const TypeDesc *getCurrentParamTypeDesc() const override
     {
         assert(it != formalParamTypes.end());
         assert(*it);
         return *it;
     }
-    virtual const FormalParameter *getCurrentParamAsFormalParameter() const { return NULL; }
+    virtual const FormalParameter *getCurrentParamAsFormalParameter() const override { return NULL; }
 private:
     const vector<const TypeDesc *> &formalParamTypes;
     vector<const TypeDesc *>::const_iterator it;
@@ -300,9 +308,13 @@ FunctionCallExpr::checkCallArguments(const string &functionId,
                                      fpIndex, paramNameStr.c_str(), temp.c_str(),
                                      paramTD->toString().c_str());
                 break;
-            case WARN_PASSING_CONSTANT_FOR_PTR:
-                if (TranslationUnit::instance().isWarningOnPassingConstForFuncPtr())  // if -Wpass-const-for-func-pointer
-                    argTree->warnmsg("passing non-zero numeric constant as parameter %u%s of %s, which is `%s'",
+            case WARN_PASSING_CHAR_CONSTANT_FOR_PTR:
+                argTree->warnmsg("passing character constant as parameter %u%s of %s, which is `%s'",
+                                     fpIndex, paramNameStr.c_str(), temp.c_str(),
+                                     paramTD->toString().c_str());
+                break;
+            case WARN_PASSING_NON_ZERO_CONSTANT_FOR_PTR:
+                argTree->warnmsg("passing non-zero numeric constant as parameter %u%s of %s, which is `%s'",
                                      fpIndex, paramNameStr.c_str(), temp.c_str(),
                                      paramTD->toString().c_str());
                 break;
@@ -418,7 +430,10 @@ FunctionCallExpr::checkAndSetTypes()
     string fid = getIdentifier();
     const FunctionDef *fd = TranslationUnit::instance().getFunctionDef(fid);
     if (!fd)
+    {
+        setTypeDesc(TranslationUnit::getTypeManager().getIntType(WORD_TYPE, true));  // assume call returns int
         return false;  // undeclared function: let FunctionChecker handle this
+    }
 
     if (fd->isInterruptServiceRoutine())
     {
@@ -995,7 +1010,12 @@ FunctionCallExpr::emitCode(ASMText &out, bool lValue) const
 
         string functionLabel = tu.getFunctionLabel(functionId);
         if (functionLabel.empty())
-            return false;  // error expected to have been reported by FunctionChecker
+        {
+            functionLabel = FunctionDef::makeLabelFromFunctionId(functionId);  // guess the ID: useful with K&R code
+            out.emitComment("Call to undeclared function " + functionId + "(): label guessed; import in case function provided by other module");
+            out.emitImport(functionLabel);  // assume that the function may be provided by another translation unit
+        }
+
         out.ins(tu.isRelocatabilitySupported() ? "LBSR" : "JSR", functionLabel);  // JSR takes 1 fewer cycle
     }
     else if (ie != NULL && funcPtrVarDecl != NULL)  // if called address is in a variable using no-asterisk notation, e.g., pf()

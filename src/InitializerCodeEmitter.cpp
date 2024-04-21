@@ -1,7 +1,5 @@
-/*  $Id: InitializerCodeEmitter.cpp,v 1.3 2022/07/22 02:44:23 sarrazip Exp $
-
-    CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2022 Pierre Sarrazin <http://sarrazip.com/>
+/*  CMOC - A C-like cross-compiler
+    Copyright (C) 2003-2023 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -24,6 +22,7 @@
 #include "TreeSequence.h"
 #include "StringLiteralExpr.h"
 #include "VariableExpr.h"
+#include "WordConstantExpr.h"
 
 #include <iostream>
 
@@ -66,7 +65,7 @@ InitializerCodeEmitter::emitCode(ASMText &out,
     assert(initializer != NULL);
     
     TRACE(cout << "# InitializerCodeEmitter::emitCode: START: atDeclarationLevel=" << atDeclarationLevel << endl);
-    TRACE(cout << "#   fieldTypeDesc: " << *typeDesc << endl);
+    TRACE(cout << "#   typeDesc: " << *typeDesc << endl);
     uint16_t written = 0;
     if (typeDesc->isStruct())
         written = emitCodeForStruct(out, typeDesc, dynamic_cast<const TreeSequence *>(initializer));
@@ -185,10 +184,16 @@ InitializerCodeEmitter::emitCodeForSimpleType(ASMText &out,
         assert(typeSizeInBytes <= 2);
         const char *storeIns = NULL;
         const VariableExpr *ve = basicTypeInitializer->asVariableExpr();
+        const WordConstantExpr *wce = dynamic_cast<const WordConstantExpr *>(basicTypeInitializer);
         if (ve != NULL && basicTypeInitializer->getType() == ARRAY_TYPE)  // if array name assigned to pointer var
         {
             out.ins("LEAX", ve->getFrameDisplacementArg(), "address of array " + ve->getId());
             storeIns = "STX";
+        }
+        else if (wce != NULL && basicTypeDesc->type == BYTE_TYPE)  // if initializing byte from WordConstantExpr
+        {
+            wce->emitCodeToLoadByte(out);
+            storeIns = "STB";
         }
         else if (basicTypeInitializer->emitCode(out, false))
             storeIns = (basicTypeDesc->type == BYTE_TYPE ? "STB" : "STD");
@@ -349,7 +354,7 @@ InitializerCodeEmitter::emitCodeForArray(ASMText &out,
 {
     assert(arrayInitializer);
     TRACE(cout << "# InitializerCodeEmitter::emitCodeForArray: START\n");
-    TRACE(cout << "#   arrayTypeDesc: " << * arrayTypeDesc << endl);
+    TRACE(cout << "#   arrayTypeDesc: " << *arrayTypeDesc << endl);
     TRACE(cout << "#   arrayInitializer: " << typeid(*arrayInitializer).name() << endl);
     TRACE(cout << "#   arrayDimensions: " << vectorToString(arrayDimensions) << endl);
     TRACE(cout << "#   dimIndex: " << dimIndex << endl);
@@ -360,7 +365,14 @@ InitializerCodeEmitter::emitCodeForArray(ASMText &out,
     TRACE(cout << "#   final array TD: " << *arrayTypeDesc->getFinalArrayType() << ", of size " << finalArrayTypeSizeInBytes << endl);
 
     // Each element of the array must take exactly 'arrayElemSizeInBytes' memory locations.
-    uint16_t arrayElemSizeInBytes = finalArrayTypeSizeInBytes * product(arrayDimensions.begin() + (dimIndex + 1), arrayDimensions.end());
+    uint16_t dimProduct = 0;
+    bool success = product(dimProduct, arrayDimensions.begin() + (dimIndex + 1), arrayDimensions.end());
+    if (!success)
+    {
+        TRACE(cout << "#   OVERFLOW\n");
+        return uint16_t(-1);
+    }
+    uint16_t arrayElemSizeInBytes = finalArrayTypeSizeInBytes * dimProduct;
     TRACE(cout << "#   arrayElemSizeInBytes: " << arrayElemSizeInBytes << endl);
 
     const size_t needFilledForArray = numElementsToFill * arrayElemSizeInBytes;

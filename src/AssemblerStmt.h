@@ -1,4 +1,4 @@
-/*  $Id: AssemblerStmt.h,v 1.12 2022/07/13 03:27:19 sarrazip Exp $
+/*  $Id: AssemblerStmt.h,v 1.14 2023/08/27 01:41:03 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -45,16 +45,16 @@ public:
     //
     void setAssemblyOnly(const Scope *functionScope);
 
-    virtual void checkSemantics(Functor &f);
+    virtual void checkSemantics(Functor &f) override;
 
     // Returns all names referred to with the :VAR notation, whether those names
     // are recognized or not as declared variables.
     //
     void getAllVariableNames(std::set<std::string> &varNames) const;
 
-    virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
+    virtual CodeStatus emitCode(ASMText &out, bool lValue) const override;
 
-    virtual bool isLValue() const { return false; }
+    virtual bool isLValue() const override { return false; }
 
 private:
 
@@ -62,14 +62,13 @@ private:
 
     static Token getToken(const std::string &text, size_t &i, std::string &tokenText);
     static std::string removeComments(const std::string &text);
-    static bool parseVariableNameAndOffset(const std::string &tokenText, std::string &variableName, int16_t &offset);
-    static bool resolveVariableReferences(const std::string &text,
-                                                 const Scope &scope,
-                                                 std::string &resolvedAsmText,
-                                                 std::set<std::string> *recognizedVarNames,
-                                                 std::set<std::string> *undeclaredNames,
-                                                 bool requireAllocatedVariables,
-                                                 const Tree *errorMessageTree = NULL);
+    static bool processInlineAsmText(const std::string &text,
+                                     const Scope &scope,
+                                     std::string &resolvedAsmText,
+                                     std::set<std::string> *recognizedVarNames,
+                                     std::set<std::string> *undeclaredNames,
+                                     bool requireAllocatedVariables,
+                                     const Tree *errorMessageTree = NULL);
     static bool isGlobalVariable(const std::string &varName);
 
 private:

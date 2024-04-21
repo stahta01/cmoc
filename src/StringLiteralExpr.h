@@ -1,4 +1,4 @@
-/*  $Id: StringLiteralExpr.h,v 1.12 2021/01/09 19:21:01 sarrazip Exp $
+/*  $Id: StringLiteralExpr.h,v 1.13 2023/08/27 01:41:05 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -38,7 +38,7 @@ public:
     std::string getArg() const;
     std::string getEscapedVersion() const;
 
-    virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
+    virtual CodeStatus emitCode(ASMText &out, bool lValue) const override;
 
     static std::string escape(const std::string &s);
     std::string decodeEscapedLiteral(bool &hexEscapeOutOfRange,
@@ -58,7 +58,7 @@ public:
     //
     void emitStringLiteralDefinition(ASMText &out) const;
 
-    virtual bool isLValue() const { return false; }
+    virtual bool isLValue() const override { return false; }
 
 private:
 

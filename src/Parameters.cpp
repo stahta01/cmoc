@@ -1,4 +1,4 @@
-/*  $Id: Parameters.cpp,v 1.6 2023/04/10 04:48:46 sarrazip Exp $
+/*  $Id: Parameters.cpp,v 1.22 2024/01/27 03:10:20 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -21,6 +21,8 @@
 
 #include "TranslationUnit.h"
 
+#include <sys/wait.h>  /* for WEXITSTATUS() and WIFEXITED() */
+
 
 #ifndef PROGRAM  // Allow the compilation to define the program name as a macro.
 static const char *PROGRAM = "cmoc";
@@ -32,6 +34,72 @@ using namespace std;
 extern const char *fatalErrorPrefix;
 extern int numErrors;
 extern int numWarnings;
+
+
+Parameters::Parameters()
+:   codeAddress(0x2800),  // DECB Basic program starts at 0x2601 by default
+    dataAddress(0xFFFF),
+    codeAddressSetBySwitch(false),
+    dataAddressSetBySwitch(false),
+    stackSpace(1024),
+    extraStackSpace(0),
+    functionStackSpace(uint32_t(-1)),
+    pkgdatadir(),
+    cmocfloatlibdir(),
+    lwasmPath("lwasm"),
+    lwlinkPath("lwlink"),
+    intermediateFilesKept(false),
+    intermediateDir(),
+    generatePrerequisitesFile(false),
+    generatePrerequisitesFileOnly(false),
+    prerequisiteFilename(),
+    prerequisiteRuleTarget(),
+    preprocOnly(false),
+    genAsmOnly(false),
+    compileOnly(false),
+    asmCmd(false),  // write asm command in a .cmd file
+    verbose(false),
+    treatWarningsAsErrors(false),
+    nullPointerCheckingEnabled(false),
+    stackOverflowCheckingEnabled(false),
+    targetPlatform(COCO_BASIC),
+    assumeTrack34(false),
+    forcedLWLinkFormat(),
+    callToUndefinedFunctionAllowed(false),
+    warnSignCompare(false),
+    warnPassingConstForFuncPtr(false),
+    isConstIncorrectWarningEnabled(true),
+    isBinaryOpGivingByteWarningEnabled(false),
+    isLocalVariableHidingAnotherWarningEnabled(false),
+    isNonLiteralPrintfFormatWarningEnabled(true),
+    isUncalledStaticFunctionWarningEnabled(true),
+    isMissingFieldInitializersWarningEnabled(true),
+    inlineAsmArrayIndexesWarningEnabled(true),
+    shadowingLocalVariableWarningEnabled(false),
+    forConditionComparesDifferentSizesWarningEnabled(false),
+    warnArrayWithUnknownFirstDimension(true),
+    warnTooManyElementsInInitializer(true),
+    warnShiftAlwaysZero(true),
+    warnLabelOnDeclaration(true),
+    wholeFunctionOptimization(false),
+    forceJumpMode(false),
+    forcedJumpMode(SwitchStmt::IF_ELSE),
+    optimizationLevel(2),
+    omitFramePointer(false),
+    stackSpaceSpecifiedByCommandLine(false),
+    limitAddress(0xFFFF),
+    limitAddressSetBySwitch(false),
+    assumeCFileByDefault(false),
+    outputFilename(),
+    libDirs(),
+    useDefaultLibraries(true),
+    floatingPointLibrary(FloatingPointLibrary::ECB_ROM),
+    relocatabilitySupported(true),
+    includeDirList(),
+    searchDefaultIncludeDirs(true),
+    defines()
+{
+}
 
 
 void
@@ -132,11 +200,24 @@ Parameters::displayHelp() const
         "-Wfor-condition-sizes\n"
         "                     Warn if a for() loop's condition compares values of different sizes.\n"
         "                     Ex.: unsigned n = 256; for (unsigned char i = 0; i < n; ++i) {...}\n"
+        "-Wno-unknown-first-dim\n"
+        "                     Do not warn about arrays whose first dimension has an unknown size,\n"
+        "                     e.g., int a[] = { ... };\n"
+        "-Wno-too-many-elements\n"
+        "                     Do not warn about array initializers having more elements than the array\n"
+        "                     they initialize, e.g., int a[] = { 1, 2, 3 };\n"
+        "-Wno-shift-always-zero\n"
+        "                     Do not warn about bit shifts that always gives a zero.\n"
+        "-Wno-label-on-declaration\n"
+        "                     Do not warn when a label is put on a declaration.\n"
+        "-Wshadow             Warn if a local variable hides another in the same function.\n"
         "-Werror              Treat warnings as errors.\n"
         "--switch=MODE        Force all switch() statements to use MODE, where MODE is 'ifelse'\n"
         "                     for an if-else sequence or 'jump' for a jump table.\n"
         "--intermediate|-i    Keep intermediate compilation and linking files.\n"
         "--intdir=D           Put intermediate files in directory D.\n"
+        "-x c                 Assume that files other than .s, .asm, .o and .a are C files.\n"
+        "-x none              Only consider .c files as C files.\n"
         "\n"
         "Executable file formats:\n"
         "  CoCo BIN for CoCo Disk Basic, Dragon, Thomson MO/TO; raw binary for Vectrex;\n"
@@ -173,6 +254,15 @@ Parameters::useIntDir(const string &s) const
     if (intermediateDir.empty() || s.find('/') != string::npos)
         return s;
     return replaceDir(s, intermediateDir);
+}
+
+
+bool
+Parameters::isCFileExtension(const std::string &extension) const
+{
+    if (assumeCFileByDefault)
+        return extension != ".s" && extension != ".asm" && extension != ".o" && extension != ".a";
+    return extension == ".c";
 }
 
 
@@ -251,8 +341,10 @@ Parameters::compileCFile(const string &inputFilename,
     cppCommand << " -D" << targetPreprocId << "=1";
     if (!relocatabilitySupported)
         cppCommand << " -D_CMOC_NO_RELOCATE_=1";
-    if (useNativeFloatLibrary)
+    if (floatingPointLibrary == FloatingPointLibrary::NATIVE_LIB)
         cppCommand << " -D_CMOC_NATIVE_FLOAT_=1";
+    if (floatingPointLibrary == FloatingPointLibrary::MC6839_LIB)
+        cppCommand << " -D_CMOC_MC6839_=1";
     cppCommand << " -U__GNUC__ -nostdinc -undef";
 
     for (list<string>::const_iterator it = defines.begin(); it != defines.end(); ++it)
@@ -273,8 +365,9 @@ Parameters::compileCFile(const string &inputFilename,
         return EXIT_FAILURE;
     }
 
-    PipeCloser preprocFileCloser(yyin);
+    PipeCloser preprocFileCloser("preprocessor", yyin);
 
+    TranslationUnitDestroyer tud;  // destroy TranslationUnit (if created) when leaving this function
 
     if (preprocOnly || generatePrerequisitesFileOnly)
     {
@@ -291,7 +384,6 @@ Parameters::compileCFile(const string &inputFilename,
                     cout << PACKAGE << fatalErrorPrefix
                          << "failed to copy C preprocessor output to standard output:"
                          << " " << strerror(e) << endl;
-                    TranslationUnit::destroyInstance();
                     return EXIT_FAILURE;
                 }
             }
@@ -302,15 +394,11 @@ Parameters::compileCFile(const string &inputFilename,
                     TranslationUnit::instance().addPrerequisiteFilename(filename.c_str());
             }
         }
+        if (preprocFileCloser.close() != 0)
+            return EXIT_FAILURE;
         if (preprocOnly)
-        {
-            TranslationUnit::destroyInstance();
             return EXIT_SUCCESS;
-        }
     }
-
-
-    TranslationUnitDestroyer tud(true);  // destroy TU at end of this function
 
 
     if (numErrors == 0 && !generatePrerequisitesFileOnly)
@@ -355,17 +443,8 @@ Parameters::compileCFile(const string &inputFilename,
             cout << "\n";
         }
 
-        int pipeCmdStatus = preprocFileCloser.close();
-        if (!WIFEXITED(pipeCmdStatus))
-        {
-            cout << PACKAGE << fatalErrorPrefix << "preprocessor terminated abnormally." << endl;
+        if (preprocFileCloser.close() != 0)
             return EXIT_FAILURE;
-        }
-        if (WEXITSTATUS(pipeCmdStatus) != 0)
-        {
-            cout << PACKAGE << fatalErrorPrefix << "preprocessor failed." << endl;
-            return EXIT_FAILURE;
-        }
 
         if (numErrors == 0)
         {
@@ -392,6 +471,9 @@ Parameters::compileCFile(const string &inputFilename,
             asmText.peepholeOptimize(optimizationLevel, omitFramePointer);
             if (wholeFunctionOptimization)
                 asmText.optimizeWholeFunctions();
+            
+            // Emit the utility routine imports and the END directive.
+            tu.finishEmittingAssembler(asmText);
         }
 
 
@@ -450,7 +532,9 @@ Parameters::compileCFile(const string &inputFilename,
                                         : prerequisiteFilename;
         ofstream dependenciesFile(dependenciesFilename.c_str(), ios::out);
         if (dependenciesFile.good())
-            TranslationUnit::instance().writePrerequisites(dependenciesFile, dependenciesFilename, compilationOutputFilename, pkgdatadir);
+            TranslationUnit::instance().writePrerequisites(dependenciesFile, dependenciesFilename,
+                                                           prerequisiteRuleTarget.empty() ? compilationOutputFilename : prerequisiteRuleTarget,
+                                                           pkgdatadir);
         else
         {
             int e = errno;
@@ -509,4 +593,28 @@ Parameters::invokeAssembler(const string &inputFilename,
         return status;
 
     return EXIT_SUCCESS;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+int
+PipeCloser::close()
+{
+    if (file == NULL)
+        return 0;  // success: nothing to do
+    int status = pclose(file);
+    file = NULL;
+    if (!WIFEXITED(status))
+    {
+        cout << PACKAGE << fatalErrorPrefix << runningTool << " terminated abnormally." << endl;
+        assert(status != 0);
+    }
+    else if (WEXITSTATUS(status) != 0)
+    {
+        cout << PACKAGE << fatalErrorPrefix << runningTool << " failed." << endl;
+        assert(status != 0);
+    }
+    return status;
 }

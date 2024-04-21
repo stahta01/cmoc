@@ -1,7 +1,5 @@
-/*  $Id: util.cpp,v 1.45 2023/03/26 01:45:53 sarrazip Exp $
-
-    CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2020 Pierre Sarrazin <http://sarrazip.com/>
+/*  CMOC - A C-like cross-compiler
+    Copyright (C) 2003-2023 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -365,7 +363,8 @@ isPointerInitConstCorrect(const TypeDesc *declPointedTypeDesc, const TypeDesc *i
         {
             return CONST_INCORRECT;  // e.g., int * = const int *
         }
-        if (declPointedTypeDesc->type == POINTER_TYPE && initPointedTypeDesc->type == POINTER_TYPE)
+        if (   (declPointedTypeDesc->type == POINTER_TYPE && initPointedTypeDesc->type == POINTER_TYPE)
+            || (declPointedTypeDesc->type == ARRAY_TYPE   && initPointedTypeDesc->type == ARRAY_TYPE))
         {
             declPointedTypeDesc = declPointedTypeDesc->pointedTypeDesc;
             initPointedTypeDesc = initPointedTypeDesc->pointedTypeDesc;
@@ -375,6 +374,22 @@ isPointerInitConstCorrect(const TypeDesc *declPointedTypeDesc, const TypeDesc *i
             return INCOMPAT_TYPES;
         return CONST_CORRECT;
     }
+}
+
+
+int16_t
+computeDimensionsProduct(const vector<uint16_t> &dims, size_t dimIndex, int16_t finalArrayElementTypeSize)
+{
+    assert(dims.size() >= 1);
+    assert(dimIndex <= dims.size());
+    uint16_t rowSize = 0;
+    bool success = product(rowSize, dims.begin() + dimIndex, dims.end());
+    if (!success)  // if overflow
+        return -1;
+    uint32_t rowSizeInBytes = rowSize * finalArrayElementTypeSize;
+    if (rowSizeInBytes == 0 || rowSizeInBytes > 0x7FFF)
+        return -1;
+    return int16_t(rowSizeInBytes);
 }
 
 
@@ -391,19 +406,34 @@ getSourceLineNo()
 
 
 void
-diagnoseVa(const char *diagType, const string &explicitLineNo, const char *fmt, va_list ap)
+diagnoseVa(bool isError, const string &explicitLineNo, const char *fmt, va_list ap)
 {
     extern int numErrors, numWarnings;
-
-    if (strcmp(diagType, "error") == 0)
-        numErrors++;
-    else
-        numWarnings++;
 
     char buffer[1024];
     vsnprintf(buffer, sizeof(buffer), fmt, ap);
 
-    cout << explicitLineNo << ": " << diagType << ": " << buffer << "\n";
+    {
+        // Use maps to remember which diagnostics have already been issued.
+        static map<string, set<string>> errorMap, warningMap;  // e.g., key: "foo.c:42"; value: set of messages
+
+        auto &map = isError ? errorMap : warningMap;
+        auto it = map.find(explicitLineNo);
+        if (it != map.end())
+        {
+            auto &set = it->second;
+            if (set.find(buffer) != set.end())
+                return;  // already issued
+        }
+        map[explicitLineNo].insert(buffer);
+    }
+
+    cout << explicitLineNo << ": " << (isError ? "error" : "warning") << ": " << buffer << "\n";
+
+    if (isError)
+        numErrors++;
+    else
+        numWarnings++;
 }
 
 
@@ -418,7 +448,7 @@ errormsg(const char *fmt, ...)
 
     va_list ap;
     va_start(ap, fmt);
-    diagnoseVa("error", s, fmt, ap);
+    diagnoseVa(true, s, fmt, ap);
     va_end(ap);
 }
 
@@ -428,7 +458,7 @@ errormsgEx(const string &explicitLineNo, const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    diagnoseVa("error", explicitLineNo, fmt, ap);
+    diagnoseVa(true, explicitLineNo, fmt, ap);
     va_end(ap);
 }
 
@@ -441,7 +471,7 @@ errormsgEx(const std::string &sourceFilename, int lineno, const char *fmt, ...)
 
     va_list ap;
     va_start(ap, fmt);
-    diagnoseVa("error", s, fmt, ap);
+    diagnoseVa(true, s, fmt, ap);
     va_end(ap);
 }
 
@@ -457,7 +487,7 @@ warnmsg(const char *fmt, ...)
 
     va_list ap;
     va_start(ap, fmt);
-    diagnoseVa("warning", s, fmt, ap);
+    diagnoseVa(false, s, fmt, ap);
     va_end(ap);
 }
 

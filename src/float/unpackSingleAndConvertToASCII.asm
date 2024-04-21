@@ -6,7 +6,8 @@ unpackSingleAndConvertToASCII EXPORT
 
 
 ; Input: X => Packed single-precision float.
-; Trashes B, X.
+;        U => Address of a 38-byte buffer that receives an ASCIIZ.
+; Trashes D, X.
 ; Preserves U.
 ;
 unpackSingleAndConvertToASCII

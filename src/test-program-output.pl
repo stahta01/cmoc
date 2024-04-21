@@ -141,6 +141,7 @@ expected => (((1000 % 256) + 1000) % 256) . "\n42\n214\n8\n"
 
 {
 title => q{Shifts},
+compilerOptions => "-Wno-shift-always-zero",
 program => '
     void checkLeftConst();
     void checkLeftVar();
@@ -890,10 +891,11 @@ program => '
     void check(char *buffer)
     {
         buffer[0] = 42;
-        memcpy(buffer, "____", 0);  // must do nothing
+        void *out = memcpy(buffer, "____", 0);  // must do nothing
+        assert_eq(out, buffer);
         assert_eq(buffer[0], 42);
 
-        void *out = memcpy(buffer, "foobar", 7);
+        out = memcpy(buffer, "foobar", 7);
         assert_eq(out, buffer);
         assert_eq(strcmp(buffer, "foobar"), 0);
     }
@@ -1064,23 +1066,27 @@ program => q{
         strcat(buffer, "quux");
         assert_eq(strlen(buffer), 4);
         
-        strncpy(buffer, "foo", BUFSIZ);
+        out = strncpy(buffer, "foo", BUFSIZ);
+        assert_eq(out, buffer);
         assert(!strcmp(buffer, "foo"));
         for (char i = 3; i < BUFSIZ; ++i)
             assert_eq(buffer[i], 0);
         
-        strncpy(buffer, "abcdefghij", BUFSIZ);
+        out = strncpy(buffer, "abcdefghij", BUFSIZ);
+        assert_eq(out, buffer);
         assert(!strcmp(buffer, "abcdefghij"));
 
-        strncpy(buffer, "Now is the time", 3);
-        assert_eq(buffer[0], 'N');
-        assert_eq(buffer[1], 'o');
-        assert_eq(buffer[2], 'w');
+        out = (char *) memset(buffer, 'X', BUFSIZ);
+        assert_eq(out, buffer);
+        out = strncpy(buffer, "Now is the time", 3);  // source string longer than destination
+        assert_eq(out, buffer);
+        assert_eq(memcmp(buffer, "NowXXXXXXXX", BUFSIZ), 0);
 
-        strncpy(buffer, "ABCDEFGHIJKLMNOP", BUFSIZ);
+        out = strncpy(buffer, "ABCDEFGHIJKLMNOP", BUFSIZ);
+        assert_eq(out, buffer);
         assert_eq(buffer[BUFSIZ - 1], 'K');
         buffer[BUFSIZ - 1] = 0;
-        assert(!strcmp(buffer, "ABCDEFGHIJ"));
+        assert_eq(strcmp(buffer, "ABCDEFGHIJ"), 0);
     }
 
     int main()
@@ -1112,6 +1118,32 @@ program => q!
         const char *empty = "";
         assert_eq(strchr(empty, 0), empty);
         assert_eq(strchr(empty, '_'), 0);
+        const char *s1 = "abXcdXefXgh";
+        assert_eq(strchr(s1, 'X'), s1 + 2);
+        return 0;
+    }
+    !,
+expected => ""
+},
+
+
+{
+title => q{strrchr()},
+program => q!
+    int main()
+    {
+        const char *s0 = "foobar";
+        char *foundAt = strrchr(s0, 'b');
+        assert_eq(foundAt, s0 + 3);
+        assert_eq(strrchr(s0, 'f'), s0);
+        assert_eq(strrchr(s0, 'o'), s0 + 2);
+        assert_eq(strrchr(s0, '_'), 0);
+        assert_eq(strrchr(s0, 0), s0 + 6);
+        const char *empty = "";
+        assert_eq(strrchr(empty, 0), empty);
+        assert_eq(strrchr(empty, '_'), 0);
+        const char *s1 = "abXcdXefXgh";
+        assert_eq(strrchr(s1, 'X'), s1 + 8);
         return 0;
     }
     !,
@@ -1216,28 +1248,41 @@ expected => ""
 {
 title => q{char *strlwr(char *)},
 program => q!
-    char globalBuffer[7];
+    char globalBuffer[64];
 
     void check(char *buffer)
     {
-        strcpy(buffer, "");
-        strlwr(buffer);
+        char *ret = strcpy(buffer, "");
+        assert_eq(ret, buffer);
+        ret = strlwr(buffer);
+        assert_eq(ret, buffer);
         assert_eq(strlen(buffer), 0);
 
-        strcpy(buffer, "FOOBAR");
-        strlwr(buffer);
+        ret = strcpy(buffer, "FOOBAR");
+        assert_eq(ret, buffer);
+        ret = strlwr(buffer);
+        assert_eq(ret, buffer);
         assert_eq(strlen(buffer), 6);
         assert_eq(strcmp(buffer, "foobar"), 0);
 
-        strcpy(buffer, "foobar");
-        strlwr(buffer);
+        ret = strcpy(buffer, "foobar");
+        assert_eq(ret, buffer);
+        ret = strlwr(buffer);
+        assert_eq(ret, buffer);
         assert_eq(strlen(buffer), 6);
         assert_eq(strcmp(buffer, "foobar"), 0);
+
+        ret = strcpy(buffer, "FOO-BAR.");
+        assert_eq(ret, buffer);
+        ret = strlwr(buffer);
+        assert_eq(ret, buffer);
+        assert_eq(strlen(buffer), 8);
+        assert_eq(strcmp(buffer, "foo-bar."), 0);
     }
 
     int main()
     {
-        char localBuffer[7];
+        char localBuffer[64];
         check(localBuffer);
         check(globalBuffer);
         check(localBuffer);
@@ -1252,28 +1297,41 @@ expected => ""
 {
 title => q{char *strupr(char *)},
 program => q!
-    char globalBuffer[7];
+    char globalBuffer[9];
 
     void check(char *buffer)
     {
-        strcpy(buffer, "");
-        strupr(buffer);
+        char *ret = strcpy(buffer, "");
+        assert_eq(ret, buffer);
+        ret = strupr(buffer);
+        assert_eq(ret, buffer);
         assert_eq(strlen(buffer), 0);
 
-        strcpy(buffer, "FOOBAR");
-        strupr(buffer);
+        ret = strcpy(buffer, "FOOBAR");
+        assert_eq(ret, buffer);
+        ret = strupr(buffer);
+        assert_eq(ret, buffer);
         assert_eq(strlen(buffer), 6);
         assert_eq(strcmp(buffer, "FOOBAR"), 0);
 
-        strcpy(buffer, "foobar");
-        strupr(buffer);
+        ret = strcpy(buffer, "foobar");
+        assert_eq(ret, buffer);
+        ret = strupr(buffer);
+        assert_eq(ret, buffer);
         assert_eq(strlen(buffer), 6);
         assert_eq(strcmp(buffer, "FOOBAR"), 0);
+
+        ret = strcpy(buffer, "foo-bar.");
+        assert_eq(ret, buffer);
+        ret = strupr(buffer);
+        assert_eq(ret, buffer);
+        assert_eq(strlen(buffer), 8);
+        assert_eq(strcmp(buffer, "FOO-BAR."), 0);
     }
  
     int main()
     {
-        char localBuffer[7];
+        char localBuffer[9];
         check(localBuffer);
         check(globalBuffer);
         return 0;
@@ -1700,22 +1758,25 @@ title => q{sqrt16()},
 program => q`
     int main()
     {
-        for (byte i = 0; ; ++i)
+        // Test all possible arguments of sqrt16().
+        byte expectedRoot = (byte) 0;
+        for (word x = 0; ; ++x)
         {
-            word square = (word) i * i;
-            assert_eq(sqrt16(square), i);
-            if (i > 0)
+            //printf("x=%u\n", x);
+            byte root = sqrt16(x);
+            //printf("sqrt16(%u) gives %u, expecting %u\n", x, root, expectedRoot);
+            assert_eq(root, expectedRoot);
+            if (x == 65535)
+                break;
+            if (root < 255)
             {
-                assert_eq(sqrt16(square + 1), i);
-                assert_eq(sqrt16(square + 2), i);
-                if (i < 255)
+                byte t = root + 1;
+                if ((word) t * t == x + 1)
                 {
-                    word nextSquare = (word) (i + 1) * (i + 1);
-                    assert_eq(sqrt16(nextSquare - 1), i);
+                    ++expectedRoot;
+                    //printf("expectedRoot now %u\n", expectedRoot);
                 }
             }
-            if (i == 255)
-                break;
         }
         return 0;
     }
@@ -5675,6 +5736,8 @@ program => q`
         FuncPtr finalAddr = 0x0212;
         finalAddr += 0xFEFA;
         assert_eq(finalAddr, 0x010C);
+        finalAddr -= 0x1111;
+        assert_eq(finalAddr, 0xEFFB);
 
         finalAddr = 0x0212;
         finalAddr += origISR + 3;
@@ -5685,17 +5748,17 @@ program => q`
         assert_eq(finalAddr, 0x0109);
 
         finalAddr = 0x0212;
-	origISR = 0x0101;
+        origISR = 0x0101;
         finalAddr -= origISR;
         assert_eq(finalAddr, 0x0111);
 
         finalAddr = 0x0212;
-	origISR = 3;
+        origISR = 3;
         finalAddr *= origISR;
         assert_eq(finalAddr, 0x0636);
 
         finalAddr = 0x0212;
-	origISR = 2;
+        origISR = 2;
         finalAddr /= origISR;
         assert_eq(finalAddr, 0x0109);
 
@@ -5768,7 +5831,7 @@ expected => ""
 
 
 {
-title => q{global array of const arrays with --no-relocate},
+title => q{Global array of const arrays with --no-relocate},
 compilerOptions => "--org=5C00 --data=4F00 --no-relocate",
 program => q`
     const unsigned char byteArray0[] = { 99, 88, 77, 66 };
@@ -5800,7 +5863,7 @@ expected => ""
 
 
 {
-title => q{global array of const arrays without --no-relocate},
+title => q{Global array of const arrays without --no-relocate},
 compilerOptions => "--org=5C00 --data=4F00",  # not passing --no-relocate
 program => q`
     const unsigned char byteArray0[] = { 99, 88, 77, 66 };
@@ -8342,6 +8405,7 @@ expected => ""
 
 {
 title => q{Assignment operators on a struct field},
+compilerOptions => "-Wno-shift-always-zero",
 program => q`
     typedef struct {
         int _dummy, value;
@@ -8623,6 +8687,7 @@ expected => "main\nsomeFunction\n\n\n"
 
 {
 title => q{Optimizer bug in ASMText::removeAndOrMulAddSub()},
+compilerOptions => "-Wno-shift-always-zero",
 program => q`
     unsigned char a[] = { 11, 22, 33 };
     int main()
@@ -9062,17 +9127,11 @@ expected => ""
 
 
 {
-title => q{const and volatile keywords accepted but ignored},
+title => q{volatile keyword accepted but ignored},
 tolerateWarnings => 1,
 program => q`
     int main()
     {
-        const int c = 0;
-        c = 999;
-        assert_eq(c, 999);
-        const char *s = "foo";
-        *s = 'g';
-        assert(!strcmp(s, "goo"));
         volatile int v = -1000;
         assert_eq(v, -1000);
         return 0;
@@ -9536,6 +9595,7 @@ program => q`
         NULL,
         (void *) 1000,
         (int) 2000UL,
+        (char) 127,
     };
     int *f() { return NULL; }
     int main()
@@ -9561,6 +9621,7 @@ program => q`
         assert_eq(intArray[0], (int *) 0);
         assert_eq(intArray[1], (int *) 1000);
         assert_eq(intArray[2], (int *) 2000);
+        assert_eq(intArray[3], (int *) 127);
         return 0;
     }
     `,
@@ -10707,7 +10768,49 @@ program => q`
     `,
 expected => ""
 },
-    
+   
+
+{
+title => q{Returning an int from a function that returns a long},
+program => q`
+    long returnIntForLong(void)
+    {
+        return -30000;
+    }
+    unsigned long returnIntForULong(void)
+    {
+        return -30000;
+    }
+    long returnUIntForLong(void)
+    {
+        return 60000;
+    }
+    unsigned long returnUIntForULong(void)
+    {
+        return 60000;
+    }
+    long returnULongForLong(void)
+    {
+        return 4000000000UL;
+    }
+    unsigned long returnLongForULong(void)
+    {
+        return -2000000000L;
+    }
+    int main()
+    {
+        assert(returnIntForLong() == -30000L);
+        assert(returnIntForULong() == 4294937296UL);
+        assert(returnUIntForLong() == 60000L);
+        assert(returnUIntForULong() == 60000UL);
+        assert(returnULongForLong() == -294967296L);
+        assert(returnLongForULong() == 2294967296UL);
+        return 0;
+    }
+    `,
+expected => ""
+},
+
 
 {
 title => q{Casting a long to a pointer},
@@ -11273,25 +11376,29 @@ program => q`
     {
         char a, b[11];
     };
-    char memcpyCalled = '0', sizeReceived = '0';
+    char memcpyCalled = 0, sizeReceived = 0;
     int main()
     {
-        struct S x, y;
-        x.a = 'X';
-        y.a = 'Y';
-        x = y;  // local memcpy() used here; it does not copy, so x stays the same
-        * (char *) 0xFF00 = x.a;  // supposed to print 'X' to stdout under USim
-        * (char *) 0xFF00 = sizeReceived;  // supposed to print 'L', i.e., '@' + 12
+        unsigned int x = 0x4142, y = 0x4344;
+        memcpy(&x, &y, sizeof(y));  // local memcpy() used here; it does not copy, so x stays the same
+
+        // Test with direct prints to stdout because assert_eq() would use printf(),
+        // which is not available because of -nodefaultlibs.
+        * (char *) 0xFF00 = (char) (x >> 8);     // supposed to print 'A' (0x41) to stdout under USim
+        * (char *) 0xFF00 = (char) x;            // supposed to print 'B' (0x42)
+        * (char *) 0xFF00 = '0' + memcpyCalled;  // supposed to print '1'
+        * (char *) 0xFF00 = '0' + sizeReceived;  // supposed to print '2', i.e., '0' + sizeof(y)
         * (char *) 0xFF00 = '\n';
         return 0;
     }
     void *memcpy(void *dst, const void *src, size_t size)
     {
-        sizeReceived = '@' + (char) size;
+        memcpyCalled = 1;
+        sizeReceived = (char) size;
         return 0;
     }
     `,
-expected => "XL\n"
+expected => "AB12\n"
 },
 
 
@@ -12912,6 +13019,687 @@ expected => ""
 },
 
 
+{
+title => q{isspace()},
+program => q`
+    int main()
+    {
+        for (int c = -5; c <= 260; ++c)
+        {
+            int result = isspace(c);
+            //printf("c=%d, result=%d\n", c, result);
+            switch (c)
+            {
+                case ' ':
+                case '\r':
+                case '\n':
+                case '\t':
+                case '\f':
+                case '\v':
+                    assert_eq(result, 1);
+                    break;
+                default:
+                    assert_eq(result, 0);
+            }
+        }
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{Initializer of array of pointers in non-relocatable code},
+compilerOptions => "--no-relocate",
+program => q`
+    int b[4] = { 1000, 1001, 1002, 1003 };
+    int c[4] = { 2000, 2001, 2002, 2003 };
+    int *a[] = { b, c };  // expected to be initialized with FDB _b and FDB _c instead of LEAX+STX.
+    int main()
+    {
+        assert_eq(sizeof(a), 4);
+        assert_eq(sizeof(b), 8);
+        assert_eq(a[0][0], 1000);
+        assert_eq(a[0][1], 1001);
+        assert_eq(a[0][2], 1002);
+        assert_eq(a[0][3], 1003);
+        assert_eq(a[1][0], 2000);
+        assert_eq(a[1][1], 2001);
+        assert_eq(a[1][2], 2002);
+        assert_eq(a[1][3], 2003);
+
+        // Check that no initialization code was emitted for global variables.
+        // This proves that no LEAX or STX instructions were emitted as they would be
+        // without --no-relocate.
+        //
+        size_t l_initgl = 0xBEEF;
+        asm
+        {
+l_initgl IMPORT
+            ldd     #l_initgl       ; length of the "initgl" code segment emitted by CMOC
+            std     :l_initgl
+        }
+        assert_eq(l_initgl, 0);
+
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{Verbatim assembly at global scope},
+program => q`
+    void func0() {}
+
+    int g0;
+
+    asm
+    {
+asm0:
+        ldd     #1000
+        std     :g0
+        rts
+    }
+
+    void *g1;
+
+    asm
+    {
+asm1:
+        leax    func0       ; ref to C func becomes <symbol>,pcr
+        stx     :g1
+        rts
+alias_for_main:
+    }
+
+    int main()
+    {
+        assert_eq(g0, 0);
+        assert_eq(g1, NULL);
+
+        asm
+        {
+            lbsr    asm0
+        }
+
+        assert_eq(g0, 1000);
+        assert_eq(g1, NULL);
+
+        asm
+        {
+            lbsr    asm1
+        }
+
+        assert_eq(g0, 1000);
+        assert_eq(g1, func0);
+
+        // Check that addresses of asm0, asm1 and main are in order.
+        // This checks that the asm{} blocks before a function are emitted
+        // before that function.
+        void *a0, *a1;
+        asm
+        {
+            leax    asm0,pcr
+            stx     :a0
+            leax    asm1,pcr
+            stx     :a1
+        }
+        assert(a0 < a1);
+        assert(a1 < main);
+
+        void *alias, *late;
+        asm
+        {
+            leax    alias_for_main,pcr
+            stx     :alias
+            leax    late_label,pcr
+            stx     :late
+        }
+        assert_eq(alias, main);
+        assert(main < late);
+
+        //printf("%p %p %p %p\n", a0, a1, main, late);
+        return 0;
+    }
+
+    asm
+    {
+late_label:
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{Allowed to assign to a non-const struct through a const pointer},
+program => q`
+    struct A
+    {
+        int x;
+    };
+    int main()
+    {
+        struct A instance;
+        struct A * const p = &instance;
+        p->x = 3;
+        assert_eq(instance.x, 3);
+        p->x++;
+        (p->x)++;
+        assert_eq(instance.x, 5);
+        ++p->x;
+        ++(p->x);
+        assert_eq(instance.x, 7);
+        --p->x;
+        --(p->x);
+        assert_eq(instance.x, 5);
+        p->x--;
+        (p->x)--;
+        assert_eq(instance.x, 3);
+        //printf("instance.x=%d\n", instance.x);
+
+        int n = 5000;
+        int * const pi = &n;
+        assert_eq(*pi, 5000);
+        *pi = 6000;
+        assert_eq(*pi, 6000);
+        ++*pi;
+        ++(*pi);
+        assert_eq(*pi, 6002);
+        --*pi;
+        --(*pi);
+        assert_eq(*pi, 6000);
+        (*pi)++;
+        assert_eq(*pi, 6001);
+        (*pi)--;
+        assert_eq(*pi, 6000);
+
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{String literal cast to character pointer can be part of constant initializer},
+program => q`
+    typedef unsigned char u8;
+
+    unsigned char *ua[] =
+    {
+        (unsigned char *) "foo",
+        (unsigned char *) "bar"
+    };
+    char *sa[] =
+    {
+        (char *) "baz",
+        (char *) "quux"
+    };
+    u8 *tua[] =
+    {
+        (u8 *) "waldo",
+        (u8 *) "garply"
+    };
+
+    static unsigned char *sua[] =
+    {
+        (unsigned char *) "foo",
+        (unsigned char *) "bar"
+    };
+    static char *ssa[] =
+    {
+        (char *) "baz",
+        (char *) "quux"
+    };
+    static u8 *stua[] =
+    {
+        (u8 *) "waldo",
+        (u8 *) "garply"
+    };
+
+    int main()  // test static and non-static cases, global and local
+    {
+        assert_eq(strcmp((char *) ua[0], "foo"), 0);
+        assert_eq(strcmp((char *) ua[1], "bar"), 0);
+        assert_eq(strcmp(sa[0], "baz"), 0);
+        assert_eq(strcmp(sa[1], "quux"), 0);
+        assert_eq(strcmp((char *) tua[0], "waldo"), 0);
+        assert_eq(strcmp((char *) tua[1], "garply"), 0);
+
+        assert_eq(strcmp((char *) sua[0], "foo"), 0);
+        assert_eq(strcmp((char *) sua[1], "bar"), 0);
+        assert_eq(strcmp(ssa[0], "baz"), 0);
+        assert_eq(strcmp(ssa[1], "quux"), 0);
+        assert_eq(strcmp((char *) stua[0], "waldo"), 0);
+        assert_eq(strcmp((char *) stua[1], "garply"), 0);
+
+        unsigned char *s0 = (unsigned char *) "aaaaa";
+        assert_eq(strcmp((char *) s0, "aaaaa"), 0);
+
+        static unsigned char *s1 = (unsigned char *) "bbbbb";
+        assert_eq(strcmp((char *) s1, "bbbbb"), 0);
+
+        char *s2 = (char *) "ccccc";
+        assert_eq(strcmp(s2, "ccccc"), 0);
+
+        static char *s3 = (char *) "ddddd";
+        assert_eq(strcmp(s3, "ddddd"), 0);
+
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{16-bit constant cast to long can be part of constant initializer for long variable},
+program => q`
+    long gl0 = (long) 0;
+    static long gl1 = (long) 0;
+    long gl2 = (long) -12003;
+    static long gl3 = (long) -12003;
+    long gl4 = (long) 24777;
+    static long gl5 = (long) 24777;
+
+    int main()  // test static and non-static cases, global and local
+    {
+        assert(!gl0);
+        assert(!gl1);
+        assert(gl2 == -12003L);
+        assert(gl3 == -12003L);
+        assert(gl4 == 24777);
+        assert(gl5 == 24777);
+
+        {
+            long l0 = (long) 0;
+            assert(!l0);
+            static long l1 = (long) 0;
+            assert(!l1);
+            long l2 = (long) -12003;
+            assert(l2 == -12003L);
+            static long l3 = (long) -12003;
+            assert(l3 == -12003L);
+            long l4 = (long) 24777;
+            assert(l4 == 24777);
+            static long l5 = (long) 24777;
+            assert(l5 == 24777);
+        }
+
+        {
+            unsigned long ul0 = (unsigned long) 0;
+            assert(!ul0);
+            static unsigned long ul1 = (unsigned long) 0;
+            assert(!ul1);
+            unsigned long ul2 = (unsigned long) -12003;
+            assert(ul2 == 0xffffd11dUL);
+            static unsigned long ul3 = (unsigned long) -12003;
+            assert(ul3 == 0xffffd11dUL);
+            unsigned long ul4 = (unsigned long) 24777;
+            assert(ul4 == 24777);
+            static unsigned long ul5 = (unsigned long) 24777;
+            assert(ul5 == 24777);
+        }
+
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{Pointer-to-array variable that is not a function parameter},
+program => q`
+    // From B.P.
+    enum { SPM_MAX_SPRITES = 20 };
+    typedef long spm_sprite;
+    static const spm_sprite y_endlists[4][SPM_MAX_SPRITES] =
+            {{15, 11, 17, 18, 13, 19, 14, 12, 9, 2, 3, 16, 1, 7, 10, 6, 5, 8, 100, 4},
+            {15, 11, 3, 14, 18, 9, 17, 13, 19, 12, 6, 2, 16, 1, 110, 7, 10, 5, 8, 4},
+            {15, 11, 2, 17, 18, 13, 19, 14, 12, 9, 3, 16, 1, 7, 10, 6, 5, 8, 120, 4},
+            {15, 11, 17, 18, 13, 19, 14, 12, 9, 2, 3, 1, 16, 7, 10, 6, 5, 8, 130, 4}};
+    typedef const spm_sprite ArrayType[SPM_MAX_SPRITES];
+    static ArrayType * const y_endl = y_endlists;  // not an array, but a pointer to an array
+
+    int main()
+    {
+        assert(sizeof(y_endl) == sizeof(void *));
+        assert(sizeof(*y_endl) == SPM_MAX_SPRITES * sizeof(spm_sprite));
+
+        assert(y_endlists != NULL);
+        assert(y_endl != NULL);
+        assert(*y_endl != NULL);
+
+        size_t numElements = sizeof(y_endlists) / sizeof(y_endlists[0][0]);
+        assert(numElements == 4 * SPM_MAX_SPRITES);
+        assert((void *) y_endl == (void *) *y_endl);
+        assert(y_endl == y_endlists);
+        assert((void *) &y_endl != (void *) y_endlists);
+        assert(&(*y_endl)[0] == *y_endl);
+        assert((void *) &(*y_endl)[0] == (void *) y_endl);
+
+        // Check some of the integers in the matrix, via y_endl.
+        assert((*y_endl)[0] == 15);
+        assert((*y_endl)[1] == 11);
+        assert((*y_endl)[78] == 130);
+        assert((*y_endl)[79] == 4);
+
+        // Check the sum.
+        long sum = 0;
+        for (size_t i = 0; i < numElements; ++i)
+        {
+            assert((*y_endl)[i] > 0);
+            assert((*y_endl)[i] <= 130);
+            sum += (*y_endl)[i];
+        }
+        assert(sum == 1220);
+
+        // y_endl[i] is a 20-element span. Check that for all i, the addresses are at the right byte offset.
+        for (size_t i = 0; i < SPM_MAX_SPRITES; ++i)
+        {
+            size_t distanceInElements = y_endl[i] - y_endl[0];
+            size_t distanceInBytes = (char *) y_endl[i] - (char *) y_endl[0];
+            assert(distanceInElements == i * SPM_MAX_SPRITES);
+            assert(distanceInBytes == i * SPM_MAX_SPRITES * sizeof(spm_sprite));
+        }
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{Accessing element of array using index variable, when elements of array are large},
+program => q`
+    struct Large
+    {
+        char a[300];
+    };
+    int main()
+    {
+        struct Large v[2];
+        unsigned index = 1;
+        asm { nop }  // prevent optimizer from removing 'index' variable
+        //printf("%p %p %u\n", &v[0], &v[index], (char *) &v[index] - (char *) v);
+        assert_eq((char *) &v[index] - (char *) v, 300);
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{Struct with final member of type array of variable size},
+compilerOptions => "-Wno-unknown-first-dim -Wno-too-many-elements",
+program => q`
+    struct B
+    {
+        byte w;
+        byte h;
+        byte p[];
+    };
+    struct B b0 = { 1, 2, { 'f', 'o', 'o', 'b', 'a', 'r' } };
+    int main()
+    {
+        assert_eq(b0.w, 1);
+        assert_eq(b0.h, 2);
+        assert_eq(memcmp(b0.p, "foobar", 6), 0);
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{Empty enum},
+program => q`
+    enum {};
+    enum Foo {};
+    int main()
+    {
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{-Wno-label-on-declaration},
+compilerOptions => "-Wno-label-on-declaration",
+program => q`
+    int f() { return 42; }
+    int main()
+    {
+        switch (f())
+        {
+            case 0:
+                int n = 0;
+                break;
+            case 1:
+                f();
+                break;
+        }
+    L0:
+        int m = 0;
+    L1:
+        m++;
+        assert_eq(m, 1);
+        return 0;
+    }
+   `,
+expected => ""
+},
+
+
+{
+title => q{No warning and correct product on enum times sizeof despite -Wgives-byte},
+compilerOptions => "-Wgives-byte",
+program => q`
+    enum { N = 100 };
+    struct S { char s[4]; };
+    int main()
+    {
+        unsigned p = N * sizeof(struct S);
+        assert_eq(p, 400);
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{Array reference plus long index},
+tolerateWarnings => 1,  # re: "array index is 32 bits (only low 16 bits used)"
+program => q`
+    int main()
+    {
+        unsigned long index = 3;
+
+        char ca[4] = { 'A', 'B', 'C', 'D' };
+        assert_eq(*(ca + index), 'D');
+        assert_eq(*(index + ca), 'D');
+
+        int ia[4] = { 1000, 2000, 3000, 4000 };
+        assert_eq(*(ia + index), 4000);
+        assert_eq(*(index + ia), 4000);
+
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{removePushBPullABeforeMul optimization (see ASMText.cpp)},
+program => q`
+    int main()
+    {
+        unsigned char a[] = { 9, 8, 7, 6 };
+        const unsigned char *p = a;
+        unsigned e = (((unsigned) p[0] * 125u) << 3) + (int) p[1] * 100u + p[2] * 10u + p[3];
+        assert_eq(e, 9876);
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{strspn()},
+program => q`
+    int main()
+    {
+        assert_eq(strspn("foobar", "fo"), 3);
+        assert_eq(strspn("foobar", "xy"), 0);
+        assert_eq(strspn("foobar", "f"), 1);
+        assert_eq(strspn("foobar", "o"), 0);
+        assert_eq(strspn("foobar", "of"), 3);
+        assert_eq(strspn("foobar", "xf"), 1);
+        assert_eq(strspn("foobar", ""), 0);
+        assert_eq(strspn("", "fo"), 0);
+        assert_eq(strspn("", ""), 0);
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{strcspn()},
+program => q`
+    int main()
+    {
+        assert_eq(strcspn("foobar", "fo"), 0);
+        assert_eq(strcspn("foobar", "ba"), 3);
+        assert_eq(strcspn("foobar", "xy"), 6);
+        assert_eq(strcspn("foobar", "f"), 0);
+        assert_eq(strcspn("foobar", "o"), 1);
+        assert_eq(strcspn("foobar", "of"), 0);
+        assert_eq(strcspn("foobar", "xf"), 0);
+        assert_eq(strcspn("foobar", ""), 6);
+        assert_eq(strcspn("", "fo"), 0);
+        assert_eq(strcspn("", ""), 0);
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{strtok()},
+program => q`
+    int main()
+    {
+        char buf[64];
+        const char *t;
+
+        strcpy(buf, "foo,bar,baz");
+        
+        t = strtok(buf,  ",");
+        assert_str_eq(t, "foo");
+        t = strtok(NULL, ",");
+        assert_str_eq(t, "bar");
+        t = strtok(NULL, ",");
+        assert_str_eq(t, "baz");
+        t = strtok(NULL, ",");
+        assert_eq(t, NULL);
+
+        // Same, with varying delimiter.
+        strcpy(buf, "foo,bar;baz:");
+        
+        t = strtok(buf,  ",");
+        assert_str_eq(t, "foo");
+        t = strtok(NULL, ";");
+        assert_str_eq(t, "bar");
+        t = strtok(NULL, ":");
+        assert_str_eq(t, "baz");
+        t = strtok(NULL, ":");
+        assert_eq(t, NULL);
+
+        // Leading and trailing delimiters.
+        strcpy(buf, ",Foo,Bar,Baz,");
+        
+        t = strtok(buf,  ",");
+        assert_str_eq(t, "Foo");
+        t = strtok(NULL, ",");
+        assert_str_eq(t, "Bar");
+        t = strtok(NULL, ",");
+        assert_str_eq(t, "Baz");
+        t = strtok(NULL, ",");
+        assert_eq(t, NULL);
+
+        // No delimiters.
+        strcpy(buf, "");
+        t = strtok(buf, ",");
+        assert_eq(t, NULL);
+
+        // More than one delimiter.
+        strcpy(buf, "foo,bar;baz:");
+        
+        t = strtok(buf,  ";:,");
+        assert_str_eq(t, "foo");
+        t = strtok(NULL, ";:,");
+        assert_str_eq(t, "bar");
+        t = strtok(NULL, ";:,");
+        assert_str_eq(t, "baz");
+        t = strtok(NULL, ";:,");
+        assert_eq(t, NULL);
+
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
+{
+title => q{strpbrk()},
+program => q`
+    int main()
+    {
+        const char *s;
+
+        s = "foobar";
+        assert_eq(strpbrk(s, "f"), s);
+        assert_eq(strpbrk(s, "fo"), s);
+        assert_eq(strpbrk(s, "of"), s);
+        assert_eq(strpbrk(s, "o"), s + 1);
+        assert_eq(strpbrk(s, "b"), s + 3);
+        assert_eq(strpbrk(s, "arb"), s + 3);
+        assert_eq(strpbrk(s, "ar"), s + 4);
+        assert_eq(strpbrk(s, "ra"), s + 4);
+        assert_eq(strpbrk(s, "r"), s + 5);
+        assert_eq(strpbrk(s, "rxy"), s + 5);
+        assert_eq(strpbrk(s, "xyr"), s + 5);
+        assert_eq(strpbrk(s, "F"), NULL);
+        assert_eq(strpbrk(s, "x"), NULL);
+        assert_eq(strpbrk(s, "xy"), NULL);
+        assert_eq(strpbrk(s, ""), NULL);
+
+        assert_eq(strpbrk("", ""), NULL);
+        assert_eq(strpbrk("", "x"), NULL);
+
+        return 0;
+    }
+    `,
+expected => ""
+},
+
+
 #{
 #title => q{Sample test},
 #program => q`
@@ -12985,6 +13773,8 @@ if (!GetOptions(
 
 usage(0) if $helpWanted;
 
+my @origArgs = @ARGV;
+
 if (defined $titleDumpWanted)
 {
     my $testIndex = 0;
@@ -13034,8 +13824,8 @@ if (defined $onlyArg)  # --only=#,#,#
             my $raMatches = findMatchingTestNumbers($n);
             if (@$raMatches == 0)
             {
-                print "Invalid test number '$n'\n\n";
-                usage(1);
+                print "Invalid test number '$n'\n";
+                exit 1;
             }
 
             # If $n matches more than one test title, list matches and fail.
@@ -13046,8 +13836,7 @@ if (defined $onlyArg)  # --only=#,#,#
                 {
                     printf("%4u  %s\n", $match->{num}, $match->{title});
                 }
-                print "\n";
-                usage(1);
+                exit 1;
             }
 
             # Only one match: take the test number and continue.
@@ -13325,6 +14114,11 @@ do { if ((actual) == (expected)) \\
 do { if ((actual) < (expectedMin) && (actual) > (expectedMax)) \\
          printf("ERROR: assert_range failed: line %d: out of range: got %u (\$%x), expected %u..%u (\$%x..\$%x)\\n", \\
                 __LINE__, (word) (actual), (word) (actual), (word) (expectedMin), (word) (expectedMax), (word) (expectedMin), (word) (expectedMax)); \\
+   } while (0)
+#define assert_str_eq(actual, expected) \\
+do { if (strcmp((actual), (expected)) != 0) \\
+         printf("ERROR: assert_str_eq failed: line %d: should be equal: got \\"%s\\", expected \\"%s\\"\\n", \\
+                __LINE__, (actual), (expected)); \\
    } while (0)
 __EOF__
 
@@ -13620,6 +14414,7 @@ else
         print "$0: ", scalar(@failedTestNumbers), " tests (#",
               join(", #", @failedTestNumbers),
               ") failed out of ", scalar(@testNumbers), "\n";
+        print "Command-line options were: @origArgs\n";
         exit 1;
     }
 

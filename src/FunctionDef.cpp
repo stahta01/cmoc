@@ -1,4 +1,4 @@
-/*  $Id: FunctionDef.cpp,v 1.75 2022/08/12 03:44:18 sarrazip Exp $
+/*  $Id: FunctionDef.cpp,v 1.82 2024/02/25 19:58:21 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -56,7 +56,7 @@ class Tracer : public Tree::Functor
 public:
     Tracer() : trace(cerr), ind() {}
     virtual ~Tracer() {}
-    virtual bool open(Tree *t)
+    virtual bool open(Tree *t) override
     {
         assert(t != NULL);
         t->pushScopeIfExists();
@@ -90,7 +90,7 @@ public:
             trace << ind << "function call: " << fce->isCallThroughPointer() << ", " << fce->getIdentifier() << "()\n";
         return true;
     }
-    virtual bool close(Tree *t)
+    virtual bool close(Tree *t) override
     {
         t->popScopeIfExists();
         ind.erase(ind.length() - 2, 2);
@@ -119,7 +119,7 @@ public:
         lastClosedTrees[0] = lastClosedTrees[1] = NULL;
     }
     virtual ~ReturnStmtChecker() {}
-    virtual bool close(Tree *t)
+    virtual bool close(Tree *t) override
     {
         JumpStmt *jump = dynamic_cast<JumpStmt *>(t);
         if (jump && jump->getJumpType() == JumpStmt::RET)
@@ -152,7 +152,7 @@ public:
     IDLabeledStatementChecker() : seenIDs() {}
 
     // Processing done in open() instead of close() so that the statements are seen in text order.
-    virtual bool open(Tree *t)
+    virtual bool open(Tree *t) override
     {
         if (const LabeledStmt *ls = dynamic_cast<LabeledStmt *>(t))
         {
@@ -177,12 +177,19 @@ private:
 ///////////////////////////////////////////////////////////////////////////////
 
 
+string
+FunctionDef::makeLabelFromFunctionId(const string &id)
+{
+    return "_" + id;
+}
+
+
 FunctionDef::FunctionDef(const DeclarationSpecifierList *dsl,
                          Declarator &declarator)
   : Tree(),
     functionId(declarator.getId()),
     formalParamList(declarator.detachFormalParamList()),
-    functionLabel("_" + functionId),
+    functionLabel(makeLabelFromFunctionId(functionId)),
     endLabel(TranslationUnit::instance().generateLabel('L')),
     bodyStmts(NULL),
     formalParamDeclarations(),
@@ -624,6 +631,9 @@ FunctionDef::emitCode(ASMText &out, bool lValue) const
     out.emitFunctionStart(functionId, getLineNo());
     out.emitLabel(functionLabel);
 
+    if (hasInternalLinkage())  // emit an extra label to help avoid warnings on multiple defs of static symbols
+        out.emitLabel(".static.function." + functionId);
+
     if (isAssemblyOnly())
         out.emitComment("Assembly-only function.");
     else
@@ -713,7 +723,8 @@ FunctionDef::emitCode(ASMText &out, bool lValue) const
             ss << setw(8) << decl->getFrameDisplacementArg(0)
                << ": " << setw(4) << sizeInBytes << " byte" << (sizeInBytes == 1 ? " " : "s")
                << ": " << *it
-               << ": " << decl->getTypeDesc()->toString();
+               << ": " << decl->getTypeDesc()->toString()
+               << ": line " << decl->getIntLineNo();
             int16_t displacement = decl->getFrameDisplacement(0);
             (displacement >= 0 ? paramsMap : localsMap)[displacement] = ss.str();
         }
@@ -804,7 +815,7 @@ class IDLabeledStatementFinder : public Tree::Functor
 {
 public:
     IDLabeledStatementFinder(const string &_targetID) : foundAsmLabel(), targetID(_targetID) {}
-    virtual bool close(Tree *t)
+    virtual bool close(Tree *t) override
     {
         if (const LabeledStmt *ls = dynamic_cast<LabeledStmt *>(t))
         {

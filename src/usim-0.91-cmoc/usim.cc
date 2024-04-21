@@ -34,8 +34,7 @@ void USim::run(void)
 		execute();
 
 		double now = getCurrentTimeInMicroseconds();
-		if (now - timeOfLastIRQ >= 1000000 / 60 )  // 60 Hz IRQ
-		{
+		if (now - timeOfLastIRQ >= 1000000 / 60) {  // 60 Hz IRQ
 			trigger_irq();
 			timeOfLastIRQ = now;
 		}

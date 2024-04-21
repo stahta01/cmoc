@@ -1,4 +1,4 @@
-/*  $Id: IfStmt.cpp,v 1.14 2022/07/22 02:44:23 sarrazip Exp $
+/*  $Id: IfStmt.cpp,v 1.16 2023/06/03 16:43:53 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>

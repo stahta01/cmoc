@@ -1123,6 +1123,12 @@ void bitwiseOperators()
     ul0 &= 0xB00;
     assert(ul0 == 0xB00UL);
 
+    unsigned long ul1 = 0x41200000ul;
+    unsigned long ul2 = 0x007ffffful;
+    unsigned long ul3 = ul1 & ul2;
+    //printf("$%08lx & $%08lx -> $%08lx\n", ul1, ul2, ul3);
+    assert(ul3 == 0x00200000ul);
+
     ul0 = 0;
     assert((ul0 ^ 4UL) == 4);
     assert(ul0 == 0);

@@ -8,7 +8,7 @@ initSingleFromDWord	        IMPORT
 
 
 initSingleFromUnsignedDWord
-        andcc   #1
+        andcc   #$FE                    ; C=0 means unsigned
         lbra    initSingleFromDWord
 
 

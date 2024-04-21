@@ -10,7 +10,7 @@ _dwtoa          IMPORT
 ATOW            IMPORT
 _strlen         IMPORT
 unpackSingleAndConvertToASCII_hook IMPORT
-
+singlePrecisionSize IMPORT
 
 	SECTION code
 
@@ -148,7 +148,8 @@ PTF540	CMPA	#$63		%c?
 PTF550	CMPA	#$66		%f?
 	BNE	PTF555
 	LBSR	printReal
-	LEAU	PRINTF_FLOAT_SIZE,U	pass the float
+        LDA	singlePrecisionSize,pcr
+	LEAU	A,U		pass the float
 	LBRA	PTF010
 PTF555	CMPA	#'l		%lu, %ld or %lx?
 	LBNE	PTF559
@@ -587,7 +588,7 @@ printReal
 	LDX	4,U		; address of packed number (saved U)
 	PSHS	U		; save frame pointer
 	LEAU	-38,U		; address of ASCII buffer
-        JSR     [unpackSingleAndConvertToASCII_hook,pcr]        ; uses X and U, preserves U
+        JSR     [unpackSingleAndConvertToASCII_hook,pcr]        ; uses X and U
 	PULS	U
 
 	LEAX	-38,U		; address of ASCII buffer

@@ -1,4 +1,4 @@
-/*  $Id: BinaryOpExpr.h,v 1.54 2022/12/30 22:57:51 sarrazip Exp $
+/*  $Id: BinaryOpExpr.h,v 1.60 2024/02/25 19:58:21 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2020 Pierre Sarrazin <http://sarrazip.com/>
@@ -52,9 +52,9 @@ public:
 
     virtual ~BinaryOpExpr();
 
-    virtual void checkSemantics(Functor &f);
+    virtual void checkSemantics(Functor &f) override;
 
-    virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
+    virtual CodeStatus emitCode(ASMText &out, bool lValue) const override;
 
     Op getOperator() const;
 
@@ -78,11 +78,11 @@ public:
 
     static const char *getOperatorToken(Op op);
 
-    virtual bool iterate(Functor &f);
+    virtual bool iterate(Functor &f) override;
 
-    virtual void replaceChild(Tree *existingChild, Tree *newChild);
+    virtual void replaceChild(Tree *existingChild, Tree *newChild) override;
 
-    virtual bool isLValue() const { return oper == ASSIGNMENT || oper == INC_ASSIGN || oper == DEC_ASSIGN
+    virtual bool isLValue() const override { return oper == ASSIGNMENT || oper == INC_ASSIGN || oper == DEC_ASSIGN
                                         || oper == MUL_ASSIGN || oper == DIV_ASSIGN || oper == MOD_ASSIGN
                                         || oper == XOR_ASSIGN || oper == AND_ASSIGN || oper == OR_ASSIGN
                                         || oper == LEFT_ASSIGN || oper == RIGHT_ASSIGN
@@ -127,18 +127,19 @@ private:
     bool isRealAndLongOperation() const;
     CodeStatus emitRealOrLongOp(ASMText &out, const char *opName, bool pushAddressOfLeftOperand = false) const;
     CodeStatus emitSignedDivOrModOnLong(ASMText &out, bool isDivision) const;
-    CodeStatus emitAdd(ASMText &out, bool lValue, bool doSub) const;
+    CodeStatus emitAddOrSub(ASMText &out, bool lValue, bool doSub) const;
     CodeStatus emitMulDivMod(ASMText &out, bool lValue) const;
     bool emitMulOfTypeUnsignedBytesGivingWord(ASMText &out) const;
     CodeStatus emitLogicalAnd(ASMText &out, bool lValue) const;
     CodeStatus emitLogicalOr(ASMText &out, bool lValue) const;
+    void checkForZeroResult(bool isLeftShift, uint16_t numBits) const;
     CodeStatus emitShift(ASMText &out, bool isLeftShift, bool changeLeftSide, bool lValue) const;
     CodeStatus emitLongBitwiseOpAssign(ASMText &out) const;
     CodeStatus emitLeftSideAddressInX(ASMText &out, bool preserveD) const;
     CodeStatus emitPoke(ASMText &out) const;
     CodeStatus emitAssignment(ASMText &out, bool lValue, Op op) const;
     static bool isArrayOrPointerVariable(const Tree *tree);
-    static int16_t getNumBytesPerMultiDimArrayElement(const Tree *tree);
+    static int16_t getNumBytesPerMultiDimArrayElement(const Tree *tree);  // returns 0 upon error
     bool emitLoadArrayInXIfNotTrashingD(ASMText &out) const;
     CodeStatus emitArrayRef(ASMText &out, bool lValue) const;
     bool emitAssignmentOfConstantToDerefCastToPtr(ASMText &out, const std::string &assignedValueArg) const;

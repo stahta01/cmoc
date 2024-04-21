@@ -1,4 +1,4 @@
-/*  $Id: ClassDef.cpp,v 1.29 2022/12/28 20:47:52 sarrazip Exp $
+/*  $Id: ClassDef.cpp,v 1.31 2023/09/06 03:07:23 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -152,8 +152,7 @@ ClassDef::getDataMemberOffset(size_t memberIndex,
 void
 ClassDef::clearMembers()
 {
-    for (std::vector<ClassMember *>::iterator it = dataMembers.begin(); it != dataMembers.end(); ++it)
-        delete *it;
+    deleteVectorElements(dataMembers);
     dataMembers.clear();
 }
 
@@ -214,7 +213,7 @@ ClassDef::check()
         if (member->isArray())
         {
             const Declarator &declarator = member->getDeclarator();
-            uint16_t numElements = declarator.getTotalNumArrayElements();
+            uint16_t numElements = declarator.getTotalNumArrayElements(member);
             if (numElements < 1 || numElements > 32767)
                 member->errormsg("invalid dimensions for member array `%s' in struct `%s'", declarator.getId().c_str(), getName().c_str());
         }
@@ -275,7 +274,7 @@ ClassDef::ClassMember::getTotalNumArrayElements() const
     uint16_t numElements = 1;
     if (declarator->isArray())
     {
-        numElements = declarator->getTotalNumArrayElements();
+        numElements = declarator->getTotalNumArrayElements(this);
         if (numElements > 0x7FFF)
             return 0;  // invalid size
     }

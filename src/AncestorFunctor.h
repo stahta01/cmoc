@@ -31,9 +31,9 @@ public:
 
     ~AncestorFunctor();
 
-    virtual bool open(Tree *t);
+    virtual bool open(Tree *t) override;
 
-    virtual bool close(Tree *t);
+    virtual bool close(Tree *t) override;
 
 private:
 

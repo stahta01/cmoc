@@ -1,4 +1,4 @@
-/*  $Id: AssemblerStmt.cpp,v 1.30 2023/03/26 01:45:53 sarrazip Exp $
+/*  $Id: AssemblerStmt.cpp,v 1.33 2023/08/26 04:11:15 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
@@ -211,51 +211,6 @@ AssemblerStmt::removeComments(const string &text)
 }
 
 
-// Returns true if tokenText is of the form xxx[yyy], with yyy in decimal.
-// In this case, also returns the xxx string in 'variableName'
-// and yyy (converted to a signed integer) in 'offset'.
-// Does not guarantee that xxx is a known variable name.
-// Otherwise, returns false.
-//
-bool
-AssemblerStmt::parseVariableNameAndOffset(const string &tokenText, string &variableName, int16_t &offset)
-{
-    offset = 0;
-
-    size_t tokenLen = tokenText.length();
-    if (tokenLen < 4 || tokenText[tokenLen - 1] != ']')
-        return false;
-
-    size_t i;
-    for (i = tokenLen - 1; i > 0 && tokenText[i - 1] != '['; --i)
-        ;
-    if (i == 0)
-        return false;  // closing bracket found, but not opening bracket: fail
-    if (i == 1)
-        return false;  // opening bracket found at beginning of tokenText: fail
-    if (i == tokenLen - 1)
-        return false;  // nothing inside bracket: fail
-
-    // 'i' points to first char of expected decimal string.
-    // If brackets contain non-digit chars, fail.
-    for (size_t k = i; k < tokenLen - 1; ++k)
-        if (!isdigit(tokenText[i]))
-            return false;
-
-    // Reject octal.
-    if (tokenText[i] == '0' && isdigit(tokenText[i + 1]))
-        return false;
-
-    long n = atol(tokenText.c_str() + i);
-    if (n < -32768 || n > 32767)
-        return false;  // overflow: fail
-
-    offset = int16_t(n);
-    variableName = tokenText.substr(0, i - 1);
-    return true;
-}
-
-
 // If an identifier is found at s + offset, returns its length.
 // Returns 0 if no identifier was seen at s + offset.
 //
@@ -348,7 +303,7 @@ parseCVariableExpression(vector<string> &result, const string &tokenText)
 // variableDecl: When 0 is returned, this receives the address of the declaration of the C variable referred to.
 // byteOffsetIntoVar: When 0 is returned, this receives the offset in bytes into the start of the C variable layout.
 //
-int
+static int
 parseCVariableRefAndByteIndex(const string &tokenText,
                               const Scope &scope,
                               const Tree *errorMessageTree,
@@ -484,13 +439,13 @@ parseCVariableRefAndByteIndex(const string &tokenText,
 // errorMessageTree: If not null, error messages are issued by calling errormsg() on this.
 //
 bool
-AssemblerStmt::resolveVariableReferences(const string &text,
-                                         const Scope &scope,
-                                         string &resolvedAsmText,
-                                         set<string> *recognizedVarNames,
-                                         set<string> *unrecognizedNames,
-                                         bool requireAllocatedVariables,
-                                         const Tree *errorMessageTree)
+AssemblerStmt::processInlineAsmText(const string &text,
+                                    const Scope &scope,
+                                    string &resolvedAsmText,
+                                    set<string> *recognizedVarNames,
+                                    set<string> *unrecognizedNames,
+                                    bool requireAllocatedVariables,
+                                    const Tree *errorMessageTree)
 {
     string result;
     result.reserve(text.length() * 2);
@@ -502,6 +457,7 @@ AssemblerStmt::resolveVariableReferences(const string &text,
     lastCol2.reserve(256);
     size_t i = 0;  // offset in 'text'
     bool currentInstructionCanRefVariables = false;
+    bool varRefRequiresEscapeChar = false;
 
     while ((tok = getToken(text, i, tokenText)) != END)
     {
@@ -510,6 +466,7 @@ AssemblerStmt::resolveVariableReferences(const string &text,
         case NEWLINE:
             colNum = 1;
             result += tokenText;
+            varRefRequiresEscapeChar = false;  // this setting is specific to each line
             break;
 
         case WHITESPACE:
@@ -518,6 +475,17 @@ AssemblerStmt::resolveVariableReferences(const string &text,
             break;
 
         case WORD:
+            if (colNum == 3 && tokenText == "#")  // if immediate mode arg, rest of arg only allowed to refer to C var/enum with ':' prefix
+            {
+                // With this, LDD #foo will only refer to asm label foo, because referring to C var foo
+                // would require using ":foo".
+                // However, an immediate arg can still refer to a C enum as long as it uses a colon:
+                //   enum { FOO = 42 };
+                //   asm { LDB #1+:FOO*2 }
+                //
+                varRefRequiresEscapeChar = true;
+            }
+
             if (colNum == 3 && currentInstructionCanRefVariables)  // if instruction argument that could refer to variable or enum
             {
                 int16_t offset = 0;  // offset into the C variable, if tokenText refers to a C variable
@@ -525,7 +493,12 @@ AssemblerStmt::resolveVariableReferences(const string &text,
                 string unescapedVarRef = (escapeCharUsed ? string(tokenText, 1) : tokenText);
                 const Declaration *variableDecl = NULL;
                 int code = -1;
-                if (!isRegisterName(tokenText))
+
+                // Take unescapedVarRef as a reference to a C variable/enum UNLESS:
+                // - it is a CPU register name (a, b, x, etc.), or
+                // - it must be preceded by a ':' but is not.
+                //
+                if (!isRegisterName(tokenText) && (!varRefRequiresEscapeChar || escapeCharUsed))
                 {
                     code = parseCVariableRefAndByteIndex(unescapedVarRef, scope, errorMessageTree, variableDecl, offset);
                     if (code == -2)  // if error message issued re: bad C var ref
@@ -562,17 +535,26 @@ AssemblerStmt::resolveVariableReferences(const string &text,
                     // First, go up the parents of 'scope' until a direct child of the global scope.
                     // This child is the scope of a function. Find the function whose scope this is.
                     //
+                    const FunctionDef *caller = NULL;
                     const Scope &globalScope = TranslationUnit::instance().getGlobalScope();
                     const Scope *callerScope = &scope;
-                    while (callerScope->getParent() != &globalScope)
-                        callerScope = callerScope->getParent();
-                    const FunctionDef *caller = TranslationUnit::instance().getFunctionDefFromScope(*callerScope);
-                    assert(caller);
+                    assert(callerScope);
+                    if (callerScope != &globalScope)  // callerScope can be global scope if processing global asm{}
+                    {
+                        while (callerScope->getParent() != &globalScope)
+                        {
+                            callerScope = callerScope->getParent();
+                            assert(callerScope);
+                        }
+                        caller = TranslationUnit::instance().getFunctionDefFromScope(*callerScope);
+                        assert(caller);
+                    }
 
                     // Register the function call.
                     //
                     fd->setCalled(); // make sure the code for 'fd' gets emitted
-                    TranslationUnit::instance().registerFunctionCall(caller->getId(), fd->getId());
+                    if (caller)
+                        TranslationUnit::instance().registerFunctionCall(caller->getId(), fd->getId());
                 }
                 else if (TranslationUnit::getTypeManager().getEnumeratorValue(unescapedVarRef, enumValue))
                 {
@@ -643,12 +625,11 @@ AssemblerStmt::checkSemantics(Functor &f)
     //
     SemanticsChecker &checker = dynamic_cast<SemanticsChecker &>(f);
     const FunctionDef *parentFunctionDef = checker.getCurrentFunctionDef();
-    assert(parentFunctionDef != NULL);
-    assert(parentFunctionDef->getScope() != NULL);
+    assert(parentFunctionDef == NULL || parentFunctionDef->getScope() != NULL);  // asm{} can appear at global scope
 
-    if (asmText.empty())
+    if (asmText.empty())  // if single-instruction asm() directive
     {
-        if (parentFunctionDef->isAssemblyOnly() && argIsVariable && !isGlobalVariable(argument))
+        if (parentFunctionDef && parentFunctionDef->isAssemblyOnly() && argIsVariable && !isGlobalVariable(argument))
             errormsg("assembly-only function refers to local C variable `%s'", argument.c_str());
     }
     else  // if multi-line assembly language text
@@ -661,12 +642,12 @@ AssemblerStmt::checkSemantics(Functor &f)
         const Scope *sc = (scopeOfAsmOnlyFunction ? scopeOfAsmOnlyFunction : TranslationUnit::instance().getCurrentScope());
         assert(sc);
         string resolvedAsmText;
-        (void) resolveVariableReferences(removeComments(asmText), *sc, resolvedAsmText, &recognizedVarNames, NULL, false);
+        (void) processInlineAsmText(removeComments(asmText), *sc, resolvedAsmText, &recognizedVarNames, NULL, false);
 
         // An assembly-only function is not allowed to refer to local C variables because such a function
         // has no stack frame. (It is allowed to call functions however.)
         //
-        if (parentFunctionDef->isAssemblyOnly() && recognizedVarNames.size() > 0)
+        if (parentFunctionDef && parentFunctionDef->isAssemblyOnly() && recognizedVarNames.size() > 0)
         {
             // Create and issue an error message.
             stringstream varNames;
@@ -696,7 +677,7 @@ AssemblerStmt::getAllVariableNames(set<string> &varNames) const
     const Scope *sc = (scopeOfAsmOnlyFunction ? scopeOfAsmOnlyFunction : TranslationUnit::instance().getCurrentScope());
     assert(sc);
     string resolvedAsmText;
-    (void) resolveVariableReferences(removeComments(asmText), *sc, resolvedAsmText, &varNames, &unrecognizedNames, false);
+    (void) processInlineAsmText(removeComments(asmText), *sc, resolvedAsmText, &varNames, &unrecognizedNames, false);
     varNames.insert(unrecognizedNames.begin(), unrecognizedNames.end());
 }
 
@@ -715,7 +696,7 @@ AssemblerStmt::emitCode(ASMText &out, bool lValue) const
         const Scope *cs = TranslationUnit::instance().getCurrentScope();
         assert(cs);
         string resolvedAsmText;
-        if (!resolveVariableReferences(removeComments(asmText), *cs, resolvedAsmText, NULL, NULL, true, this))
+        if (!processInlineAsmText(removeComments(asmText), *cs, resolvedAsmText, NULL, NULL, true, this))
             return false;
         out.emitInlineAssembly(resolvedAsmText);
         return true;

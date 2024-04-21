@@ -1,7 +1,5 @@
 %{
-/*  $Id: parser.yy,v 1.95 2023/04/06 19:20:05 sarrazip Exp $
-
-    CMOC - A C-like cross-compiler
+/*  CMOC - A C-like cross-compiler
     Copyright (C) 2003-2016 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
@@ -110,13 +108,13 @@ void _PARSERTRACE(int parserLineNo, const char *fmt, ...);
 %token <typeDesc> TYPE_NAME
 %token INT CHAR SHORT LONG FLOAT DOUBLE SIGNED UNSIGNED VOID PLUS_PLUS MINUS_MINUS IF ELSE WHILE DO FOR
 %token EQUALS_EQUALS BANG_EQUALS LOWER_EQUALS GREATER_EQUALS AMP_AMP PIPE_PIPE
-%token LT_LT GT_GT BREAK CONTINUE RETURN ASM NORTS VERBATIM_ASM STRUCT UNION THIS
+%token LT_LT GT_GT BREAK CONTINUE RETURN ASM NORTS VERBATIM_ASM STRUCT UNION
 %token PLUS_EQUALS MINUS_EQUALS ASTERISK_EQUALS SLASH_EQUALS PERCENT_EQUALS LT_LT_EQUALS GT_GT_EQUALS
 %token CARET_EQUALS AMP_EQUALS PIPE_EQUALS
 %token RIGHT_ARROW INTERRUPT SIZEOF ELLIPSIS TYPEDEF ENUM SWITCH CASE DEFAULT REGISTER GOTO EXTERN STATIC CONST VOLATILE AUTO
 %token FUNC_RECEIVES_FIRST_PARAM_IN_REG
 
-%type <tree> external_declaration stmt selection_stmt else_part_opt while_stmt do_while_stmt for_stmt expr_stmt labeled_stmt
+%type <tree> external_declaration stmt selection_stmt else_part_opt while_stmt do_while_stmt for_stmt expr_stmt labeled_stmt kandr_prototype_no_return
 %type <tree> expr expr_opt logical_or_expr logical_and_expr rel_expr add_expr mul_expr
 %type <tree> inclusive_or_expr exclusive_or_expr and_expr
 %type <tree> if_cond while_cond assignment_expr equality_expr shift_expr conditional_expr constant_expr
@@ -174,6 +172,8 @@ external_declaration:
     | declaration               { $$ = $1; }  // can be null in the case of a typedef
     | PRAGMA                    { $$ = new Pragma($1); free($1); }
     | ';'                       { $$ = NULL; }  // tolerate semi-colon after function body
+    | VERBATIM_ASM              { $$ = new AssemblerStmt(yytext); }
+    | kandr_prototype_no_return { $$ = $1; }
     ;
 
 function_definition:
@@ -289,6 +289,7 @@ parameter_declaration_list:
                         $$->addTree(fp);
                     }
                     delete dsl;
+                    deleteVectorElements(*declaratorVector);  // delete the Declarator objects
                     delete declaratorVector;
                 }
     ;
@@ -429,7 +430,7 @@ type_specifier:
 
 type_qualifier:
       CONST                         { $$ = DeclarationSpecifierList::CONST_QUALIFIER; }
-    | VOLATILE                      { $$ = DeclarationSpecifierList::VOLATILE_QUALIFIER; TranslationUnit::instance().warnAboutVolatile(); }
+    | VOLATILE                      { $$ = DeclarationSpecifierList::VOLATILE_QUALIFIER; TranslationUnit::instance().enableVolatileWarning(); }
     ;
 
 type_qualifier_list:  /* bit field made of CONST_BIT, VOLATILE_BIT */
@@ -493,7 +494,8 @@ enum_specifier:
     ;
 
 enumerator_list:
-      enumerator                            { $$ = new vector<Enumerator *>(); $$->push_back($1); }
+      /* empty */                           { $$ = new vector<Enumerator *>(); }
+    | enumerator                            { $$ = new vector<Enumerator *>(); $$->push_back($1); }
     | enumerator_list ',' enumerator        { $$ = $1; $$->push_back($3); }
     ;
 
@@ -645,6 +647,35 @@ direct_declarator:
             }
     ;
 
+/*  K&R prototype for a function that specifies no return type, e.g., "foo();".
+    The return type is assumed to be int.
+*/
+kandr_prototype_no_return:
+      ID save_src_fn save_line_no '(' kr_parameter_name_list_opt ')' kr_parameter_list_opt ';'
+            {
+                // Make a Declarator from the function ID and the parameters.
+                auto di = new Declarator($1, 0, $2, $3);  // pass ID, save_src_fn, save_line_no
+                di->processKAndRFunctionParameters(*$5, $7);  // deletes $7, keeps no ref to $5
+
+                auto v = new std::vector<Declarator *>();
+                v->push_back(di);  // 'v' owns 'di'
+
+                // Make the return type 'int'.
+                const TypeDesc *intTD = TranslationUnit::getTypeManager().getIntType(WORD_TYPE, true);
+                TypeSpecifier intSpecifier(intTD, "", NULL);
+                auto dsl = new DeclarationSpecifierList();
+                dsl->add(intSpecifier);
+
+                $$ = TranslationUnit::instance().createDeclarationSequence(dsl, v);  // deletes 'dsl' and 'v'
+
+                $$->setLineNo($2, $3);
+
+                delete $5;  // delete kr_parameter_name_list_opt
+                free($2);  // save_src_fn
+                free($1);  // ID
+            }
+    ;
+
 asterisk_sequence:
       '*'                           { $$ = 1; }
     | asterisk_sequence '*'         { ++$$; }
@@ -772,8 +803,16 @@ labeled_stmt:
                                       $$->setLineNo($2, $3);
                                       free($1); free($2);
                                     }
-    | CASE constant_expr ':' stmt       { $$ = new LabeledStmt($2, $4); }
-    | DEFAULT ':' stmt                  { $$ = new LabeledStmt($3); }   
+    | CASE save_src_fn save_line_no constant_expr ':' stmt
+                                    {
+                                      $$ = new LabeledStmt($4, $6);
+                                      $$->setLineNo($2, $3);
+                                    }
+    | DEFAULT save_src_fn save_line_no ':' stmt
+                                    {
+                                      $$ = new LabeledStmt($5);
+                                      $$->setLineNo($2, $3);
+                                    }
     ;
 
 constant_expr:

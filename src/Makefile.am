@@ -1,4 +1,4 @@
-# $Id: Makefile.am,v 1.105 2023/04/09 05:59:04 sarrazip Exp $
+# $Id: Makefile.am,v 1.119 2024/01/28 21:17:35 sarrazip Exp $
 
 # The dot forces CMOC to be compiled before processing the stdlib and float
 # subdirectories, whose processing requires CMOC itself.
@@ -109,11 +109,15 @@ cmoc_SOURCES = \
 	Parameters.h \
 	main.cpp
 
-AM_YFLAGS = -d -Wno-conflicts-sr
+AM_YFLAGS = -d -Wno-conflicts-sr -Werror
 # -d produces a .h file
 # -Wno-conflicts-sr silences a shift/reduce warning.
 
-cmoc_CXXFLAGS = -DPKGDATADIR=\"$(pkgdatadir)\"
+# W_SUGGEST_OVERRIDE is -Wsuggest-override if configure.ac saw the compiler accept that option.
+# W_ERROR is normally empty. Passing W_ERROR=-Werror to make launches a build that errors
+# on warnings.
+#
+cmoc_CXXFLAGS = -DPKGDATADIR=\"$(pkgdatadir)\" $(W_SUGGEST_OVERRIDE) $(W_ERROR)
 
 
 if BUILD_WRITECOCOFILE
@@ -167,6 +171,7 @@ check-srec:
 	test `$(GREP) -c ^S9 ,check-prog.srec` = 1  # starting address record (only one)
 	test `$(GREP) -c ^: ,check-prog.srec` = 0  # not Intel HEX format
 
+# Checks --raw.
 # Check that a raw format executable for DECB starts with LDD #-1024 and an LBSR instruction,
 # as emitted by TranslationUnit::emitAssembler().
 #
@@ -175,18 +180,35 @@ check-raw:
 	$(LOCAL_CMOC) --raw --verbose ,check-prog.c | $(GREP) ",check-prog.raw"
 	$(HD) ",check-prog.raw" | $(HEAD) -1 | $(GREP) -q '^00000000  cc fc 00 17'
 
+# Checks --org, --data.
+#
 check-org:
 	$(CREATE_TEST_PROG)
 	$(LOCAL_CMOC) --org=4321 --data=6000 --intermediate --verbose ,check-prog.c 2>&1
 	$(GREP) -q "Symbol: program_start (,check-prog.o) = 4321" ,check-prog.map
 	$(GREP) -q "Section: rwdata .* load at 6000," ,check-prog.map
-	$(LOCAL_CMOC) --org=2800 --limit=2810 ,check-prog.c 2>&1 | $(GREP) -q "program_end exceeds it"
+	rm -f ,check-prog.*
 
+# Checks --limit.
+# Checks that no executable is left when --limit fails.
+#
+check-limit:
+	$(CREATE_TEST_PROG)
+	rm -f ,check-prog.bin
+	$(LOCAL_CMOC) --org=2800 --limit=2810 ,check-prog.c 2>&1 | $(GREP) -q "program_end exceeds it"
+	test ! -e ,check-prog.bin
+	rm -f ,check-prog.*
+
+# Checks --dos.
+# Checks that the resulting binary is in BIN format, that it starts
+# with a header that positions the contents at $2600, and that the
+# first two bytes are "OS".
+#
 check-dos:
 	$(CREATE_TEST_PROG)
 	$(LOCAL_CMOC) --dos ,check-prog.c
 	$(HD) ,check-prog.bin | $(HEAD) -1 | $(GREP) -q '^00000000  00 .. .. 26 00 4f 53'
-	rm -f ,check-prog
+	rm -f ,check-prog.*
 
 check-long:
 	$(LOCAL_CMOC) --usim -DPART0 -DPART1 -DPART2 -O2 -Lstdlib -Lfloat --org=1600 $(srcdir)/check-long.c 2>&1 >/dev/null
@@ -199,8 +221,6 @@ check-float: check-coco-float check-dragon-float
 	$(GREP) -q 'FCB.$$85,$$13,$$85,$$1E,$$B8$$' ,check-prog.s
 	$(LOCAL_CMOC) --dragon -c --intermediate -O0 ,check-prog.c
 	$(GREP) -q 'FCB.$$85,$$13,$$85,$$1E,$$B8$$' ,check-prog.s
-	$(LOCAL_CMOC) --os9 -c --intermediate -O0 ,check-prog.c
-	$(GREP) -q 'FCB.$$13,$$85,$$1E,$$85$$' ,check-prog.s
 	rm -f ,check-prog.*
 
 check-os9: check-array-section check-add-os9-stack-space check-os9-no-float
@@ -226,11 +246,12 @@ check-os9: check-array-section check-add-os9-stack-space check-os9-no-float
 # Check OS-9 option --add-os9-stack-space.
 # The expected "01 50" is the word affected by that option.
 # It is the Permanent Storage Size, at offset 11 of the executable.
+# The expected number can be affected when the size of the BSS section changes.
 #
 check-add-os9-stack-space:
 	$(CREATE_TEST_PROG)
 	$(LOCAL_CMOC) --os9 --intermediate --add-os9-stack-space=300 ,check-prog.c
-	$(HD) ,check-prog | $(EGREP) -q '^00000000  .* 00 0d 01 50 '
+	$(HD) ,check-prog | $(EGREP) -q '^00000000  .* 00 0d 01 51 '
 	rm -f ,check-prog.* ,check-prog
 
 # Check that an OS-9 executable does not contain the float constructor.
@@ -304,6 +325,14 @@ check-deps:
 	$(GREP) -q '\.d : ' ,check-prog.d
 	test ! -f ,check-prog.o 
 	rm -f ,check-prog.d
+
+# Checks that the compiler exits with a failure code when the preprocessor
+# used by --deps-only fails.
+#
+check-deps-only-exit:
+	$(PERLEXEC) 'print "#error FOO\n"' >,check-prog.c
+	$(LOCAL_CMOC) --deps-only ,check-prog.c 2>&1 | $(GREP) -q "err..: #err.. FOO"
+	rm -f ,check-prog.*
 
 check-only-deps-arg:
 	mkdir ,subdir
@@ -408,20 +437,49 @@ check-local-var-hiding:
 	$(LOCAL_CMOC) -c -Wlocal-var-hiding -Werror ,check-prog.c >/dev/null; $(PERLEXEC) 'exit !$$ARGV[0]' $$?
 	rm -f ,check-prog.*
 
-check-misc: check-base check-srec check-raw check-org check-long check-float check-os9 check-flex \
-				check-deps check-only-deps-arg check-vectrex check-stack-space check-linking check-nbsp \
+
+# Check that multiple definitions of an external linkage function or variable gives an error.
+# The Perl statements check that the compiler output has 2 lines and that they contain the right error messages.
+#
+check-mult-def:
+	echo 'void externFunc(void) {}; int externVar; int main() { return 0; }' > ,check-prog-1.c
+	echo 'void externFunc(void) {}; int externVar;' > ,check-prog-2.c
+	$(LOCAL_CMOC) ,check-prog-1.c ,check-prog-2.c > ,check-prog-out.txt || true
+	$(PERLEXEC) '@a = <>; die 1 if @a != 2; die 2 unless $$a[0] =~ / error: multiple definitions of symbol _externFunc /' ,check-prog-out.txt
+	$(PERLEXEC) '@a = <>; die 2 unless $$a[1] =~ / error: multiple definitions of symbol _externVar /' ,check-prog-out.txt
+	rm -f ,check-prog*.*
+
+
+# In the static case, the multiple definitions are not an error.
+# The code contains calls to the static functions to avoid the "not called" warning.
+#
+check-mult-static-symbols:
+	echo 'static void staticFunc(void) {}; static int staticVar; void f1() { staticFunc(); } int main() { return 0; }' > ,check-prog-1.c
+	echo 'static void staticFunc(void) {}; static int staticVar; void f2() { staticFunc(); }' > ,check-prog-2.c
+	$(LOCAL_CMOC) ,check-prog-1.c ,check-prog-2.c > ,check-prog-out.txt
+	$(PERLEXEC) '@a = <>; die 1 if @a != 0' ,check-prog-out.txt
+	rm -f ,check-prog*.*
+
+
+check-misc: check-base check-srec check-raw check-org check-limit check-long check-float check-os9 check-flex \
+				check-deps check-deps-only-exit check-only-deps-arg check-vectrex check-stack-space check-bad-stack-space-option check-linking check-nbsp \
 				check-local-var-hiding check-void-target check-call-graph check-func-import check-no-hole \
-				check-no-hidden-bool-for-global
+				check-no-hidden-bool-for-global check-dash-x check-kandr-prototype check-local-prototype \
+				check-assert check-assert-handler
 	rm -f ,check-prog.*
 
-check-self-tests:
+check-program-output:
 	$(PERL) -cw $(srcdir)/test-program-output.pl
-	$(PERL) -cw $(srcdir)/test-bad-programs.pl
 	$(PERL) $(srcdir)/test-program-output.pl --opt=0 $(STOPONFAIL) $(srcdir)
 	$(PERL) $(srcdir)/test-program-output.pl $(STOPONFAIL) $(srcdir)
 	$(PERL) $(srcdir)/test-program-output.pl --opt=0 --omit-frame-pointer $(STOPONFAIL) $(srcdir)
 	$(PERL) $(srcdir)/test-program-output.pl --omit-frame-pointer $(STOPONFAIL) $(srcdir)
+
+check-bad-programs:
+	$(PERL) -cw $(srcdir)/test-bad-programs.pl
 	$(PERL) $(srcdir)/test-bad-programs.pl $(STOPONFAIL) $(srcdir)
+
+check-self-tests: check-program-output check-bad-programs
 
 # Stack space must be specified when compiling the .c file that defines main().
 # If the stack space is made larger than the default 1k (with --stack-space or #pragma stack_space),
@@ -443,6 +501,13 @@ check-stack-space:
 	test `$(USIM) ,check-prog.srec` -ge 48000
 	test `$(USIM) ,check-prog.srec` -lt 49000
 	rm -f ,check-prog.c ,check-prog.o ,check-prog.srec
+
+# Checks that the compiler fails with no argument is passed to option --stack-space=.
+#
+check-bad-stack-space-option:
+	$(CREATE_TEST_PROG)
+	$(LOCAL_CMOC) --usim -c -I $(srcdir)/stdlib --stack-space= ,check-prog.c 2>&1 | $(GREP) -q "cmoc: Invalid argument for --stack-space:"
+	rm -f ,check-prog.*
 
 check-linking:
 	$(PERLEXEC) 'print "int main() { return 0; }\n"' > ,mod0.c
@@ -518,6 +583,62 @@ check-no-hidden-bool-for-global:
 	test `$(GREP) -c _str.initialized ,check-prog.s` = 0
 	rm -f ,check-prog.*
 
+# Check that a .c file is accepted by default, and with -x c and -x none.
+# Check that a file with a non-standard extension (e.g., .foo) is only accepted with -x c.
+#
+check-dash-x:
+	rm -f ,check-prog.c ,check-prog.foo ,check-prog.bin ,check-prog.err
+	$(CREATE_TEST_PROG)
+	$(LOCAL_CMOC) ,check-prog.c
+	$(LOCAL_CMOC) -x none ,check-prog.c
+	$(LOCAL_CMOC) -x c ,check-prog.c
+	test -f ,check-prog.bin
+	rm ,check-prog.bin
+	mv ,check-prog.c ,check-prog.foo
+	if $(LOCAL_CMOC) ,check-prog.foo 2>&1 > ,check-prog.err; then false; else true; fi
+	$(GREP) -q "invalid input filename ,check-prog.foo" ,check-prog.err
+	test ! -f ,check-prog.bin
+	if $(LOCAL_CMOC) -x none ,check-prog.foo 2>&1 > ,check-prog.err; then false; else true; fi
+	$(GREP) -q "invalid input filename ,check-prog.foo" ,check-prog.err
+	test ! -f ,check-prog.bin
+	$(LOCAL_CMOC) -x c ,check-prog.foo
+	test -f ,check-prog.bin
+	rm ,check-prog.foo ,check-prog.bin ,check-prog.err
+
+# Checks that a K&R prototype for a function that has no return type is usable in a call.
+#
+check-kandr-prototype:
+	$(PERLEXEC) 'print "f(); int main() { return f(); }\n"' >,check-prog.c
+	$(PERLEXEC) 'print "f() { return 0xBEEF; }\n"' >,check-lib.c
+	$(LOCAL_CMOC) -Werror ,check-prog.c ,check-lib.c
+	rm -f ,check-prog.* ,check-lib.*
+
+check-local-prototype:
+	$(PERLEXEC) 'print "#include <cmoc.h>\nint main() { long f(long m, int n); printf(\x22%ld\x22, f(650000L, 4321)); return 0; }\n"' >,check-prog.c
+	$(PERLEXEC) 'print "long f(long m, int n) { return m + n; }\n"' >,check-lib.c
+	$(LOCAL_CMOC) --usim -Werror ,check-prog.c ,check-lib.c
+	test "`$(USIM) ,check-prog.srec`" = "654321"
+	rm -f ,check-prog.* ,check-lib.*
+
+# Check that a failed assert() prints an error message and quits.
+#
+check-assert:
+	$(PERLEXEC) 'print "#include <assert.h>\nint main() { assert(1 == 2); return 0; }\n"' >,check-prog.c
+	$(LOCAL_CMOC) --usim -Werror ,check-prog.c
+	test "`$(USIM) ,check-prog.srec`" = "***ASSERT FAILED: ,check-prog.c:2: 1 == 2"
+	rm -f ,check-prog.*
+
+# Check that _SetFailedAssertHandler() causes a failed assert() to call a custom handler
+# and that the handler is allowed to let the execution continue.
+#
+check-assert-handler:
+	$(PERLEXEC) 'print q!#include <assert.h>!, "\n"; \
+			print q!#include <cmoc.h>!, "\n"; \
+			print q!void h(const char *f, int l, const char *c) { printf("[%s:%d:%s]", f, l, c); }!, "\n"; \
+			print q!int main() { _SetFailedAssertHandler(h); assert(1 == 2); printf("[after]"); return 0; }!, "\n"' >,check-prog.c
+	$(LOCAL_CMOC) --usim -Werror ,check-prog.c
+	test "`$(USIM) ,check-prog.srec`" = "[,check-prog.c:4:1 == 2][after]"
+	rm -f ,check-prog.*
 
 check: check-writecocofile check-misc check-self-tests
 
@@ -530,6 +651,6 @@ cleanlib:
 	$(MAKE) -C stdlib clean
 	$(MAKE) -C float clean
 
-CLEANFILES = parser.cc parser.h lexer.cc
+CLEANFILES = parser.cc parser.hh lexer.cc
 
 MAINTAINERCLEANFILES = Makefile.in

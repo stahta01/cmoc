@@ -15,6 +15,10 @@ divByZeroSingle                 IMPORT
 divByZeroSingle_singleDividend
         pshs    u
         ldu     4,s             ; point to single (left operand)
+        IFDEF _CMOC_MC6839_
+        lda     ,u              ; bit 7 is sign of single
+        ELSE
         lda     1,u             ; get 1st byte of mantissa (bit 7 is sign of single)
+        ENDIF
         lbsr    divByZeroSingle
         puls    u,pc

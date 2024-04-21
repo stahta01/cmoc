@@ -1,4 +1,4 @@
-/*  $Id: Pragma.h,v 1.11 2022/08/22 03:02:53 sarrazip Exp $
+/*  $Id: Pragma.h,v 1.12 2023/08/27 01:41:05 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
@@ -73,7 +73,7 @@ public:
     //
     bool isVxMusic(std::string &label) const;
 
-    virtual bool isLValue() const { return false; }
+    virtual bool isLValue() const override { return false; }
 
 private:
 

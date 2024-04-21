@@ -1,7 +1,5 @@
-/*  $Id: WordConstantExpr.h,v 1.10 2022/06/03 01:47:19 sarrazip Exp $
-
-    CMOC - A C-like cross-compiler
-    Copyright (C) 2003-2015 Pierre Sarrazin <http://sarrazip.com/>
+/*  CMOC - A C-like cross-compiler
+    Copyright (C) 2003-2023 Pierre Sarrazin <http://sarrazip.com/>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -40,16 +38,19 @@ public:
 
     uint16_t getWordValue() const;
 
-    virtual void checkSemantics(Functor &f);
+    virtual void checkSemantics(Functor &f) override;
 
-    virtual CodeStatus emitCode(ASMText &out, bool lValue) const;
+    virtual CodeStatus emitCode(ASMText &out, bool lValue) const override;
 
-    virtual bool isLValue() const { return false; }
+    CodeStatus emitCodeToLoadByte(ASMText &out) const;
+
+    virtual bool isLValue() const override { return false; }
 
 private:
 
     static bool hasUnsignedSuffix(const char *tokenText);
     static bool hasLongSuffix(const char *tokenText);
+    CodeStatus emitRValue(ASMText &out, bool emitByte) const;
 
 private:
 

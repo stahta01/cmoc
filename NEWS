@@ -1,3 +1,203 @@
+2024-03-10: Version 0.1.86 released
+
+    Added experimental command-line option --mc6839, which allows single-
+    precision floating point operations, by adding the 8k image of
+    Motorola's MC6839 ROM. Those operations are then independent of
+    Color Basic's floating point routines, and Basic does not have to
+    be present. When using this option, the use of the %f placeholder
+    in a printf() statement requires calling enable_printf_float()
+    are the beginning of main().
+
+    Added sbrk() and sbrkmax() for OS-9.
+
+    Added strspn(), strcspn(), strtok(), strpbrk().
+
+    Fixed the definition of the program_end label on OS-9 so that it
+    follows the code and read-only globals, instead of following the
+    rwdata and bss sections, which are in the data segment.
+
+    Added option -Wshadow, which warns if a local variable hides another one
+    in the same function.
+
+    Added ssize_t, a signed version of type size_t. It is defined by cmoc.h.
+
+    Fixed a bug with -fomit-frame-pointer to take in account other routines
+    that pop their argument off the stack before returning.
+
+    Fixed a bug with the line number that accompanies the "array `...'
+    assumed to have one element" warning.
+
+    Fixed a bug with the --limit option where the executable file would be
+    left existing when the limit was exceeded, at the risk of the user
+    launching a program that is too long.
+
+    Fixed a bug where the compiler crashed when using an undefined enum name
+    in an array's size.
+
+    Fixed a bug where a syntax error was issued for an empty enum.
+
+    A warning is now issued when assigning a long value to an int.
+
+    A warning is now issued when a character constant, e.g., 'x', is passed
+    to a function parameter of pointer type.
+
+    The compiler does not issue the same error or warning message more than
+    once for a given source line anymore.
+
+    Added strrchr() to CMOC's standard library.
+
+    strlen(), strcpy(), strncpy(), strcat(), strlwr(), strupr(), strchr(),
+    strstr(), memcpy(), memcmp() and memicmp() do not preserve X anymore.
+    That register does not need to be preserved by a function under the
+    CMOC calling convention.
+
+    Command-line option -Wgives-byte now gives no warning about binary
+    operations on bytes yielding a byte if either operand has a cast,
+    e.g., x + (char) y. A warning is still given on x + y.
+
+    Fixed -Wgives-byte so that it does not warn on a binary operator
+    applied to a small enum value (which is int) or a small sizeof value
+    (which is size_t).
+
+    A warning is now issued when a label is put on a declaration, e.g.,
+    case 42: int n = 0;
+    New command-line option -Wno-label-on-declaration disables this warning.
+    gcc 9.4.0 gives an error for this.
+
+    Minor optimizations, including to struct assignments and to the
+    initialization of an array from a string literal.
+
+    An error is now given when no argument is passed to --stack-space=,
+    --add-os9-stack-space= and --function-stack=.
+
+    Command line option --deps-only now fails if the preprocessor exits
+    with a non-zero status.
+
+    Options -MT, -MD, -MP and -MF added to help support the gcc3 dependency
+    style supported by GNU Automake.
+
+2023-09-02: Version 0.1.85 released
+
+    Function-local function prototypes are now supported.
+
+    A K&R prototype for a function that specifies no return type is now
+    allowed, but only at the top level, not inside a function. The return
+    type is assumed to be int. Example: f(); int main() { return f(); }
+
+    Calling an undeclared function does not generate an "undeclared
+    identifier" error anymore. It now generates a warning about calling
+    an undeclared function. This can be useful to port K&R-style code.
+    Suchs calls are assumed to return an int.
+
+    Fixed a crash that could happen when compiling an empty file.
+
+    A failed assert() statement now calls exit(1) instead of freezing.
+
+    The <assert.h> header now defines _FreezeOnFailedAssert() to determine
+    what happens after a failed assert, and _SetFailedAssertHandler() to
+    determine the function to be called when an assert() fails.
+
+    The compiler now detects a typedef with an initializer (e.g.,
+    typedef int a = 0;) and issues an error message for it.
+
+    New option -Wno-unknown-first-dim keeps the compiler from issuing
+    "array `...' assumed to have one element" warnings.
+
+    The "too many elements [...] in initializer for array" error is now
+    a warning and new option -Wno-too-many-elements keeps the compiler
+    from issuing it.
+
+    The compiler now warns about bit shifts that always give zero, e.g.,
+    unsigned char a = ..., b = a << 8. New option -Wno-shift-always-zero
+    turns off this warning.
+
+    Fixed a memory leak that occurred during parsing of K&R parameter lists.
+
+    Added a small optimization to the code that computes the address of
+    an array element when the elements are less than 256 bytes in size
+    and the element index is 16 bits. Added a small optimization to some
+    16-by-8 multiplications, and to the initialization of a local character
+    array.
+
+    Added an optimization that removes repeated LDX instructions, which
+    allows other, pre-existing optimizations to remove more instructions.
+
+    Improved detection of overflows in the computation of multi-dimensional
+    array sizes.
+
+    CMOC is now built with -Wsuggest-override when the C++ compiler supports
+    that option. The CMOC source code now uses the override keyword (a C++11
+    feature) on the overriding virtual functions.
+
+2023-08-17: Version 0.1.84 released
+
+    Added option "-x c" to indicate that all files whose extension is not
+    .a, .asm, .o or .a must be assumed to be C files, and option "-x none",
+    which is the default, which only considers .c files to be C files.
+
+    Verbatim assembly blocks (asm {...}) are now allowed at global scope.
+    If a sequence of more than one assembly blocks precedes a certain
+    C function, those blocks are all emitted, in order, just before that
+    function's code.
+
+    Fixed bugs that prevented returning an integral type from a
+    float-returning function, and returning a float from a long-returning
+    function.
+
+    Fixed a bug with -fomit-frame-pointer that did not take in account
+    the fact that some CMOC utility routines pop their argument off the
+    stack before returning.
+
+    Fixed a bug with the += operator that sometimes caused two bytes
+    to be leaked on the stack, although without -fomit-frame-pointer,
+    this did not keep the function from returning normally.
+
+    Fixed a bug where an error was given when trying to change a struct
+    member through a const pointer to a non-const struct.
+
+    Fixed a bug where a string literal cast to a character pointer type
+    would not be usable in a constant initializer.
+
+    Fixed a bug where a numerical constant cast to another numerical type
+    or to a pointer type would not be usable in a constant initializer.
+
+    Error "return without argument in a non-void function" is now a warning.
+
+    Replaced the implementation of sqrt16() with one which is about 35%
+    faster on average on a CoCo, as measured with XRoar 1.4.2.
+
+    Fixed bugs that affected a pointer to an array, e.g., int (*a)[20].
+
+2023-07-14: Version 0.1.83 released
+
+    The compiler now gives an error, instead of a warning, when the
+    linking phase detects that a global variable or function name with
+    external linkage is used in two different modules. No error or warning
+    is given when the two variables or functions are static, i.e., have
+    internal linkage. Previously, a warning was given in all these cases,
+    and the user had to figure out if the symbols involved had internal
+    or external linkage. A name clash is not a problem in the internal
+    linkage case.
+
+    Fixed a build problem on OpenBSD where Parameters.cpp failed to compile
+    because WEXITSTATUS() and WIFEXITED() were not declared.
+
+    Fixed an inline assembly bug where LDD #foo would try to refer to a
+    C variable named foo if one exists. An instruction argument of that form
+    now always refers to assembly label foo, never to a C variable.
+    To force a name in an inline assembly argument to refer to a C variable
+    or enum, precede it with a colon (e.g., LDD :n).
+
+    isspace() now returns non-zero for '\f' and '\v'.
+
+    Functions attr(), cls(), getTextMode(), hscreen(), locate(), palette(),
+    paletteRGB(), resetPalette(), setBorderColor(), setHighSpeed() and
+    width() (declared by <coco.h>) do not require a previous call to
+    initCoCoSupport() anymore.
+
+    resetPalette() (declared by <coco.h>) does not require the presence
+    of Basic anymore.
+
 2023-04-29: Version 0.1.82 released
 
     Added new header <setjmp.h>, which provides C functions setjmp()
@@ -216,6 +416,11 @@
     Using an #pragma directive that is unknown to CMOC is now a warning
     instead of an error.
 
+    A member of a const struct is now correctly typed as const, including in
+    the case where the member is accessed through a pointer to a const struct.
+
+    More error messages for const-incorrectness have been changed to warnings.
+
     pmode(), screen() and setPmodeGraphicsAddressEx() (declared by <coco.h>)
     are now in their own .c file in CMOC's standard library, to help reduce
     executable size.
@@ -293,7 +498,7 @@
     operations on bytes yielding a byte, if both operands have a cast,
     e.g., (char) x + (char) y. A warning is still given on x + y.
 
-    Command-line --deps-only now takes an optional argument to specify
+    Command-line option --deps-only now takes an optional argument to specify
     the path of the .d file to create.
 
     When the --no-relocate option is specified and optimizations are enabled,
@@ -1130,8 +1335,7 @@
     The exit status returned by main() and the one passed to exit()
     are not stored in Color Basic's floating point accumulator #0
     anymore, upon exit. This allows a program that serves as a
-    USR() function to return whatever it wants in FPA0, including
-    are now supported (e.g., '\12' gives character 10).
+    USR() function to return whatever it wants in FPA0.
 
     Initializing a variable from a larger type is now allowed, although
     a warning is issued.

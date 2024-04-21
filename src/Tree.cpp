@@ -1,4 +1,4 @@
-/*  $Id: Tree.cpp,v 1.45 2023/03/23 03:16:24 sarrazip Exp $
+/*  $Id: Tree.cpp,v 1.47 2023/09/06 03:07:23 sarrazip Exp $
 
     CMOC - A C-like cross-compiler
     Copyright (C) 2003-2018 Pierre Sarrazin <http://sarrazip.com/>
@@ -374,7 +374,7 @@ Tree::errormsg(const char *fmt, ...) const
 {
     va_list ap;
     va_start(ap, fmt);
-    diagnoseVa("error", getLineNo(), fmt, ap);
+    diagnoseVa(true, getLineNo(), fmt, ap);
     va_end(ap);
 }
 
@@ -384,7 +384,7 @@ Tree::warnmsg(const char *fmt, ...) const
 {
     va_list ap;
     va_start(ap, fmt);
-    diagnoseVa("warning", getLineNo(), fmt, ap);
+    diagnoseVa(false, getLineNo(), fmt, ap);
     va_end(ap);
 }
 
@@ -394,7 +394,7 @@ Tree::errormsg(const Tree *optionalTree, const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    diagnoseVa("error", optionalTree ? optionalTree->getLineNo() : getSourceLineNo(), fmt, ap);
+    diagnoseVa(true, optionalTree ? optionalTree->getLineNo() : getSourceLineNo(), fmt, ap);
     va_end(ap);
 }
 
@@ -404,7 +404,7 @@ Tree::warnmsg(const Tree *optionalTree, const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    diagnoseVa("warning", optionalTree ? optionalTree->getLineNo() : getSourceLineNo(), fmt, ap);
+    diagnoseVa(false, optionalTree ? optionalTree->getLineNo() : getSourceLineNo(), fmt, ap);
     va_end(ap);
 }
 
@@ -722,6 +722,32 @@ Tree::isStructWithOnlyNumericalLiteralInitValues(const TypeDesc &varTypeDesc) co
 
 
 bool
+Tree::isNumericalLiteralCastToOtherType() const
+{
+    const CastExpr *ce = dynamic_cast<const CastExpr *>(this);
+    return ce && ce->getSubExpr()->isNumericalLiteral();
+}
+
+
+// Returns true if initExpr is (C *) "...", where C is a character type, signed or not.
+//
+bool
+Tree::isStringLiteralCastToPtrToAnyChar() const
+{
+    const CastExpr *ce = dynamic_cast<const CastExpr *>(this);
+    if (!ce)
+        return false;
+    auto sle = dynamic_cast<const StringLiteralExpr *>(ce->getSubExpr());
+    if (!sle)
+        return false;
+    const TypeDesc *td = ce->getTypeDesc();
+    if (td->type != POINTER_TYPE)
+        return false;
+    return td->getPointedTypeDesc()->type == BYTE_TYPE;
+}
+
+
+bool
 Tree::isStaticallyInitializable(const TypeDesc &varTypeDesc, bool allowStringLiterals) const
 {
     if (definesOnlyAMatrixOfCharsAndHasInitializer(varTypeDesc))
@@ -735,6 +761,9 @@ Tree::isStaticallyInitializable(const TypeDesc &varTypeDesc, bool allowStringLit
         return true;
     
     if (dynamic_cast<const DWordConstantExpr *>(this))
+        return true;
+
+    if (isNumericalLiteralCastToOtherType())
         return true;
 
     if (dynamic_cast<const RealConstantExpr *>(this))
@@ -776,7 +805,7 @@ Tree::isStaticallyInitializable(const TypeDesc &varTypeDesc, bool allowStringLit
         return false;  // neither struct nor array
     }
 
-    if (allowStringLiterals && dynamic_cast<const StringLiteralExpr *>(this))
+    if (allowStringLiterals && (dynamic_cast<const StringLiteralExpr *>(this) || isStringLiteralCastToPtrToAnyChar()))
         return true;
 
     return false;  // other types of trees
